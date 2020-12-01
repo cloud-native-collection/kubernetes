@@ -228,6 +228,7 @@ func (dsw *desiredStateOfWorld) AddPodToVolume(
 	dsw.Lock()
 	defer dsw.Unlock()
 
+	// 找到volume plugin
 	volumePlugin, err := dsw.volumePluginMgr.FindPluginBySpec(volumeSpec)
 	if err != nil || volumePlugin == nil {
 		return "", fmt.Errorf(
@@ -353,6 +354,7 @@ func (dsw *desiredStateOfWorld) VolumeExists(
 	return volumeExists
 }
 
+//返回pod是否需要挂载某volume
 func (dsw *desiredStateOfWorld) PodExistsInVolume(
 	podName types.UniquePodName, volumeName v1.UniqueVolumeName) bool {
 	dsw.RLock()

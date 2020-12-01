@@ -125,6 +125,7 @@ func NewReconciler(
 	}
 }
 
+//由reconciler完成,actualStateOfWorld和desiredStateOfWorld的一致性维护和物理机上挂载和actualStateOfWorld一致性的维护。
 type reconciler struct {
 	kubeClient                    clientset.Interface
 	controllerAttachDetachEnabled bool
@@ -146,6 +147,9 @@ func (rc *reconciler) Run(stopCh <-chan struct{}) {
 	wait.Until(rc.reconciliationLoopFunc(), rc.loopSleepDuration, stopCh)
 }
 
+//　reconciler的循环函数
+// 处理actualStateOfWorld和desiredStateOfWorld的一致性，由reconcile()完成；
+// 处理磁盘volume和actual state of world，desired state of world的一致性，由sync()完成。
 func (rc *reconciler) reconciliationLoopFunc() func() {
 	return func() {
 		rc.reconcile()
@@ -155,16 +159,19 @@ func (rc *reconciler) reconciliationLoopFunc() func() {
 		// desired state of world does not contain a complete list of pods.
 		if rc.populatorHasAddedPods() && !rc.StatesHasBeenSynced() {
 			klog.Infof("Reconciler: start to sync state")
+			//处理磁盘volume和actual state of world，desired state of world的一致性
 			rc.sync()
 		}
 	}
 }
 
+//处理actual state of world和desired state of world的一致性
 func (rc *reconciler) reconcile() {
 	// Unmounts are triggered before mounts so that a volume that was
 	// referenced by a pod that was deleted and is now referenced by another
 	// pod is unmounted from the first pod before being mounted to the new
 	// pod.
+	//actualStateOfWorld中有，desiredStaeOfWorld中无，则umount
 	rc.unmountVolumes()
 
 	// Next we mount required volumes. This function could also trigger

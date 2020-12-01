@@ -113,6 +113,7 @@ func NewDesiredStateOfWorldPopulator(
 	}
 }
 
+// 维护desiredStateOfWorld中内容为最新内容的机制
 type desiredStateOfWorldPopulator struct {
 	kubeClient                clientset.Interface
 	loopSleepDuration         time.Duration
@@ -137,9 +138,11 @@ type processedPods struct {
 	sync.RWMutex
 }
 
+// 启动desiredStateOfWorldPopulator
 func (dswp *desiredStateOfWorldPopulator) Run(sourcesReady config.SourcesReady, stopCh <-chan struct{}) {
 	// Wait for the completion of a loop that started after sources are all ready, then set hasAddedPods accordingly
 	klog.Infof("Desired state populator starts to run")
+	//***周期调用populatorLoop()***//
 	wait.PollUntil(dswp.loopSleepDuration, func() (bool, error) {
 		done := sourcesReady.AllReady()
 		dswp.populatorLoop()
@@ -161,8 +164,13 @@ func (dswp *desiredStateOfWorldPopulator) HasAddedPods() bool {
 	defer dswp.hasAddedPodsLock.RUnlock()
 	return dswp.hasAddedPods
 }
-
+/***
+往desiredStateOfWorld中添加新的pod，由findAndAddNewPods()完成；
+从desiredStateOfWorld删除已经删除的pod，由findAndRemoveDeletedPods()完成。
+-- 不能改变一个pod的挂载
+**/
 func (dswp *desiredStateOfWorldPopulator) populatorLoop() {
+	//添加新的pod到desiredStateOfWorld
 	dswp.findAndAddNewPods()
 
 	// findAndRemoveDeletedPods() calls out to the container runtime to
@@ -178,7 +186,7 @@ func (dswp *desiredStateOfWorldPopulator) populatorLoop() {
 
 		return
 	}
-
+	//desiredStateOfWorld删除已经删除的pod
 	dswp.findAndRemoveDeletedPods()
 }
 
@@ -192,6 +200,7 @@ func (dswp *desiredStateOfWorldPopulator) isPodTerminated(pod *v1.Pod) bool {
 
 // Iterate through all pods and add to desired state of world if they don't
 // exist but should
+//从pod manager获取Pods，并加入到desired world中
 func (dswp *desiredStateOfWorldPopulator) findAndAddNewPods() {
 	// Map unique pod name to outer volume name to MountedVolume.
 	mountedVolumesForPod := make(map[volumetypes.UniquePodName]map[string]cache.MountedVolume)
@@ -218,6 +227,7 @@ func (dswp *desiredStateOfWorldPopulator) findAndAddNewPods() {
 
 // Iterate through all pods in desired state of world, and remove if they no
 // longer exist
+//到desiredStateOfWorld中有，但podManager中没有的pod，然后把该pod从DesiredStateOfWorld中删除，并把pod从记录表中删除
 func (dswp *desiredStateOfWorldPopulator) findAndRemoveDeletedPods() {
 	var runningPods []*kubecontainer.Pod
 
@@ -252,6 +262,7 @@ func (dswp *desiredStateOfWorldPopulator) findAndRemoveDeletedPods() {
 		// it immediately from volume manager. Instead, check the kubelet
 		// containerRuntime to verify that all containers in the pod have been
 		// terminated.
+		//***检测是否还有容器在运行***//
 		if !runningPodsFetched {
 			var getPodsErr error
 			runningPods, getPodsErr = dswp.kubeContainerRuntime.GetPods(false)
@@ -291,9 +302,10 @@ func (dswp *desiredStateOfWorldPopulator) findAndRemoveDeletedPods() {
 			continue
 		}
 		klog.V(4).Infof(volumeToMount.GenerateMsgDetailed("Removing volume from desired state", ""))
-
+		//把volume从desired world中删除
 		dswp.desiredStateOfWorld.DeletePodFromVolume(
 			volumeToMount.PodName, volumeToMount.VolumeName)
+		// 标记该pod未被处理过
 		dswp.deleteProcessedPod(volumeToMount.PodName)
 	}
 
@@ -307,6 +319,9 @@ func (dswp *desiredStateOfWorldPopulator) findAndRemoveDeletedPods() {
 
 // processPodVolumes processes the volumes in the given pod and adds them to the
 // desired state of the world.
+//把pod的volume加入到desiredStateOfWorldPopulator,podManager处获取pods，然后调用processPodVolumes()处理每个pod。
+//processPodVolumes()对于会调用desiredStateOfWorld的AddPodToVolume()把pod加入到desiredStateOfWorld中。
+//desiredStateOfWorldPopulator会对处理过的pod进行记录，确保每个pod只被处理一次
 func (dswp *desiredStateOfWorldPopulator) processPodVolumes(
 	pod *v1.Pod,
 	mountedVolumesForPod map[volumetypes.UniquePodName]map[string]cache.MountedVolume,
@@ -316,6 +331,7 @@ func (dswp *desiredStateOfWorldPopulator) processPodVolumes(
 	}
 
 	uniquePodName := util.GetUniquePodName(pod)
+	// 检查pod是否已经被处理
 	if dswp.podPreviouslyProcessed(uniquePodName) {
 		return
 	}
@@ -346,6 +362,7 @@ func (dswp *desiredStateOfWorldPopulator) processPodVolumes(
 		}
 
 		// Add volume to desired state of world
+		//　把ｖolume添加到desired world
 		_, err = dswp.desiredStateOfWorld.AddPodToVolume(
 			uniquePodName, pod, volumeSpec, podVolume.Name, volumeGidValue)
 		if err != nil {
@@ -384,6 +401,7 @@ func (dswp *desiredStateOfWorldPopulator) processPodVolumes(
 		// may not have been reprocessed successfully this round, we still mark it as processed to avoid
 		// processing it at a very high frequency. The pod will be reprocessed when volume manager calls
 		// ReprocessPod() which is triggered by SyncPod.
+		//***标记pod已经被处理***//
 		dswp.markPodProcessed(uniquePodName)
 	}
 
