@@ -205,8 +205,10 @@ func IsRemountRequiredError(err error) bool {
 	return ok
 }
 
+// 代表目前物理主机上volume的挂载状态
 type actualStateOfWorld struct {
 	// nodeName is the name of this node. This value is passed to Attach/Detach
+	// 物理主机名称
 	nodeName types.NodeName
 
 	// attachedVolumes is a map containing the set of volumes the kubelet volume
@@ -215,17 +217,22 @@ type actualStateOfWorld struct {
 	// state by default.
 	// The key in this map is the name of the volume and the value is an object
 	// containing more information about the attached volume.
+	// 记录volume名称到attachedVolume的映射，由attach和detach控制
+	// attachedVolume表示已经挂载好的volume，包含pod与volume的关系，由mount和unmount控制
 	attachedVolumes map[v1.UniqueVolumeName]attachedVolume
 
 	// volumePluginMgr is the volume plugin manager used to create volume
 	// plugin objects.
+	// volume plugin管理者
 	volumePluginMgr *volume.VolumePluginMgr
+	// 读写锁控制并发
 	sync.RWMutex
 }
 
 // attachedVolume represents a volume the kubelet volume manager believes to be
 // successfully attached to a node it is managing. Volume types that do not
 // implement an attacher are assumed to be in this state.
+//attachedVolume表示已经挂载好的volume；
 type attachedVolume struct {
 	// volumeName contains the unique identifier for this volume.
 	volumeName v1.UniqueVolumeName
@@ -234,6 +241,7 @@ type attachedVolume struct {
 	// successfully mounted to. The key in this map is the name of the pod and
 	// the value is a mountedPod object containing more information about the
 	// pod.
+	//volume到pods的映射，即记录volume被mounted到pod，volume会被多个pod挂载
 	mountedPods map[volumetypes.UniquePodName]mountedPod
 
 	// spec is the volume spec containing the specification for this volume.
@@ -273,6 +281,7 @@ type attachedVolume struct {
 
 // The mountedPod object represents a pod for which the kubelet volume manager
 // believes the underlying volume has been successfully been mounted.
+// 被volume挂载pod的信息
 type mountedPod struct {
 	// the name of the pod
 	podName volumetypes.UniquePodName
@@ -320,8 +329,10 @@ type mountedPod struct {
 	volumeMountStateForPod operationexecutor.VolumeMountState
 }
 
+// 将 volume标记为attached
 func (asw *actualStateOfWorld) MarkVolumeAsAttached(
 	volumeName v1.UniqueVolumeName, volumeSpec *volume.Spec, _ types.NodeName, devicePath string) error {
+	//调用addVolume()方法完成，把volume加入到actualStateOfWorld
 	return asw.addVolume(volumeName, volumeSpec, devicePath)
 }
 
@@ -330,11 +341,14 @@ func (asw *actualStateOfWorld) MarkVolumeAsUncertain(
 	return nil
 }
 
+// 将 volume detached
 func (asw *actualStateOfWorld) MarkVolumeAsDetached(
 	volumeName v1.UniqueVolumeName, nodeName types.NodeName) {
+	//调用DeleteVolume()完成,把volume从actualStateOfWorld中删除
 	asw.DeleteVolume(volumeName)
 }
 
+// 标记volume被pod mounted:将信息记录到attachedVolume
 func (asw *actualStateOfWorld) MarkVolumeAsMounted(markVolumeOpts operationexecutor.MarkVolumeOpts) error {
 	return asw.AddPodToVolume(markVolumeOpts)
 }
@@ -348,6 +362,7 @@ func (asw *actualStateOfWorld) RemoveVolumeFromReportAsAttached(volumeName v1.Un
 	return nil
 }
 
+// 把volume从actual world:把pod和volume的关系从actualStateOfWorld的attachedVolume中删除
 func (asw *actualStateOfWorld) MarkVolumeAsUnmounted(
 	podName volumetypes.UniquePodName, volumeName v1.UniqueVolumeName) error {
 	return asw.DeletePodFromVolume(podName, volumeName)
@@ -418,11 +433,13 @@ func (asw *actualStateOfWorld) GetVolumeMountState(volumeName v1.UniqueVolumeNam
 // volume with the same generated name already exists, this is a noop. If no
 // volume plugin can support the given volumeSpec or more than one plugin can
 // support it, an error is returned.
+// 把volume加入到actualStateOfWorld.attachedVolumes,生成对应的attachedVolume
 func (asw *actualStateOfWorld) addVolume(
 	volumeName v1.UniqueVolumeName, volumeSpec *volume.Spec, devicePath string) error {
 	asw.Lock()
 	defer asw.Unlock()
 
+	//***通过volume spec找到volume plugin***//
 	volumePlugin, err := asw.volumePluginMgr.FindPluginBySpec(volumeSpec)
 	if err != nil || volumePlugin == nil {
 		return fmt.Errorf(
@@ -442,6 +459,7 @@ func (asw *actualStateOfWorld) addVolume(
 		}
 	}
 
+	//***确认该volume可以被attach***//
 	pluginIsAttachable := false
 	if attachablePlugin, err := asw.volumePluginMgr.FindAttachablePluginBySpec(volumeSpec); err == nil && attachablePlugin != nil {
 		pluginIsAttachable = true
@@ -470,6 +488,7 @@ func (asw *actualStateOfWorld) addVolume(
 	return nil
 }
 
+// 将pod信息加入到对应的volume
 func (asw *actualStateOfWorld) AddPodToVolume(markVolumeOpts operationexecutor.MarkVolumeOpts) error {
 	podName := markVolumeOpts.PodName
 	podUID := markVolumeOpts.PodUID
@@ -626,6 +645,7 @@ func (asw *actualStateOfWorld) SetDeviceMountState(
 	return nil
 }
 
+// 从actualStateOfWorld。attachedVolumes的volume对应的attachedVolume中删除pod信息
 func (asw *actualStateOfWorld) DeletePodFromVolume(
 	podName volumetypes.UniquePodName, volumeName v1.UniqueVolumeName) error {
 	asw.Lock()
@@ -646,6 +666,7 @@ func (asw *actualStateOfWorld) DeletePodFromVolume(
 	return nil
 }
 
+// 从actualStateOfWorld中删除volume
 func (asw *actualStateOfWorld) DeleteVolume(volumeName v1.UniqueVolumeName) error {
 	asw.Lock()
 	defer asw.Unlock()
@@ -666,6 +687,7 @@ func (asw *actualStateOfWorld) DeleteVolume(volumeName v1.UniqueVolumeName) erro
 	return nil
 }
 
+//检查pod是否已经在volume的map中//
 func (asw *actualStateOfWorld) PodExistsInVolume(
 	podName volumetypes.UniquePodName,
 	volumeName v1.UniqueVolumeName) (bool, string, error) {
@@ -696,6 +718,7 @@ func (asw *actualStateOfWorld) PodExistsInVolume(
 	return podExists, volumeObj.devicePath, nil
 }
 
+//返回volume在actualStateOfWorld中是否存在
 func (asw *actualStateOfWorld) VolumeExistsWithSpecName(podName volumetypes.UniquePodName, volumeSpecName string) bool {
 	asw.RLock()
 	defer asw.RUnlock()

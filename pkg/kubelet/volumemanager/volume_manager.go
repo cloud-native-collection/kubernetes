@@ -53,6 +53,7 @@ import (
 	"k8s.io/kubernetes/pkg/volume/util/volumepathhandler"
 )
 
+//volumeManager负责维护volume挂载与ETCD中数据的一致性
 const (
 	// reconcilerLoopSleepPeriod is the amount of time the reconciler loop waits
 	// between successive executions

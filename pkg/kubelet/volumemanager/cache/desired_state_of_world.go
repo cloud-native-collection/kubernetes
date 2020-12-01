@@ -140,11 +140,13 @@ func NewDesiredStateOfWorld(volumePluginMgr *volume.VolumePluginMgr) DesiredStat
 	}
 }
 
+//希望得到的挂载状态
 type desiredStateOfWorld struct {
 	// volumesToMount is a map containing the set of volumes that should be
 	// attached to this node and mounted to the pods referencing it. The key in
 	// the map is the name of the volume and the value is a volume object
 	// containing more information about the volume.
+	// 字段记录了volume名称和volumeToMount的映射
 	volumesToMount map[v1.UniqueVolumeName]volumeToMount
 	// volumePluginMgr is the volume plugin manager used to create volume
 	// plugin objects.
@@ -165,6 +167,7 @@ type volumeToMount struct {
 	// volume and should mount it once it is attached. The key in the map is
 	// the name of the pod and the value is a pod object containing more
 	// information about the pod.
+	// pod信息
 	podsToMount map[types.UniquePodName]podToMount
 
 	// pluginIsAttachable indicates that the plugin for this volume implements
@@ -215,6 +218,7 @@ const (
 	maxPodErrors = 10
 )
 
+//把pod信息加入到desiredStateOfWorld的volumeToMount中
 func (dsw *desiredStateOfWorld) AddPodToVolume(
 	podName types.UniquePodName,
 	pod *v1.Pod,
@@ -313,6 +317,7 @@ func (dsw *desiredStateOfWorld) MarkVolumesReportedInUse(
 	}
 }
 
+//把pod从指定volumeName对应的volumeToMount中删除
 func (dsw *desiredStateOfWorld) DeletePodFromVolume(
 	podName types.UniquePodName, volumeName v1.UniqueVolumeName) {
 	dsw.Lock()
@@ -338,6 +343,7 @@ func (dsw *desiredStateOfWorld) DeletePodFromVolume(
 	}
 }
 
+//返回volume就否在desiredStateOfWorld中
 func (dsw *desiredStateOfWorld) VolumeExists(
 	volumeName v1.UniqueVolumeName) bool {
 	dsw.RLock()
