@@ -222,6 +222,7 @@ type volumeManager struct {
 
 	// volumePluginMgr is the volume plugin manager used to access volume
 	// plugins. It must be pre-initialized.
+	// 管理 volume plugin
 	volumePluginMgr *volume.VolumePluginMgr
 
 	// desiredStateOfWorld is a data structure containing the desired state of
@@ -240,11 +241,13 @@ type volumeManager struct {
 
 	// operationExecutor is used to start asynchronous attach, detach, mount,
 	// and unmount operations.
+	// operationExecutor可以执行挂载等操作
 	operationExecutor operationexecutor.OperationExecutor
 
 	// reconciler runs an asynchronous periodic loop to reconcile the
 	// desiredStateOfWorld with the actualStateOfWorld by triggering attach,
 	// detach, mount, and unmount operations using the operationExecutor.
+	// reconciler通过触发mount, attach等操作使desiredStateOfWorld和actualStateOfWorld保持一致
 	reconciler reconciler.Reconciler
 
 	// desiredStateOfWorldPopulator runs an asynchronous periodic loop to
@@ -258,6 +261,8 @@ type volumeManager struct {
 	intreeToCSITranslator csimigration.InTreeToCSITranslator
 }
 
+//启动volume manager
+//依次启动desiredStateOfWorldPopulator及reconciler
 func (vm *volumeManager) Run(sourcesReady config.SourcesReady, stopCh <-chan struct{}) {
 	defer runtime.HandleCrash()
 
@@ -266,10 +271,14 @@ func (vm *volumeManager) Run(sourcesReady config.SourcesReady, stopCh <-chan str
 		go vm.volumePluginMgr.Run(stopCh)
 	}
 
+	//启动desiredStateOfWorldPopulator
+	//desiredStateOfWorldPopulator获取pod的挂载信息，并同步到desired world
 	go vm.desiredStateOfWorldPopulator.Run(sourcesReady, stopCh)
 	klog.V(2).Infof("The desired_state_of_world populator starts")
 
 	klog.Infof("Starting Kubelet Volume Manager")
+	// 启动reconciler
+	// Reconciler同步desired world和actual world，及actual world和物理挂载
 	go vm.reconciler.Run(stopCh)
 
 	metrics.Register(vm.actualStateOfWorld, vm.desiredStateOfWorld, vm.volumePluginMgr)

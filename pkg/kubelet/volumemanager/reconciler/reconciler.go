@@ -132,10 +132,10 @@ type reconciler struct {
 	loopSleepDuration             time.Duration
 	waitForAttachTimeout          time.Duration
 	nodeName                      types.NodeName
-	desiredStateOfWorld           cache.DesiredStateOfWorld
-	actualStateOfWorld            cache.ActualStateOfWorld
+	desiredStateOfWorld           cache.DesiredStateOfWorld // 期望状态
+	actualStateOfWorld            cache.ActualStateOfWorld // 实际状态
 	populatorHasAddedPods         func() bool
-	operationExecutor             operationexecutor.OperationExecutor
+	operationExecutor             operationexecutor.OperationExecutor //执行具体的挂载操作。
 	mounter                       mount.Interface
 	hostutil                      hostutil.HostUtils
 	volumePluginMgr               *volumepkg.VolumePluginMgr
@@ -143,6 +143,7 @@ type reconciler struct {
 	timeOfLastSync                time.Time
 }
 
+// 启动方法
 func (rc *reconciler) Run(stopCh <-chan struct{}) {
 	wait.Until(rc.reconciliationLoopFunc(), rc.loopSleepDuration, stopCh)
 }
@@ -152,6 +153,7 @@ func (rc *reconciler) Run(stopCh <-chan struct{}) {
 // 处理磁盘volume和actual state of world，desired state of world的一致性，由sync()完成。
 func (rc *reconciler) reconciliationLoopFunc() func() {
 	return func() {
+		//处理actual state of world和desired state of world的一致性*
 		rc.reconcile()
 
 		// Sync the state with the reality once after all existing pods are added to the desired state from all sources.
@@ -165,7 +167,10 @@ func (rc *reconciler) reconciliationLoopFunc() func() {
 	}
 }
 
-//处理actual state of world和desired state of world的一致性
+// 处理actual state of world和desired state of world的一致性，处理以下三种情况：
+// actualStateOfWorld中有，但desiredStateOfWorld中没有，则调用operationExecutor.UnmountVolume()执行unmount操作；
+// desiredStateOfWorld中有，但actualStateOfWorld中未挂载，则执行attach操作或mount操作；
+// 对actualStateOfWorld中的unmounted volume进行检查，如果desiredStateOfWorld中没有，则从actualStateOfWorld中删除volume
 func (rc *reconciler) reconcile() {
 	// Unmounts are triggered before mounts so that a volume that was
 	// referenced by a pod that was deleted and is now referenced by another
@@ -178,18 +183,23 @@ func (rc *reconciler) reconcile() {
 	// attach if kubelet is responsible for attaching volumes.
 	// If underlying PVC was resized while in-use then this function also handles volume
 	// resizing.
+	// 如果desire world中有，而actual world未挂载，则执行挂载
 	rc.mountAttachVolumes()
 
 	// Ensure devices that should be detached/unmounted are detached/unmounted.
+	//处理actualStateOfWorld中需要unmount或detach的volume
 	rc.unmountDetachDevices()
 }
 
+// actualStateOfWorld中有，desiredStaeOfWorld中无，则umount
 func (rc *reconciler) unmountVolumes() {
 	// Ensure volumes that should be unmounted are unmounted.
+	// 一个volume挂载到一个pod视为一个mountedVolume
 	for _, mountedVolume := range rc.actualStateOfWorld.GetAllMountedVolumes() {
 		if !rc.desiredStateOfWorld.PodExistsInVolume(mountedVolume.PodName, mountedVolume.VolumeName) {
 			// Volume is mounted, unmount it
 			klog.V(5).Infof(mountedVolume.GenerateMsgDetailed("Starting operationExecutor.UnmountVolume", ""))
+			//把volume unmount，并作适当清理
 			err := rc.operationExecutor.UnmountVolume(
 				mountedVolume.MountedVolume, rc.actualStateOfWorld, rc.kubeletPodsDir)
 			if err != nil &&
@@ -206,11 +216,13 @@ func (rc *reconciler) unmountVolumes() {
 	}
 }
 
+//如果desire world中有，而actual world未挂载，则执行挂载
 func (rc *reconciler) mountAttachVolumes() {
 	// Ensure volumes that should be attached/mounted are attached/mounted.
 	for _, volumeToMount := range rc.desiredStateOfWorld.GetVolumesToMount() {
 		volMounted, devicePath, err := rc.actualStateOfWorld.PodExistsInVolume(volumeToMount.PodName, volumeToMount.VolumeName)
 		volumeToMount.DevicePath = devicePath
+		// 处理volume not attached的情况
 		if cache.IsVolumeNotAttachedError(err) {
 			if rc.controllerAttachDetachEnabled || !volumeToMount.PluginIsAttachable {
 				// Volume is not attached (or doesn't implement attacher), kubelet attach is disabled, wait
@@ -252,6 +264,7 @@ func (rc *reconciler) mountAttachVolumes() {
 				}
 			}
 		} else if !volMounted || cache.IsRemountRequiredError(err) {
+			// 处理volume未被挂载，或需要重新挂载的情况
 			// Volume is not mounted, or is already mounted, but requires remounting
 			remountingLogStr := ""
 			isRemount := cache.IsRemountRequiredError(err)
@@ -259,6 +272,7 @@ func (rc *reconciler) mountAttachVolumes() {
 				remountingLogStr = "Volume is already mounted to pod, but remount was requested."
 			}
 			klog.V(4).Infof(volumeToMount.GenerateMsgDetailed("Starting operationExecutor.MountVolume", remountingLogStr))
+			// 执行挂载
 			err := rc.operationExecutor.MountVolume(
 				rc.waitForAttachTimeout,
 				volumeToMount.VolumeToMount,
@@ -298,6 +312,7 @@ func (rc *reconciler) mountAttachVolumes() {
 	}
 }
 
+// 处理actualStateOfWorld中需要unmount或detach的volume
 func (rc *reconciler) unmountDetachDevices() {
 	for _, attachedVolume := range rc.actualStateOfWorld.GetUnmountedVolumes() {
 		// Check IsOperationPending to avoid marking a volume as detached if it's in the process of mounting.
@@ -389,13 +404,19 @@ type reconstructedVolume struct {
 // the volume related information and put it in both the actual and desired state of worlds.
 // For some volume plugins that cannot support reconstruction, it will clean up the existing
 // mount points since the volume is no long needed (removed from desired state)
+// 维护磁盘上volume与actual,desired state of world的一致性
+//从磁盘上获取volume信息，然后排除状态为pending，或desiredStateOfWorld中存在，或actualStateOfWorld中存在的volume挂载，
+//然后通过updateStates()方法把缺失的挂载加到desiredStateOfWorld和actualStateOfWorld中，
+//以后的事情就交给populator及reconciler来处理了，如果该volume挂载是多余的，也会被删除
 func (rc *reconciler) syncStates() {
 	// Get volumes information by reading the pod's directory
+	// 获取磁盘上的volume
 	podVolumes, err := getVolumesFromPodDir(rc.kubeletPodsDir)
 	if err != nil {
 		klog.Errorf("Cannot get volumes from disk %v", err)
 		return
 	}
+	// 获取需要update的volume
 	volumesNeedUpdate := make(map[v1.UniqueVolumeName]*reconstructedVolume)
 	volumeNeedReport := []v1.UniqueVolumeName{}
 	for _, volume := range podVolumes {
@@ -439,6 +460,7 @@ func (rc *reconciler) syncStates() {
 		volumesNeedUpdate[reconstructedVolume.volumeName] = reconstructedVolume
 	}
 
+	//volume update，此处的volumesNeedUpdate是在desired state of world和actual state of world都不存在的
 	if len(volumesNeedUpdate) > 0 {
 		if err = rc.updateStates(volumesNeedUpdate); err != nil {
 			klog.Errorf("Error occurred during reconstruct volume from disk: %v", err)
