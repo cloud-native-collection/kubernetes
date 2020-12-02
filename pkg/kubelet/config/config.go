@@ -112,16 +112,18 @@ func (c *PodConfig) Sync() {
 // to the channel are delivered in order.  Note that this object is an in-memory source of
 // "truth" and on creation contains zero entries.  Once all previously read sources are
 // available, then this object should be considered authoritative.
+//对多个渠道过来的数据的一个汇总，一个merger 的实现（pkg/util/config/config.go)
+//消费Mux返回的channel中的数据，调用Merge()对数据进行处理，最后把整理好的数据发送到updates中
 type podStorage struct {
 	podLock sync.RWMutex
 	// map of source name to pod uid to pod reference
-	pods map[string]map[types.UID]*v1.Pod
+	pods map[string]map[types.UID]*v1.Pod //用来存储分类好的pods
 	mode PodConfigNotificationMode
 
 	// ensures that updates are delivered in strict order
 	// on the updates channel
 	updateLock sync.Mutex
-	updates    chan<- kubetypes.PodUpdate
+	updates    chan<- kubetypes.PodUpdate //所有的整理好的数据集中地
 
 	// contains the set of all sources that have sent at least one SET
 	sourcesSeenLock sync.RWMutex
@@ -147,11 +149,13 @@ func newPodStorage(updates chan<- kubetypes.PodUpdate, mode PodConfigNotificatio
 // Merge normalizes a set of incoming changes from different sources into a map of all Pods
 // and ensures that redundant changes are filtered out, and then pushes zero or more minimal
 // updates onto the update channel.  Ensures that updates are delivered in order.
+
 func (s *podStorage) Merge(source string, change interface{}) error {
 	s.updateLock.Lock()
 	defer s.updateLock.Unlock()
 
 	seenBefore := s.sourcesSeen.Has(source)
+	//调用merge()，获取adds, updates, deletes//
 	adds, updates, deletes, removes, reconciles := s.merge(source, change)
 	firstSet := !seenBefore && s.sourcesSeen.Has(source)
 

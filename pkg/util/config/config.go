@@ -38,17 +38,21 @@ func (f MergeFunc) Merge(source string, update interface{}) error {
 
 // Mux is a class for merging configuration from multiple sources.  Changes are
 // pushed via channels and sent to the merge function.
+// 建立多条channel,并与相关config的storage配合把这些channel中的数据进行合并merger
 type Mux struct {
 	// Invoked when an update is sent to a source.
+	// merger负责数据合并
 	merger Merger
 
 	// Sources and their lock.
 	sourceLock sync.RWMutex
 	// Maps source names to channels
+	//记录了名称及对应的channel
 	sources map[string]chan interface{}
 }
 
 // NewMux creates a new mux that can merge changes from multiple sources.
+// 创建指定merger的mux
 func NewMux(merger Merger) *Mux {
 	mux := &Mux{
 		sources: make(map[string]chan interface{}),
@@ -62,6 +66,7 @@ func NewMux(merger Merger) *Mux {
 // source will return the same channel. This allows change and state based sources
 // to use the same channel. Different source names however will be treated as a
 // union.
+// 建立source channel，并使用listen与merger交互
 func (m *Mux) Channel(source string) chan interface{} {
 	if len(source) == 0 {
 		panic("Channel given an empty name")
@@ -74,6 +79,8 @@ func (m *Mux) Channel(source string) chan interface{} {
 	}
 	newChannel := make(chan interface{})
 	m.sources[source] = newChannel
+	// 监听刚创建的channel，然后通过merger.Merge()处理数据
+	// 调用Mux的Channel()方法，可以获取到一个channel，只要往这个channel中写数据即可，Mux自动会把数据交给merger处理
 	go wait.Until(func() { m.listen(source, newChannel) }, 0, wait.NeverStop)
 	return newChannel
 }

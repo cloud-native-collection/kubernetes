@@ -1,0 +1,1 @@
+实现kubelet把pod的信息从apiserver，或file，http同步到kublet中的
