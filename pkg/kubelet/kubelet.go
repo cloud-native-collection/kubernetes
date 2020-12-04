@@ -341,6 +341,7 @@ func PreInitRuntimeService(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 
 // NewMainKubelet instantiates a new Kubelet object along with all the required internal modules.
 // No initialization of Kubelet and its modules should happen here.
+// kubelet的构造函数
 func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	kubeDeps *Dependencies,
 	crOptions *config.ContainerRuntimeOptions,
@@ -1301,6 +1302,7 @@ func (kl *Kubelet) StartGarbageCollection() {
 // Note that the modules here must not depend on modules that are not initialized here.
 func (kl *Kubelet) initializeModules() error {
 	// Prometheus metrics.
+	// 注册prometheus metrics
 	metrics.Register(
 		collectors.NewVolumeStatsCollector(kl),
 		collectors.NewLogMetricsCollector(kl.StatsProvider.ListPodStats),
@@ -1309,11 +1311,13 @@ func (kl *Kubelet) initializeModules() error {
 	servermetrics.Register()
 
 	// Setup filesystem directories.
+	// kubelet所需要的文件夹
 	if err := kl.setupDataDirs(); err != nil {
 		return err
 	}
 
 	// If the container logs directory does not exist, create it.
+	// container的日志文件
 	if _, err := os.Stat(ContainerLogsDir); err != nil {
 		if err := kl.os.MkdirAll(ContainerLogsDir, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %q: %v", ContainerLogsDir, err)
@@ -1321,19 +1325,23 @@ func (kl *Kubelet) initializeModules() error {
 	}
 
 	// Start the image manager.
+	// 管理镜像 GC 的模块
 	kl.imageManager.Start()
 
 	// Start the certificate manager if it was enabled.
+	// 证书管理
 	if kl.serverCertificateManager != nil {
 		kl.serverCertificateManager.Start()
 	}
 
 	// Start out of memory watcher.
+	// OOM 监控模块
 	if err := kl.oomWatcher.Start(kl.nodeRef); err != nil {
 		return fmt.Errorf("failed to start OOM watcher %v", err)
 	}
 
 	// Start resource analyzer
+	// 资源分析
 	kl.resourceAnalyzer.Start()
 
 	return nil
@@ -1382,10 +1390,12 @@ func (kl *Kubelet) initializeRuntimeDependentModules() {
 }
 
 // Run starts the kubelet reacting to config updates
+// 入口函数
 func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 	if kl.logServer == nil {
 		kl.logServer = http.StripPrefix("/logs/", http.FileServer(http.Dir("/var/log/")))
 	}
+	// 检查apiserver ？？
 	if kl.kubeClient == nil {
 		klog.Warning("No api server defined - no node status update will be sent.")
 	}
@@ -1395,46 +1405,60 @@ func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 		go kl.cloudResourceSyncManager.Run(wait.NeverStop)
 	}
 
+	// 初始化模块所需要的资源
 	if err := kl.initializeModules(); err != nil {
 		kl.recorder.Eventf(kl.nodeRef, v1.EventTypeWarning, events.KubeletSetupFailed, err.Error())
 		klog.Fatal(err)
 	}
 
 	// Start volume manager
+	// 运行volume  manager
 	go kl.volumeManager.Run(kl.sourcesReady, wait.NeverStop)
 
+	// APIserver 已经运行
 	if kl.kubeClient != nil {
 		// Start syncing node status immediately, this may set up things the runtime needs to run.
+		// goroutine 定时同步node状态
 		go wait.Until(kl.syncNodeStatus, kl.nodeStatusUpdateFrequency, wait.NeverStop)
+		// 进行一次快速同步
 		go kl.fastStatusUpdateOnce()
 
 		// start syncing lease
+		// nodeleaseController
 		go kl.nodeLeaseController.Run(wait.NeverStop)
 	}
+	// goroutine运行container runtime uptime
 	go wait.Until(kl.updateRuntimeUp, 5*time.Second, wait.NeverStop)
 
 	// Set up iptables util rules
+	// 设置iptables util规则
 	if kl.makeIPTablesUtilChains {
 		kl.initNetworkUtil()
 	}
 
 	// Start a goroutine responsible for killing pods (that are not properly
 	// handled by pod workers).
+	// goroutine 运行podkiller
 	go wait.Until(kl.podKiller.PerformPodKillingWork, 1*time.Second, wait.NeverStop)
 
 	// Start component sync loops.
+	// pod 状态管理
 	kl.statusManager.Start()
+	// pod探针模块
 	kl.probeManager.Start()
 
 	// Start syncing RuntimeClasses if enabled.
+	// 如果启用，则开始同步RuntimeClasses
 	if kl.runtimeClassManager != nil {
 		kl.runtimeClassManager.Start(wait.NeverStop)
 	}
 
 	// Start the pod lifecycle event generator.
+	// (pod lifecycle event generator) 模块
 	kl.pleg.Start()
+	// 主循环
 	// 所有pod事件都会被处理后放置到updates channel中updates数据的生产者，
-	//此updates就是PodConfig中的updates，消费ｕpdates中的数据
+	// 此updates就是PodConfig中的updates，消费ｕpdates中的数据
 	kl.syncLoop(updates, kl)
 }
 
@@ -1854,6 +1878,10 @@ func (kl *Kubelet) syncLoop(updates <-chan kubetypes.PodUpdate, handler SyncHand
 
 		kl.syncLoopMonitor.Store(kl.clock.Now())
 		//　syncLoopIteration()监听很多条channel
+		//- configCh       <-chan kubetypes.PodUpdate 触发：HandlePodAdditions，HandlePodUpdates，HandlePodRemoves，HandlePodReconcile
+		//- syncCh         <-chan time.Time，定时触发的 resync 操作 触发 HandlePodSyncs 操作
+		//- housekeepingCh <-chan time.Time，定时触发的清理操作，触发 HandlePodSyncs 操作
+		//- plegCh         <-chan *pleg.PodLifecycleEvent，触发 HandlePodCleanups
 		if !kl.syncLoopIteration(updates, handler, syncTicker.C, housekeepingTicker.C, plegCh) {
 			break
 		}
@@ -1893,6 +1921,7 @@ func (kl *Kubelet) syncLoop(updates <-chan kubetypes.PodUpdate, handler SyncHand
 // * housekeepingCh: trigger cleanup of pods
 // * liveness manager: sync pods that have failed or in which one or more
 //                     containers have failed liveness checks
+
 func (kl *Kubelet) syncLoopIteration(configCh <-chan kubetypes.PodUpdate, handler SyncHandler,
 	syncCh <-chan time.Time, housekeepingCh <-chan time.Time, plegCh <-chan *pleg.PodLifecycleEvent) bool {
 	select {

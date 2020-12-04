@@ -1,0 +1,56 @@
+```
+- apis/              kubelet 的 api 相关
+- cadvisor/          容器指标采集系统，https://github.com/google/cadvisor
+- certificate/       证书相关
+- checkpointmanager/ checkpoint 管理
+- client/            用来访问 kubelet 的 client?
+- cloudresource/     用来和云服务交互的部分
+- cm/                cgroups manager (cgroups or container?)
+- config/            pod config 相关
+- configmap/         configmap 相关
+- container/         container
+- cri                CRI 相关
+- custommetrics/     同文件名
+- dockershim/        docker interface
+- envvars/           容器里的一些环境变量
+- events/            一堆事件的 constant
+- eviction/          pod eviction
+- images/            容器镜像相关，主要是 pull 和 gc
+- kubeletconfig/     kubelet config (凭什么不是上面那个 config 改名)
+- kuberuntime/       kubelet runtime 相关
+- leaky/   
+- legacy/                      
+- lifecycle/         pod lifecycle 相关的接口
+- logs/              container log 相关，主要是 rotation 之类的逻辑
+- metrics/           prometheus metrics
+- mountpod/          volume plugin 相关？
+- network/           用来配置 pod dns 的
+- nodeshudown/       
+- nodestatus/        定义了很多节点状态更新用的 setter
+- oom/               内存管理
+- pleg/              pod lifecycle event generator
+- pluginmanager/     插件管理
+- pod/               pod manager
+- preemption/        优先级抢占相关
+- prober/            pod liveness or readiness probe
+- qos/               算 oom 分的
+- runtimeclass/      
+- secret/            挂载 secret 相关
+- server/            kubelet 提供的 exec，portforward 等 API的 server
+- stats/             CRI stats provider
+- status/            pod status manager
+- sysctl/            sysctl 相关 
+- token/             service account token 相关
+- types/             一些 types
+- util/              一些 utils
+- volumemanager/     数据卷管理,维护volume与etcd状态的一致性，几个概念:actual_state_world,desired_state_world,populator
+- winstats/          windows 节点相关
+```
+一些流程：
+- 如何创建 pod
+- 如何 sync pod 状态
+- 如何调用 API 创建 container
+- pod 的 configmap 和 secret 如何管理
+- pod 的 volume 如何管理
+- pod 的 network 如何管理
+- 如何删除 pod
