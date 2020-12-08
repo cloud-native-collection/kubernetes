@@ -96,6 +96,7 @@ func GenerateContainersReadyCondition(spec *v1.PodSpec, containerStatuses []v1.C
 // GeneratePodReadyCondition returns "Ready" condition of a pod.
 // The status of "Ready" condition is "True", if all containers in a pod are ready
 // AND all matching conditions specified in the ReadinessGates have status equal to "True".
+//更新pod的condition
 func GeneratePodReadyCondition(spec *v1.PodSpec, conditions []v1.PodCondition, containerStatuses []v1.ContainerStatus, podPhase v1.PodPhase) v1.PodCondition {
 	containersReady := GenerateContainersReadyCondition(spec, containerStatuses, podPhase)
 	// If the status of ContainersReady is not True, return the same status, reason and message as ContainersReady.
@@ -108,6 +109,7 @@ func GeneratePodReadyCondition(spec *v1.PodSpec, conditions []v1.PodCondition, c
 		}
 	}
 
+	//container的状态全部为Ready，则pod的Ready也为true；否则pod的状态为false。
 	// Evaluate corresponding conditions specified in readiness gate
 	// Generate message if any readiness gate is not satisfied.
 	unreadyMessages := []string{}

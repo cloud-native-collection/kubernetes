@@ -76,11 +76,13 @@ type Manager interface {
 
 type manager struct {
 	// Map of active workers for probes
+	//manager中注册的worker，worker执行具体的检测，一个container对应一个或两个workers；
 	workers map[probeKey]*worker
 	// Lock for accessing & mutating workers
 	workerLock sync.RWMutex
 
 	// The statusManager cache provides pod IP and container IDs for probing.
+	// podstatus管理器
 	statusManager status.Manager
 
 	// readinessManager manages the results of readiness probes

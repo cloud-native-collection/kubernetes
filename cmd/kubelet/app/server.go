@@ -459,15 +459,20 @@ func initConfigz(kc *kubeletconfiginternal.KubeletConfiguration) error {
 }
 
 // makeEventRecorder sets up kubeDeps.Recorder if it's nil. It's a no-op otherwise.
+// 创建操作事件的客户端，EventRecorder 实例，这是一个事件广播器，通过它提供了StartLogging和StartRecordingToSink两个事件处理函数，分别将event发送给log和apiserver。
 func makeEventRecorder(kubeDeps *kubelet.Dependencies, nodeName types.NodeName) {
 	if kubeDeps.Recorder != nil {
 		return
 	}
+	// 事件广播
 	eventBroadcaster := record.NewBroadcaster()
+	//创建EventRecorder的实例，它提供Event ，Eventf 等方法供事件记录。
 	kubeDeps.Recorder = eventBroadcaster.NewRecorder(legacyscheme.Scheme, v1.EventSource{Component: componentKubelet, Host: string(nodeName)})
+	// 发送event至log输出
 	eventBroadcaster.StartStructuredLogging(3)
 	if kubeDeps.EventClient != nil {
 		klog.V(4).Infof("Sending events to api server.")
+		// 发送event至APIserver
 		eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: kubeDeps.EventClient.Events("")})
 	} else {
 		klog.Warning("No api server defined - no events will be sent to API server.")
