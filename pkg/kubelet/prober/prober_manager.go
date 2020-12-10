@@ -86,15 +86,18 @@ type manager struct {
 	statusManager status.Manager
 
 	// readinessManager manages the results of readiness probes
+	//readinessProber探测结果的存储地
 	readinessManager results.Manager
 
 	// livenessManager manages the results of liveness probes
+	//livenessManager探测结果的存储地
 	livenessManager results.Manager
 
 	// startupManager manages the results of startup probes
 	startupManager results.Manager
 
 	// prober executes the probe actions.
+	//执行container中定义的检测
 	prober *prober
 }
 
