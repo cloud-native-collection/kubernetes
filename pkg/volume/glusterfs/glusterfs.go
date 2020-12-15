@@ -186,6 +186,7 @@ func (plugin *glusterfsPlugin) getEndpointNameAndNamespace(spec *volume.Spec, de
 	return "", "", fmt.Errorf("spec does not reference a GlusterFS volume type")
 
 }
+
 func (plugin *glusterfsPlugin) newMounterInternal(spec *volume.Spec, ep *v1.Endpoints, pod *v1.Pod, mounter mount.Interface) (volume.Mounter, error) {
 	volPath, readOnly, err := getVolumeInfo(spec)
 	if err != nil {
@@ -1166,6 +1167,7 @@ func parseClassParameters(params map[string]string, kubeClient clientset.Interfa
 }
 
 // getVolumeID returns volumeID from the PV or volumename.
+// 获取volume的id
 func getVolumeID(pv *v1.PersistentVolume, volumeName string) (string, error) {
 	volumeID := ""
 
@@ -1185,6 +1187,7 @@ func getVolumeID(pv *v1.PersistentVolume, volumeName string) (string, error) {
 	return volumeID, nil
 }
 
+// 扩容
 func (plugin *glusterfsPlugin) ExpandVolumeDevice(spec *volume.Spec, newSize resource.Quantity, oldSize resource.Quantity) (resource.Quantity, error) {
 	pvSpec := spec.PersistentVolume.Spec
 	volumeName := pvSpec.Glusterfs.Path

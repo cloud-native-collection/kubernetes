@@ -34,7 +34,7 @@
 - preemption/        优先级抢占相关
 - prober/            pod liveness or readiness probe
 - qos/               算 oom 分的
-- runtimeclass/      
+- runtimeclass/      容器运行时,管理器缓存RuntimeClass API对象
 - secret/            挂载 secret 相关
 - server/            kubelet 提供的 exec，portforward 等 API的 server
 - stats/             CRI stats provider
