@@ -1,0 +1,1 @@
+statusManager主要用来管理pod的status

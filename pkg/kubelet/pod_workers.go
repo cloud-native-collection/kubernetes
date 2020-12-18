@@ -111,7 +111,7 @@ type podWorkers struct {
 
 	// Tracks all running per-pod goroutines - per-pod goroutine will be
 	// processing updates received through its corresponding channel.
-	podUpdates map[types.UID]chan UpdatePodOptions
+	podUpdates map[types.UID]chan UpdatePodOptions //UpdatePodOptions(即后面函数的podUpdates) channel的存储地，key为pod的UID
 	// Track the current state of per-pod goroutines.
 	// Currently all update request for a given pod coming when another
 	// update of this pod is being processed are ignored.
@@ -125,7 +125,7 @@ type podWorkers struct {
 	// This function is run to sync the desired stated of pod.
 	// NOTE: This function has to be thread-safe - it can be called for
 	// different pods at the same time.
-	syncPodFn syncPodFnType
+	syncPodFn syncPodFnType //pod的处理函数
 
 	// The EventRecorder to use
 	recorder record.EventRecorder
@@ -140,6 +140,7 @@ type podWorkers struct {
 	podCache kubecontainer.Cache
 }
 
+//生成podWorkers
 func newPodWorkers(syncPodFn syncPodFnType, recorder record.EventRecorder, workQueue queue.WorkQueue,
 	resyncInterval, backOffPeriod time.Duration, podCache kubecontainer.Cache) *podWorkers {
 	return &podWorkers{
@@ -155,6 +156,7 @@ func newPodWorkers(syncPodFn syncPodFnType, recorder record.EventRecorder, workQ
 	}
 }
 
+// 取出podUpdates中的内容，然后调用syncPodFn()处理内容,消费podUpdates chan中的workUpdate，并做处理*
 func (p *podWorkers) managePodLoop(podUpdates <-chan UpdatePodOptions) {
 	var lastSyncTime time.Time
 	for update := range podUpdates {
@@ -172,6 +174,7 @@ func (p *podWorkers) managePodLoop(podUpdates <-chan UpdatePodOptions) {
 				p.recorder.Eventf(update.Pod, v1.EventTypeWarning, events.FailedSync, "error determining status: %v", err)
 				return err
 			}
+			//调用syncPodFn()，即kubelet.go中的syncPod()
 			err = p.syncPodFn(syncPodOptions{
 				mirrorPod:      update.MirrorPod,
 				pod:            update.Pod,
@@ -197,6 +200,8 @@ func (p *podWorkers) managePodLoop(podUpdates <-chan UpdatePodOptions) {
 // Apply the new setting to the specified pod.
 // If the options provide an OnCompleteFunc, the function is invoked if the update is accepted.
 // Update requests are ignored if a kill pod request is pending.
+//如果pod的uid在podUpdates中不存在，则新建podUpdates，然后启动managePodLoop()处理该podUpdates；
+//把options加入到podUpdates中
 func (p *podWorkers) UpdatePod(options *UpdatePodOptions) {
 	pod := options.Pod
 	uid := pod.UID
@@ -205,11 +210,13 @@ func (p *podWorkers) UpdatePod(options *UpdatePodOptions) {
 
 	p.podLock.Lock()
 	defer p.podLock.Unlock()
+	//如果该pod在p.podUpdates[]中没有，则为该pod新建podUpdates channel
 	if podUpdates, exists = p.podUpdates[uid]; !exists {
 		// We need to have a buffer here, because checkForUpdates() method that
 		// puts an update into channel is called from the same goroutine where
 		// the channel is consumed. However, it is guaranteed that in such case
 		// the channel is empty, so buffer of size 1 is enough.
+		// channel的大小为１
 		podUpdates = make(chan UpdatePodOptions, 1)
 		p.podUpdates[uid] = podUpdates
 
@@ -219,11 +226,13 @@ func (p *podWorkers) UpdatePod(options *UpdatePodOptions) {
 		// comment in syncPod.
 		go func() {
 			defer runtime.HandleCrash()
+			//　处理podUpdates
 			p.managePodLoop(podUpdates)
 		}()
 	}
 	if !p.isWorking[pod.UID] {
 		p.isWorking[pod.UID] = true
+		//　将options放入到podUpdates
 		podUpdates <- *options
 	} else {
 		// if a request to kill a pod is pending, we do not let anything overwrite that request.
