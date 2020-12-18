@@ -32,7 +32,7 @@
 - pluginmanager/     插件管理
 - pod/               pod manager:负责内存中pod及mirrorPod的维护，任何在本节点上创建或删除操作都会同步更新podManager，即可以认为podManager中存储了本节点上运行的pod的信息。
 - preemption/        优先级抢占相关
-- prober/            pod liveness or readiness probe
+- prober/      g      pod liveness or readiness probe
 - qos/               算 oom 分的
 - runtimeclass/      容器运行时,管理器缓存RuntimeClass API对象
 - secret/            挂载 secret 相关
