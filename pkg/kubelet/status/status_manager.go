@@ -59,16 +59,17 @@ type podStatusSyncRequest struct {
 // Updates pod statuses in apiserver. Writes only when new status has changed.
 // All methods are thread-safe.
 type manager struct {
-	kubeClient clientset.Interface
-	podManager kubepod.Manager
+	kubeClient clientset.Interface //与apiserver交互
+	podManager kubepod.Manager //负责内存中pod的维护
 	// Map from pod UID to sync status of the corresponding pod.
-	podStatuses      map[types.UID]versionedPodStatus
+	podStatuses      map[types.UID]versionedPodStatus // 存储pod及状态的map关系
 	podStatusesLock  sync.RWMutex
-	podStatusChannel chan podStatusSyncRequest
+	podStatusChannel chan podStatusSyncRequest // statusManager对外暴露的channel
 	// Map from (mirror) pod UID to latest status version successfully sent to the API server.
 	// apiStatusVersions must only be accessed from the sync thread.
-	apiStatusVersions map[kubetypes.MirrorPodUID]uint64
-	podDeletionSafety PodDeletionSafetyProvider
+	// pod status channel
+	apiStatusVersions map[kubetypes.MirrorPodUID]uint64 //
+	podDeletionSafety PodDeletionSafetyProvider // 维护更新完的pod的status更新号，每更新一次会加1
 }
 
 // PodStatusProvider knows how to provide status for a pod. It's intended to be used by other components
@@ -145,6 +146,10 @@ func isPodStatusByKubeletEqual(oldStatus, status *v1.PodStatus) bool {
 	return apiequality.Semantic.DeepEqual(oldCopy, status)
 }
 
+//启动方法
+//启动go routine，在go routine中主要完成两件事情：
+//消费podStatusChannel中的内容，调用syncPod()处理内容；
+//一定时间调用syncBatch()
 func (m *manager) Start() {
 	// Don't start the status manager if we don't have a client. This will happen
 	// on the master, where the kubelet is responsible for bootstrapping the pods
@@ -156,16 +161,19 @@ func (m *manager) Start() {
 
 	klog.InfoS("Starting to sync pod status with apiserver")
 	//lint:ignore SA1015 Ticker can link since this is only called once and doesn't handle termination.
+	// 时间触发器的实现
 	syncTicker := time.Tick(syncPeriod)
 	// syncPod and syncBatch share the same go routine to avoid sync races.
 	go wait.Forever(func() {
 		for {
 			select {
+			// 消费podStatusChannel中的数据
 			case syncRequest := <-m.podStatusChannel:
 				klog.V(5).InfoS("Status Manager: syncing pod with status from podStatusChannel",
 					"podUID", syncRequest.podUID,
 					"statusVersion", syncRequest.status.version,
 					"status", syncRequest.status.status)
+				//进行同步
 				m.syncPod(syncRequest.podUID, syncRequest.status)
 			case <-syncTicker:
 				klog.V(5).InfoS("Status Manager: syncing batch")
@@ -173,6 +181,7 @@ func (m *manager) Start() {
 				for i := len(m.podStatusChannel); i > 0; i-- {
 					<-m.podStatusChannel
 				}
+				//把manager中需要更新的pod的状态全部更新一遍
 				m.syncBatch()
 			}
 		}
@@ -186,6 +195,7 @@ func (m *manager) GetPodStatus(uid types.UID) (v1.PodStatus, bool) {
 	return status.status, ok
 }
 
+//设置pod status,直接把status更新到pod
 func (m *manager) SetPodStatus(pod *v1.Pod, status v1.PodStatus) {
 	m.podStatusesLock.Lock()
 	defer m.podStatusesLock.Unlock()
@@ -199,6 +209,7 @@ func (m *manager) SetPodStatus(pod *v1.Pod, status v1.PodStatus) {
 	m.updateStatusInternal(pod, status, pod.DeletionTimestamp != nil)
 }
 
+// 设置pod中某个conteiner的状态为ready，并更新pod的condition
 func (m *manager) SetContainerReadiness(podUID types.UID, containerID kubecontainer.ContainerID, ready bool) {
 	m.podStatusesLock.Lock()
 	defer m.podStatusesLock.Unlock()
@@ -255,6 +266,7 @@ func (m *manager) SetContainerReadiness(podUID types.UID, containerID kubecontai
 			status.Conditions = append(status.Conditions, condition)
 		}
 	}
+	//更新pod的condition
 	updateConditionFunc(v1.PodReady, GeneratePodReadyCondition(&pod.Spec, status.Conditions, status.ContainerStatuses, status.Phase))
 	updateConditionFunc(v1.ContainersReady, GenerateContainersReadyCondition(&pod.Spec, status.ContainerStatuses, status.Phase))
 	m.updateStatusInternal(pod, status, false)
@@ -331,6 +343,7 @@ func (m *manager) TerminatePod(pod *v1.Pod) {
 		oldStatus = &cachedStatus.status
 	}
 	status := *oldStatus.DeepCopy()
+	// status.ContainerStatuses中所有容器状态为Treminated
 	for i := range status.ContainerStatuses {
 		if status.ContainerStatuses[i].State.Terminated != nil || status.ContainerStatuses[i].State.Waiting != nil {
 			continue
@@ -343,6 +356,7 @@ func (m *manager) TerminatePod(pod *v1.Pod) {
 			},
 		}
 	}
+	//status.InitContainerStatuses中所有容器状态为Treminated
 	for i := range status.InitContainerStatuses {
 		if status.InitContainerStatuses[i].State.Terminated != nil || status.InitContainerStatuses[i].State.Waiting != nil {
 			continue
@@ -388,6 +402,7 @@ func checkContainerStateTransition(oldStatuses, newStatuses []v1.ContainerStatus
 // updateStatusInternal updates the internal status cache, and queues an update to the api server if
 // necessary. Returns whether an update was triggered.
 // This method IS NOT THREAD SAFE and must be called from a locked function.
+// 包内更新status的入口
 func (m *manager) updateStatusInternal(pod *v1.Pod, status v1.PodStatus, forceUpdate bool) bool {
 	var oldStatus v1.PodStatus
 	cachedStatus, isCached := m.podStatuses[pod.UID]
@@ -426,6 +441,7 @@ func (m *manager) updateStatusInternal(pod *v1.Pod, status v1.PodStatus, forceUp
 		status.StartTime = oldStatus.StartTime
 	} else if status.StartTime.IsZero() {
 		// if the status has no start time, we need to set an initial time
+		//计算机系统时区
 		now := metav1.Now()
 		status.StartTime = &now
 	}
@@ -447,6 +463,7 @@ func (m *manager) updateStatusInternal(pod *v1.Pod, status v1.PodStatus, forceUp
 	m.podStatuses[pod.UID] = newStatus
 
 	select {
+	//把更新放到podStatusChannel中以供更新
 	case m.podStatusChannel <- podStatusSyncRequest{pod.UID, newStatus}:
 		klog.V(5).InfoS("Status Manager: adding pod with new status to podStatusChannel",
 			"pod", klog.KObj(pod),
@@ -526,9 +543,14 @@ func (m *manager) syncBatch() {
 				}
 				syncedUID = mirrorUID
 			}
+			//把manager podStatuses中的pod全部检查一遍
+			//apiStatusVersions中的status号小于参数status号，
+			//或者apistatusVersions中不存在该status号，则需要更新
 			if m.needsUpdate(types.UID(syncedUID), status) {
 				updatedStatuses = append(updatedStatuses, podStatusSyncRequest{uid, status})
 			} else if m.needsReconcile(uid, status.status) {
+				//manager中的status和podManager中的不一致，则需要更新，
+				//以manager中的为准
 				// Delete the apiStatusVersions here to force an update on the pod status
 				// In most cases the deleted apiStatusVersions here should be filled
 				// soon after the following syncPod() [If the syncPod() sync an update
@@ -539,6 +561,7 @@ func (m *manager) syncBatch() {
 		}
 	}()
 
+	// 更新pod status，果需要更新，则调用syncPod()更新ETCD
 	for _, update := range updatedStatuses {
 		klog.V(5).InfoS("Status Manager: syncPod in syncbatch", "podUID", update.podUID)
 		m.syncPod(update.podUID, update.status)
@@ -546,6 +569,7 @@ func (m *manager) syncBatch() {
 }
 
 // syncPod syncs the given status with the API server. The caller must not hold the lock.
+//同步pod状态
 func (m *manager) syncPod(uid types.UID, status versionedPodStatus) {
 	if !m.needsUpdate(uid, status) {
 		klog.V(1).InfoS("Status for pod is up-to-date; skipping", "podUID", uid)
@@ -553,6 +577,7 @@ func (m *manager) syncPod(uid types.UID, status versionedPodStatus) {
 	}
 
 	// TODO: make me easier to express from client code
+	//　获取pod
 	pod, err := m.kubeClient.CoreV1().Pods(status.podNamespace).Get(context.TODO(), status.podName, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		klog.V(3).InfoS("Pod does not exist on the server",

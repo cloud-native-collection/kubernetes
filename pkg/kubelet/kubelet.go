@@ -255,6 +255,10 @@ type DockerOptions struct {
 // makePodSourceConfig creates a config.PodConfig from the given
 // KubeletConfiguration or returns an error.
 func makePodSourceConfig(kubeCfg *kubeletconfiginternal.KubeletConfiguration, kubeDeps *Dependencies, nodeName types.NodeName, nodeHasSynced func() bool) (*config.PodConfig, error) {
+// 处理kubelet的信息源
+// 会生成一个新的config，然后调用NewSourceFile(), NewSourceURL(), NewSourceApiserver()生成三个渠道。
+// 三个渠道的数据都会放入属于自己的channel中，而该channel是通过PodConfig的Channel()生成的。现在整个PodConfig就能汇总加工3个渠道的数据
+// 外部只要调用PocConfig的Updates()即可获取这些处理好的数据所有的channel
 	manifestURLHeader := make(http.Header)
 	if len(kubeCfg.StaticPodURLHeader) > 0 {
 		for k, v := range kubeCfg.StaticPodURLHeader {
@@ -265,6 +269,8 @@ func makePodSourceConfig(kubeCfg *kubeletconfiginternal.KubeletConfiguration, ku
 	}
 
 	// source of all configuration
+	// NewPodConfig()创建一个channel，该channel的生产者是Ｍerge(),消费者是kubelet
+	// config的Channel()也会创建一个channel，该channel的生产者是来源LW，消费者是Merge()
 	cfg := config.NewPodConfig(config.PodConfigNotificationIncremental, kubeDeps.Recorder)
 
 	// define file config source
@@ -282,6 +288,7 @@ func makePodSourceConfig(kubeCfg *kubeletconfiginternal.KubeletConfiguration, ku
 	if kubeDeps.KubeClient != nil {
 		klog.InfoS("Adding apiserver pod source")
 		config.NewSourceApiserver(kubeDeps.KubeClient, nodeName, nodeHasSynced, cfg.Channel(kubetypes.ApiserverSource))
+		// Channel()返回一个新的channel
 	}
 	return cfg, nil
 }
@@ -338,6 +345,7 @@ func PreInitRuntimeService(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 
 // NewMainKubelet instantiates a new Kubelet object along with all the required internal modules.
 // No initialization of Kubelet and its modules should happen here.
+// kubelet的构造函数
 func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	kubeDeps *Dependencies,
 	crOptions *config.ContainerRuntimeOptions,
@@ -775,6 +783,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 
 	klet.reasonCache = NewReasonCache()
 	klet.workQueue = queue.NewBasicWorkQueue(klet.clock)
+	// pod worker的syncPodFn为syncPod()
 	klet.podWorkers = newPodWorkers(klet.syncPod, kubeDeps.Recorder, klet.workQueue, klet.resyncInterval, backOffPeriod, klet.podCache)
 
 	klet.backOff = flowcontrol.NewBackOff(backOffPeriod, MaxContainerBackOff)
@@ -1328,6 +1337,7 @@ func (kl *Kubelet) StartGarbageCollection() {
 // Note that the modules here must not depend on modules that are not initialized here.
 func (kl *Kubelet) initializeModules() error {
 	// Prometheus metrics.
+	// 注册prometheus metrics
 	metrics.Register(
 		collectors.NewVolumeStatsCollector(kl),
 		collectors.NewLogMetricsCollector(kl.StatsProvider.ListPodStats),
@@ -1336,11 +1346,13 @@ func (kl *Kubelet) initializeModules() error {
 	servermetrics.Register()
 
 	// Setup filesystem directories.
+	// kubelet所需要的文件夹
 	if err := kl.setupDataDirs(); err != nil {
 		return err
 	}
 
 	// If the container logs directory does not exist, create it.
+	// container的日志文件
 	if _, err := os.Stat(ContainerLogsDir); err != nil {
 		if err := kl.os.MkdirAll(ContainerLogsDir, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %q: %v", ContainerLogsDir, err)
@@ -1348,19 +1360,23 @@ func (kl *Kubelet) initializeModules() error {
 	}
 
 	// Start the image manager.
+	// 管理镜像 GC 的模块
 	kl.imageManager.Start()
 
 	// Start the certificate manager if it was enabled.
+	// 证书管理
 	if kl.serverCertificateManager != nil {
 		kl.serverCertificateManager.Start()
 	}
 
 	// Start out of memory watcher.
+	// OOM 监控模块
 	if err := kl.oomWatcher.Start(kl.nodeRef); err != nil {
 		return fmt.Errorf("failed to start OOM watcher %v", err)
 	}
 
 	// Start resource analyzer
+	// 资源分析
 	kl.resourceAnalyzer.Start()
 
 	return nil
@@ -1412,10 +1428,12 @@ func (kl *Kubelet) initializeRuntimeDependentModules() {
 }
 
 // Run starts the kubelet reacting to config updates
+// 入口函数
 func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 	if kl.logServer == nil {
 		kl.logServer = http.StripPrefix("/logs/", http.FileServer(http.Dir("/var/log/")))
 	}
+	// 检查apiserver ？？
 	if kl.kubeClient == nil {
 		klog.InfoS("No API server defined - no node status update will be sent")
 	}
@@ -1425,6 +1443,7 @@ func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 		go kl.cloudResourceSyncManager.Run(wait.NeverStop)
 	}
 
+	// 初始化模块所需要的资源
 	if err := kl.initializeModules(); err != nil {
 		kl.recorder.Eventf(kl.nodeRef, v1.EventTypeWarning, events.KubeletSetupFailed, err.Error())
 		klog.ErrorS(err, "Failed to initialize internal modules")
@@ -1432,37 +1451,51 @@ func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 	}
 
 	// Start volume manager
+	// 运行volume  manager
 	go kl.volumeManager.Run(kl.sourcesReady, wait.NeverStop)
 
+	// APIserver 已经运行
 	if kl.kubeClient != nil {
 		// Start syncing node status immediately, this may set up things the runtime needs to run.
+		// goroutine 定时同步node状态
 		go wait.Until(kl.syncNodeStatus, kl.nodeStatusUpdateFrequency, wait.NeverStop)
+		// 进行一次快速同步
 		go kl.fastStatusUpdateOnce()
 
 		// start syncing lease
+		// nodeleaseController
 		go kl.nodeLeaseController.Run(wait.NeverStop)
 	}
+	// goroutine运行container runtime uptime
 	go wait.Until(kl.updateRuntimeUp, 5*time.Second, wait.NeverStop)
 
 	// Set up iptables util rules
+	// 设置iptables util规则
 	if kl.makeIPTablesUtilChains {
 		kl.initNetworkUtil()
 	}
 
 	// Start a goroutine responsible for killing pods (that are not properly
 	// handled by pod workers).
+	// goroutine 运行podkiller
 	go wait.Until(kl.podKiller.PerformPodKillingWork, 1*time.Second, wait.NeverStop)
 
 	// Start component sync loops.
+	// pod 状态管理
 	kl.statusManager.Start()
 
 	// Start syncing RuntimeClasses if enabled.
+	// 如果启用，则开始同步RuntimeClasses
 	if kl.runtimeClassManager != nil {
 		kl.runtimeClassManager.Start(wait.NeverStop)
 	}
 
 	// Start the pod lifecycle event generator.
+	// (pod lifecycle event generator) 模块
 	kl.pleg.Start()
+	// 主循环
+	// 所有pod事件都会被处理后放置到updates channel中updates数据的生产者，
+	// 此updates就是PodConfig中的updates，消费ｕpdates中的数据
 	kl.syncLoop(updates, kl)
 }
 
@@ -1493,6 +1526,8 @@ func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 // This operation writes all events that are dispatched in order to provide
 // the most accurate information possible about an error situation to aid debugging.
 // Callers should not throw an event if this operation returns an error.
+// 整个kubelet的核心，pod的创建与删除都由它来处理。由syncPod()涉及很多的kubelet中功能包，
+//syncPod()会处理传进来的pod，维护物理机上的pod和etcd中的pod的一致性
 func (kl *Kubelet) syncPod(o syncPodOptions) error {
 	// pull out the required options
 	pod := o.pod
@@ -1679,6 +1714,7 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 				}
 			}
 		}
+		// 创建mirror pod
 		if mirrorPod == nil || deleted {
 			node, err := kl.GetNode()
 			if err != nil || node.DeletionTimestamp != nil {
@@ -1702,6 +1738,7 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 	// Volume manager will not mount volumes for terminated pods
 	if !kl.podIsTerminated(pod) {
 		// Wait for volumes to attach/mount
+		// 等待挂载完成
 		if err := kl.volumeManager.WaitForAttachAndMount(pod); err != nil {
 			kl.recorder.Eventf(pod, v1.EventTypeWarning, events.FailedMountVolume, "Unable to attach or mount volumes: %v", err)
 			klog.ErrorS(err, "Unable to attach or mount volumes for pod; skipping pod", "pod", klog.KObj(pod))
@@ -1713,6 +1750,8 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 	pullSecrets := kl.getPullSecretsForPod(pod)
 
 	// Call the container runtime's SyncPod callback
+	//***此处containerRuntime为*dockertools.DockerManager***//
+	//***即调用了dockertools/docker_manager.go中的SyncPod()***//
 	result := kl.containerRuntime.SyncPod(pod, podStatus, pullSecrets, kl.backOff)
 	kl.reasonCache.Update(pod.UID, result)
 	if err := result.Error(); err != nil {
@@ -1848,6 +1887,7 @@ func (kl *Kubelet) canRunPod(pod *v1.Pod) lifecycle.PodAdmitResult {
 // any new change seen, will run a sync against desired state and running state. If
 // no changes are seen to the configuration, will synchronize the last known desired
 // state every sync-frequency seconds. Never returns.
+// 消费updates中的数据
 func (kl *Kubelet) syncLoop(updates <-chan kubetypes.PodUpdate, handler SyncHandler) {
 	klog.InfoS("Starting kubelet main sync loop")
 	// The syncTicker wakes up kubelet to checks if there are any pod workers
@@ -1883,6 +1923,11 @@ func (kl *Kubelet) syncLoop(updates <-chan kubetypes.PodUpdate, handler SyncHand
 		duration = base
 
 		kl.syncLoopMonitor.Store(kl.clock.Now())
+		//　syncLoopIteration()监听很多条channel
+		//- configCh       <-chan kubetypes.PodUpdate 触发：HandlePodAdditions，HandlePodUpdates，HandlePodRemoves，HandlePodReconcile
+		//- syncCh         <-chan time.Time，定时触发的 resync 操作 触发 HandlePodSyncs 操作
+		//- housekeepingCh <-chan time.Time，定时触发的清理操作，触发 HandlePodSyncs 操作
+		//- plegCh         <-chan *pleg.PodLifecycleEvent，触发 HandlePodCleanups
 		if !kl.syncLoopIteration(updates, handler, syncTicker.C, housekeepingTicker.C, plegCh) {
 			break
 		}
@@ -1925,6 +1970,8 @@ func (kl *Kubelet) syncLoop(updates <-chan kubetypes.PodUpdate, handler SyncHand
 func (kl *Kubelet) syncLoopIteration(configCh <-chan kubetypes.PodUpdate, handler SyncHandler,
 	syncCh <-chan time.Time, housekeepingCh <-chan time.Time, plegCh <-chan *pleg.PodLifecycleEvent) bool {
 	select {
+	// 读取配置事件的管道，config通过文件、URL 和 apiserver 汇聚起来的事件
+	// configCh是update channel
 	case u, open := <-configCh:
 		// Update from a config source; dispatch it to the right handler
 		// callback.
@@ -1933,6 +1980,15 @@ func (kl *Kubelet) syncLoopIteration(configCh <-chan kubetypes.PodUpdate, handle
 			return false
 		}
 
+		// 根据Op对update进行不同的处理
+		//podConfig一次分类处理的是全量的pods，所以在各handler一次也要处理多个pods，
+		//事件类型与处理函数的对应的关系如下：
+		//kubetypes.ADD: HandlePodAdditions()
+		//kubetypes.UPDATE: HandlePodUpdates()
+		//kubetypes.REMOVE: HandlePodRemoves()
+		//kubetypes.RECONCILE: HandlePodReconcile()
+		//kubetypes.DELETE: HandlePodUpdates()
+		//kubetypes.SET: 目前还未支持。
 		switch u.Op {
 		case kubetypes.ADD:
 			klog.V(2).InfoS("SyncLoop ADD", "source", u.Source, "pods", format.Pods(u.Pods))
@@ -2045,6 +2101,7 @@ func handleProbeSync(kl *Kubelet, update proberesults.Update, handler SyncHandle
 
 // dispatchWork starts the asynchronous sync of the pod in a pod worker.
 // If the pod has completed termination, dispatchWork will perform no action.
+// 调用podWorkers的UpdatePod()方法处理pod
 func (kl *Kubelet) dispatchWork(pod *v1.Pod, syncType kubetypes.SyncPodType, mirrorPod *v1.Pod, start time.Time) {
 	// check whether we are ready to delete the pod from the API server (all status up to date)
 	containersTerminal, podWorkerTerminal := kl.podAndContainersAreTerminal(pod)
@@ -2090,6 +2147,8 @@ func (kl *Kubelet) handleMirrorPod(mirrorPod *v1.Pod, start time.Time) {
 
 // HandlePodAdditions is the callback in SyncHandler for pods being added from
 // a config source.
+// HandlePodAdditions()会把pods分为criticalPods(还不清楚具体为具体功能)和nonCriticalPods，
+// 然后调用dispatchWork()处理各pod，设定处理方法为kubetypes.SyncPodCreate
 func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
 	start := kl.clock.Now()
 	sort.Sort(sliceutils.PodsByCreationTime(pods))
@@ -2128,6 +2187,7 @@ func (kl *Kubelet) HandlePodAdditions(pods []*v1.Pod) {
 
 // HandlePodUpdates is the callback in the SyncHandler interface for pods
 // being updated from a config source.
+// 调用dispatchWork()处理各pods，设定处理方法为kubetypes.SyncPodUpdate
 func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
 	start := kl.clock.Now()
 	for _, pod := range pods {
@@ -2143,6 +2203,7 @@ func (kl *Kubelet) HandlePodUpdates(pods []*v1.Pod) {
 
 // HandlePodRemoves is the callback in the SyncHandler interface for pods
 // being removed from a config source.
+// 接调用deletePod()删除pod
 func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
 	start := kl.clock.Now()
 	for _, pod := range pods {
@@ -2162,6 +2223,7 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
 
 // HandlePodReconcile is the callback in the SyncHandler interface for pods
 // that should be reconciled.
+// 把pod状态更新到podManager中，然后statusManager会根据podManager的状态来作出处理
 func (kl *Kubelet) HandlePodReconcile(pods []*v1.Pod) {
 	start := kl.clock.Now()
 	for _, pod := range pods {

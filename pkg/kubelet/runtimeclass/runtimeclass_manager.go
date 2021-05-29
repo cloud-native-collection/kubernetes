@@ -26,6 +26,7 @@ import (
 )
 
 // Manager caches RuntimeClass API objects, and provides accessors to the Kubelet.
+// 管理器缓存RuntimeClass API对象，并提供Kubelet的访问器。
 type Manager struct {
 	informerFactory informers.SharedInformerFactory
 	lister          nodev1.RuntimeClassLister

@@ -1,0 +1,2 @@
+podManager在kubelet中负责内存中pod及mirrorPod的维护，任何在本节点上创建或删除操作都会同步更新podManager，即可以认为podManager中存储了本节点上运行的pod的信息。
+mirrorPod:在kubernetes中，如果是static pod，则由kubelet直接创建，这时系统很难管理这部分pod；所以系统会在kubelet中创建一个static pod对应的mirrorPod，来表示static pod

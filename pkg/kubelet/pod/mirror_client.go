@@ -51,6 +51,8 @@ type nodeGetter interface {
 // basicMirrorClient is a functional MirrorClient.  Mirror pods are stored in
 // the kubelet directly because they need to be in sync with the internal
 // pods.
+//操作mirrorPod。由于podManager中嵌入了basicMirrorClient，
+//所以podManager也有操作mirrorPod的能
 type basicMirrorClient struct {
 	apiserverClient clientset.Interface
 	nodeGetter      nodeGetter
@@ -66,6 +68,7 @@ func NewBasicMirrorClient(apiserverClient clientset.Interface, nodeName string, 
 	}
 }
 
+//创建pod对应的mirrorPod
 func (mc *basicMirrorClient) CreateMirrorPod(pod *v1.Pod) error {
 	if mc.apiserverClient == nil {
 		return nil
@@ -78,6 +81,7 @@ func (mc *basicMirrorClient) CreateMirrorPod(pod *v1.Pod) error {
 		copyPod.Annotations[k] = v
 	}
 	hash := getPodHash(pod)
+	//创建mirror pod
 	copyPod.Annotations[kubetypes.ConfigMirrorAnnotationKey] = hash
 
 	// With the MirrorPodNodeRestriction feature, mirror pods are required to have an owner reference
@@ -113,6 +117,7 @@ func (mc *basicMirrorClient) CreateMirrorPod(pod *v1.Pod) error {
 // while parsing the name of the pod.
 // Non-existence of the pod or UID mismatch is not treated as an error; the
 // routine simply returns false in that case.
+// 删除mirror pod
 func (mc *basicMirrorClient) DeleteMirrorPod(podFullName string, uid *types.UID) (bool, error) {
 	if mc.apiserverClient == nil {
 		return false, nil
@@ -148,16 +153,22 @@ func (mc *basicMirrorClient) getNodeUID() (types.UID, error) {
 }
 
 // IsStaticPod returns true if the passed Pod is static.
+//依据pod中annotations中标记的来源来判断是否为staticPod。
+//通过pod source来判断是否为static pod
 func IsStaticPod(pod *v1.Pod) bool {
 	source, err := kubetypes.GetPodSource(pod)
 	return err == nil && source != kubetypes.ApiserverSource
 }
 
+//获取mirrorPod annotations中的kubetypes.ConfigMirrorAnnotationKey，
+//即”kubernetes.io/config.hash”的值
 func getHashFromMirrorPod(pod *v1.Pod) (string, bool) {
 	hash, ok := pod.Annotations[kubetypes.ConfigMirrorAnnotationKey]
 	return hash, ok
 }
 
+//获取pod annotations中的kubetypes.ConfigMirrorAnnotationKey，
+//即”kubernetes.io/config.hash”的值
 func getPodHash(pod *v1.Pod) string {
 	// The annotation exists for all static pods.
 	return pod.Annotations[kubetypes.ConfigHashAnnotationKey]

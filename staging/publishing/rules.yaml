@@ -613,6 +613,25 @@ rules:
       branch: release-1.21
     required-packages:
     - k8s.io/code-generator
+  - source:
+      branch: release-1.20
+      dir: staging/src/k8s.io/apiextensions-apiserver
+    name: release-1.20
+    dependencies:
+    - repository: apimachinery
+      branch: release-1.20
+    - repository: api
+      branch: release-1.20
+    - repository: client-go
+      branch: release-1.20
+    - repository: apiserver
+      branch: release-1.20
+    - repository: code-generator
+      branch: release-1.20
+    - repository: component-base
+      branch: release-1.20
+    required-packages:
+    - k8s.io/code-generator
 
 - destination: metrics
   library: true
@@ -1469,3 +1488,7 @@ rules:
       branch: master
       dir: staging/src/k8s.io/pod-security-admission
     name: master
+  - source:
+      branch: release-1.20
+      dir: staging/src/k8s.io/mount-utils
+    name: release-1.20

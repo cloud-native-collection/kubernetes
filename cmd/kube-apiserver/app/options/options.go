@@ -97,6 +97,7 @@ type ServerRunOptions struct {
 }
 
 // NewServerRunOptions creates a new ServerRunOptions object with default parameters
+// 创建server配置的结构体
 func NewServerRunOptions() *ServerRunOptions {
 	s := ServerRunOptions{
 		GenericServerRunOptions: genericoptions.NewServerRunOptions(),

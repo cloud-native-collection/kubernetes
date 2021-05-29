@@ -102,15 +102,20 @@ type basicManager struct {
 	lock sync.RWMutex
 
 	// Regular pods indexed by UID.
+	// 记录uid和pod的map关系
 	podByUID map[kubetypes.ResolvedPodUID]*v1.Pod
 	// Mirror pods indexed by UID.
+	//mirrorPod的uid和mirrorPod的map关系
 	mirrorPodByUID map[kubetypes.MirrorPodUID]*v1.Pod
 
 	// Pods indexed by full name for easy access.
+	//fullName和pod的map关系
 	podByFullName       map[string]*v1.Pod
+	//fullName和mirrorPod的map关系
 	mirrorPodByFullName map[string]*v1.Pod
 
 	// Mirror pod UID to pod UID map.
+	//mirrorPod的uid和pod的uid的map关系
 	translationByUID map[kubetypes.MirrorPodUID]kubetypes.ResolvedPodUID
 
 	// basicManager is keeping secretManager and configMapManager up-to-date.
@@ -118,6 +123,7 @@ type basicManager struct {
 	configMapManager configmap.Manager
 
 	// A mirror pod client to create/delete mirror pods.
+	// 管理mirrorPod
 	MirrorClient
 }
 
@@ -132,6 +138,8 @@ func NewBasicPodManager(client MirrorClient, secretManager secret.Manager, confi
 }
 
 // Set the internal pods based on the new pods.
+// 将pods的信息更换成newPods的信息，
+// 依据newPods初始化basicManager
 func (pm *basicManager) SetPods(newPods []*v1.Pod) {
 	pm.lock.Lock()
 	defer pm.lock.Unlock()
@@ -145,10 +153,12 @@ func (pm *basicManager) SetPods(newPods []*v1.Pod) {
 	pm.updatePodsInternal(newPods...)
 }
 
+// 在basicManager中添加pod
 func (pm *basicManager) AddPod(pod *v1.Pod) {
 	pm.UpdatePod(pod)
 }
 
+// 在basicManager中更新pod
 func (pm *basicManager) UpdatePod(pod *v1.Pod) {
 	pm.lock.Lock()
 	defer pm.lock.Unlock()
@@ -162,6 +172,8 @@ func isPodInTerminatedState(pod *v1.Pod) bool {
 // updatePodsInternal replaces the given pods in the current state of the
 // manager, updating the various indices. The caller is assumed to hold the
 // lock.
+//更新pods。如果pod的类型为mirrorPod，
+//则更新mirroPodByUID, mirrorPodByFullName和translationByUID；如果是pod，则更新podByUID和podByFullName
 func (pm *basicManager) updatePodsInternal(pods ...*v1.Pod) {
 	for _, pod := range pods {
 		if pm.secretManager != nil {
@@ -195,12 +207,15 @@ func (pm *basicManager) updatePodsInternal(pods ...*v1.Pod) {
 		// It is safe to type convert here due to the IsMirrorPod guard.
 		if kubetypes.IsMirrorPod(pod) {
 			mirrorPodUID := kubetypes.MirrorPodUID(pod.UID)
+			//更新mirrorPodByUID及mirrorPodByFullName
+			// 设置mirrorPod和pod的映射关系
 			pm.mirrorPodByUID[mirrorPodUID] = pod
 			pm.mirrorPodByFullName[podFullName] = pod
 			if p, ok := pm.podByFullName[podFullName]; ok {
 				pm.translationByUID[mirrorPodUID] = kubetypes.ResolvedPodUID(p.UID)
 			}
 		} else {
+			//更新podByUID及podByFullName
 			resolvedPodUID := kubetypes.ResolvedPodUID(pod.UID)
 			pm.podByUID[resolvedPodUID] = pod
 			pm.podByFullName[podFullName] = pod
@@ -211,6 +226,10 @@ func (pm *basicManager) updatePodsInternal(pods ...*v1.Pod) {
 	}
 }
 
+//从basicManager中删除pod。
+//如果pod是mirrorPod，则清理mirrorPodByUID,
+//mirrorPodByFullName和translationByUID中pod相关内容；
+//如果是pod，则只清理podByUID和podByFullName中pod相关内容
 func (pm *basicManager) DeletePod(pod *v1.Pod) {
 	pm.lock.Lock()
 	defer pm.lock.Unlock()
@@ -233,12 +252,14 @@ func (pm *basicManager) DeletePod(pod *v1.Pod) {
 	}
 }
 
+//获取podByUID中的所有pod
 func (pm *basicManager) GetPods() []*v1.Pod {
 	pm.lock.RLock()
 	defer pm.lock.RUnlock()
 	return podsMapToPods(pm.podByUID)
 }
 
+//获取pods和mirrorPod
 func (pm *basicManager) GetPodsAndMirrorPods() ([]*v1.Pod, []*v1.Pod) {
 	pm.lock.RLock()
 	defer pm.lock.RUnlock()
@@ -247,6 +268,7 @@ func (pm *basicManager) GetPodsAndMirrorPods() ([]*v1.Pod, []*v1.Pod) {
 	return pods, mirrorPods
 }
 
+//获取指定uid的pod
 func (pm *basicManager) GetPodByUID(uid types.UID) (*v1.Pod, bool) {
 	pm.lock.RLock()
 	defer pm.lock.RUnlock()
@@ -254,11 +276,13 @@ func (pm *basicManager) GetPodByUID(uid types.UID) (*v1.Pod, bool) {
 	return pod, ok
 }
 
+//通过namespace和name获取指定pod
 func (pm *basicManager) GetPodByName(namespace, name string) (*v1.Pod, bool) {
 	podFullName := kubecontainer.BuildPodFullName(name, namespace)
 	return pm.GetPodByFullName(podFullName)
 }
 
+//通过podFullName获取指定pod
 func (pm *basicManager) GetPodByFullName(podFullName string) (*v1.Pod, bool) {
 	pm.lock.RLock()
 	defer pm.lock.RUnlock()
@@ -266,6 +290,7 @@ func (pm *basicManager) GetPodByFullName(podFullName string) (*v1.Pod, bool) {
 	return pod, ok
 }
 
+//通过mirrorPod的uid获取对应pod的uid
 func (pm *basicManager) TranslatePodUID(uid types.UID) kubetypes.ResolvedPodUID {
 	// It is safe to type convert to a resolved UID because type conversion is idempotent.
 	if uid == "" {
@@ -280,6 +305,7 @@ func (pm *basicManager) TranslatePodUID(uid types.UID) kubetypes.ResolvedPodUID 
 	return kubetypes.ResolvedPodUID(uid)
 }
 
+//获取pod到mirrorPod及mirrorPod到pod的映射关系
 func (pm *basicManager) GetUIDTranslations() (podToMirror map[kubetypes.ResolvedPodUID]kubetypes.MirrorPodUID,
 	mirrorToPod map[kubetypes.MirrorPodUID]kubetypes.ResolvedPodUID) {
 	pm.lock.RLock()
@@ -317,6 +343,7 @@ func (pm *basicManager) GetOrphanedMirrorPodNames() []string {
 	return podFullNames
 }
 
+//检查mirrorPod和pod是否匹配
 func (pm *basicManager) IsMirrorPodOf(mirrorPod, pod *v1.Pod) bool {
 	// Check name and namespace first.
 	if pod.Name != mirrorPod.Name || pod.Namespace != mirrorPod.Namespace {
