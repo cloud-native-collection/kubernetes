@@ -937,6 +937,7 @@ func (p *glusterfsVolumeProvisioner) createOrGetEndpointService(namespace string
 	return endpoint, service, nil
 }
 
+// 删除endpoints
 func (d *glusterfsVolumeDeleter) deleteEndpointService(namespace string, epServiceName string) (err error) {
 	kubeClient := d.plugin.host.GetKubeClient()
 	if kubeClient == nil {
@@ -973,6 +974,7 @@ func parseSecret(namespace, secretName string, kubeClient clientset.Interface) (
 }
 
 // getClusterNodes() returns the cluster nodes of a given cluster
+// 获取集群的gluster集群的节点用于创建ep
 func getClusterNodes(cli *gcli.Client, cluster string) (dynamicHostIps []string, err error) {
 	clusterinfo, err := cli.ClusterInfo(cluster)
 	if err != nil {
@@ -1007,6 +1009,7 @@ func getClusterNodes(cli *gcli.Client, cluster string) (dynamicHostIps []string,
 }
 
 // parseClassParameters parses StorageClass parameters.
+// 解析StorageClass的参数
 func parseClassParameters(params map[string]string, kubeClient clientset.Interface) (*provisionerConfig, error) {
 	var cfg provisionerConfig
 	var err error

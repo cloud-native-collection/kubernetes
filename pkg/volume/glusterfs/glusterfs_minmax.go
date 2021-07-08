@@ -45,6 +45,7 @@ var (
 )
 
 //MinMaxAllocator defines allocator struct.
+// 定义分配器
 type MinMaxAllocator struct {
 	lock sync.Mutex
 	min  int
@@ -80,6 +81,7 @@ func NewMinMaxAllocator(min, max int) (*MinMaxAllocator, error) {
 }
 
 //SetRange defines the range/pool with provided min and max values.
+// 设置分配器的范围
 func (a *MinMaxAllocator) SetRange(min, max int) error {
 	if min > max {
 		return ErrInvalidRange
@@ -109,6 +111,7 @@ func (a *MinMaxAllocator) SetRange(min, max int) error {
 }
 
 //Allocate allocates provided value in the allocator and mark it as used.
+// 分配器
 func (a *MinMaxAllocator) Allocate(i int) (bool, error) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
@@ -168,12 +171,14 @@ func (a *MinMaxAllocator) Release(i int) error {
 	return nil
 }
 
+// 是否已经分配
 func (a *MinMaxAllocator) has(i int) bool {
 	_, ok := a.used[i]
 	return ok
 }
 
 //Has check whether the provided value is used in the allocator
+// 传入的id是否已经被分配器使用
 func (a *MinMaxAllocator) Has(i int) bool {
 	a.lock.Lock()
 	defer a.lock.Unlock()
