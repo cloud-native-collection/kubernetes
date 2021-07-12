@@ -720,7 +720,9 @@ func filterClient(client *gcli.Client, opts *proxyutil.FilteredDialOptions) *gcl
 	return client
 }
 
+//
 func (p *glusterfsVolumeProvisioner) Provision(selectedNode *v1.Node, allowedTopologies []v1.TopologySelectorTerm) (*v1.PersistentVolume, error) {
+	// 是否是合法的accessmode
 	if !volutil.AccessModesContainedInAll(p.plugin.GetAccessModes(), p.options.PVC.Spec.AccessModes) {
 		return nil, fmt.Errorf("invalid AccessModes %v: only AccessModes %v are supported", p.options.PVC.Spec.AccessModes, p.plugin.GetAccessModes())
 	}
@@ -732,6 +734,7 @@ func (p *glusterfsVolumeProvisioner) Provision(selectedNode *v1.Node, allowedTop
 		return nil, fmt.Errorf("%s does not support block volume provisioning", p.plugin.GetPluginName())
 	}
 	klog.V(4).Infof("provision volume with options %v", p.options)
+	// 获取storageClass
 	scName := storagehelpers.GetPersistentVolumeClaimClass(p.options.PVC)
 	cfg, err := parseClassParameters(p.options.Parameters, p.plugin.host.GetKubeClient())
 	if err != nil {
@@ -780,6 +783,7 @@ func (p *glusterfsVolumeProvisioner) Provision(selectedNode *v1.Node, allowedTop
 	return pv, nil
 }
 
+// 创建存储volume
 func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersistentVolumeSource, size int, volID string, err error) {
 	var clusterIDs []string
 	customVolumeName := ""
@@ -840,6 +844,7 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersi
 	}
 	klog.V(1).Infof("volume with size %d and name %s created", volume.Size, volume.Name)
 	volID = volume.Id
+	// 获取node的ip写入endpoints
 	dynamicHostIps, err := getClusterNodes(cli, volume.Cluster)
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("failed to get cluster nodes for volume %s: %v", volume, err)
@@ -861,6 +866,7 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersi
 			klog.V(4).Infof("failed to delete volume: %v, manual deletion of the volume required", deleteErr)
 		}
 		klog.V(3).Infof("failed to update endpoint, deleting %s", endpoint)
+		// 删除svc
 		err = kubeClient.CoreV1().Services(epNamespace).Delete(context.TODO(), epServiceName, metav1.DeleteOptions{})
 		if err != nil && errors.IsNotFound(err) {
 			klog.V(1).Infof("service %s does not exist in namespace %s", epServiceName, epNamespace)
@@ -885,6 +891,7 @@ func (p *glusterfsVolumeProvisioner) CreateVolume(gid int) (r *v1.GlusterfsPersi
 // exist for the given namespace, PVC name, endpoint name
 // I.e. the endpoint or service is only created
 // if it does not exist yet.
+// 创建endpoints和svc对象
 func (p *glusterfsVolumeProvisioner) createOrGetEndpointService(namespace string, epServiceName string, pvc *v1.PersistentVolumeClaim) (endpoint *v1.Endpoints, service *v1.Service, err error) {
 	pvcNameOrID := ""
 	if len(pvc.Name) >= 63 {

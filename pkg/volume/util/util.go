@@ -307,6 +307,7 @@ func AccessModesContains(modes []v1.PersistentVolumeAccessMode, mode v1.Persiste
 }
 
 // AccessModesContainedInAll returns whether all of the requested modes are contained by modes
+// 访问模式中包含的所有返回的所有请求的模式是否包含的模式
 func AccessModesContainedInAll(indexedModes []v1.PersistentVolumeAccessMode, requestedModes []v1.PersistentVolumeAccessMode) bool {
 	for _, mode := range requestedModes {
 		if !AccessModesContains(indexedModes, mode) {
