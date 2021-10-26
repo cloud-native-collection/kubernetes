@@ -61,6 +61,8 @@ const (
 	// Provisioners SHOULD implement support for this if they are block device based
 	// Must be a filesystem type supported by the host operating system.
 	// Ex. "ext4", "xfs", "ntfs". Default value depends on the provisioner
+	// 通用参数可以存储类指定，所需的FSType provisioners应该实现支持,如果他们是块设备必须是主机操作系统支持的文件系统类型。
+	//  如“ext4”、“xfs”、“ntfs”。默认值
 	VolumeParameterFSType = "fstype"
 
 	ProbeAddOrUpdate ProbeOperation = 1 << iota
@@ -79,75 +81,98 @@ var (
 )
 
 // VolumeOptions contains option information about a volume.
+// 包含volume的选项信息
 type VolumeOptions struct {
 	// The attributes below are required by volume.Provisioner
 	// TODO: refactor all of this out of volumes when an admin can configure
 	// many kinds of provisioners.
+	// 下面的属性是volume必须的，Provieionser
 
 	// Reclamation policy for a persistent volume
+	// 删除的卷处理模式
 	PersistentVolumeReclaimPolicy v1.PersistentVolumeReclaimPolicy
 	// Mount options for a persistent volume
+	// PV的挂载选项
 	MountOptions []string
 	// Suggested PV.Name of the PersistentVolume to provision.
 	// This is a generated name guaranteed to be unique in Kubernetes cluster.
 	// If you choose not to use it as volume name, ensure uniqueness by either
 	// combining it with your value or create unique values of your own.
+	// 这是一个自动生成的名字在集群Kubernetes确保是唯一的。
+	// 如果你选择不使用它作为卷名,可以结合你给定的值或者由你自己创建的值确保唯一性。
 	PVName string
 	// PVC is reference to the claim that lead to provisioning of a new PV.
 	// Provisioners *must* create a PV that would be matched by this PVC,
 	// i.e. with required capacity, accessMode, labels matching PVC.Selector and
 	// so on.
+	// PVC 提供一个指向新的PV的声明
+	// provisioner一定会创建一个匹配指向该pv的pvc,即匹配pvc带有请求的容量，访问模式，标签,选择器等等
 	PVC *v1.PersistentVolumeClaim
 	// Unique name of Kubernetes cluster.
+	// 唯一的Kubernetes集群名
 	ClusterName string
 	// Tags to attach to the real volume in the cloud provider - e.g. AWS EBS
+	// 标签附加到真正的volume云提供商——例如AWS EBS
 	CloudTags *map[string]string
 	// Volume provisioning parameters from StorageClass
+	// 从存储类卷配置参数
 	Parameters map[string]string
 }
 
 // NodeResizeOptions contain options to be passed for node expansion.
+// NodeResizeOptions包含选项为节点通过扩张。
 type NodeResizeOptions struct {
 	VolumeSpec *Spec
 
 	// DevicePath - location of actual device on the node. In case of CSI
 	// this just could be volumeID
+	// DevicePath——实际设备节点的位置。在CSI情况下这是可以卷ID
 	DevicePath string
 
 	// DeviceMountPath location where device is mounted on the node. If volume type
 	// is attachable - this would be global mount path otherwise
 	// it would be location where volume was mounted for the pod
+	// DeviceMountPath device被挂载在节点的位置。
+	//  如果卷类型是可连接的,这将是全球安装路径否则它将已经安装的吊舱位置卷
 	DeviceMountPath string
 
 	// DeviceStagingPath stores location where the volume is staged
+	// DeviceStagingPath 保存暂时保存的volume位置
 	DeviceStagePath string
 
 	NewSize resource.Quantity
 	OldSize resource.Quantity
 
 	// CSIVolumePhase contains volume phase on the node
+	// CSIVolumePhase 包含节点上volume的阶段
 	CSIVolumePhase CSIVolumePhaseType
 }
 
+// 动态插件探测器
 type DynamicPluginProber interface {
 	Init() error
 
 	// If an error occurs, events are undefined.
+	// 为定义事件的错误
 	Probe() (events []ProbeEvent, err error)
 }
 
 // VolumePlugin is an interface to volume plugins that can be used on a
 // kubernetes node (e.g. by kubelet) to instantiate and manage volumes.
+// volumePlugin是个volume plugin的接口可以被一个kubernetes节点使用（例如kubelet),用来实例化和管理卷
 type VolumePlugin interface {
 	// Init initializes the plugin.  This will be called exactly once
 	// before any New* calls are made - implementations of plugins may
 	// depend on this.
+	// Init 初始化插件，将会先于任何的NEW*调用运行,插件的实现或许依赖于于此(插件的预备)
 	Init(host VolumeHost) error
 
 	// Name returns the plugin's name.  Plugins must use namespaced names
 	// such as "example.com/volume" and contain exactly one '/' character.
 	// The "kubernetes.io" namespace is reserved for plugins which are
 	// bundled with kubernetes.
+	// Name 返回插件名.插件必须使用命名空间的命名如"example.com/volume"并包含一个“/”字符,
+	// “kubernetes.io"命名空间是留给与kubernetes捆绑的插件。
 	GetPluginName() string
 
 	// GetVolumeName returns the name/ID to uniquely identifying the actual
@@ -156,57 +181,79 @@ type VolumePlugin interface {
 	// For Attachable volumes, this value must be able to be passed back to
 	// volume Detach methods to identify the device to act on.
 	// If the plugin does not support the given spec, this returns an error.
+	// GetVolumeName依赖于传入放入volume spec,返回volume名称/id用于唯一的实际的后端设备，目录，路径等。
+	// 对于可挂载的volume,这个值必须能够被回传给volume的卸载方法来确定设备可执行卸载。
+	// 如果插件不支持传入的spec,将会返回一个错误
 	GetVolumeName(spec *Spec) (string, error)
 
 	// CanSupport tests whether the plugin supports a given volume
 	// specification from the API.  The spec pointer should be considered
 	// const.
+	// CanSupport 测试插件是否支持传入volume spec的api,spec pointer应当是常量 ？？
 	CanSupport(spec *Spec) bool
 
 	// RequiresRemount returns true if this plugin requires mount calls to be
 	// reexecuted. Atomically updating volumes, like Downward API, depend on
 	// this to update the contents of the volume.
+	// 如果插件请求RequiresRemount重新执行挂载将会返回true,原子的更新volume,像向下API,取决于这个更新卷的内容。
 	RequiresRemount(spec *Spec) bool
 
 	// NewMounter creates a new volume.Mounter from an API specification.
 	// Ownership of the spec pointer in *not* transferred.
 	// - spec: The v1.Volume spec
 	// - pod: The enclosing pod
+	// NewMounter创建一个新的volume,挂载从一个spec API。
+	// spec指针的所有权不转移。
+	// — spec: The v1.Volume spec
+	// - pod: The enclosing pod
 	NewMounter(spec *Spec, podRef *v1.Pod, opts VolumeOptions) (Mounter, error)
 
 	// NewUnmounter creates a new volume.Unmounter from recoverable state.
 	// - name: The volume name, as per the v1.Volume spec.
 	// - podUID: The UID of the enclosing pod
+	// NewUnmounter 创建一个新卷,从可恢复状态卸载.
+	// - 名称: volume名，按照 v1.Volume spec
+	// - podUID： 可关闭的pod的UID
 	NewUnmounter(name string, podUID types.UID) (Unmounter, error)
 
 	// ConstructVolumeSpec constructs a volume spec based on the given volume name
 	// and volumePath. The spec may have incomplete information due to limited
 	// information from input. This function is used by volume manager to reconstruct
 	// volume spec by reading the volume directories from disk
+	// ConstructVolumeSpec 构建一个volume spec基于传入的volum name和voulmePath，spec可能不完整的信息由于输入的信息有限。
+	// 此函数由volume manager调用，通过从硬盘上读取volume的目录，重建volume spec
 	ConstructVolumeSpec(volumeName, volumePath string) (*Spec, error)
 
 	// SupportsMountOption returns true if volume plugins supports Mount options
 	// Specifying mount options in a volume plugin that doesn't support
 	// user specified mount options will result in error creating persistent volumes
+	// 如果插件支持挂载选项SupportMountOption将回返回true，
+	// 在创建pv时指定的挂载选项在volume plugin中不支持将会在结果(pv)中返回一个错误
 	SupportsMountOption() bool
 
 	// SupportsBulkVolumeVerification checks if volume plugin type is capable
 	// of enabling bulk polling of all nodes. This can speed up verification of
 	// attached volumes by quite a bit, but underlying pluging must support it.
+	// SupportsBulkVolumeVerification检测volume plugin类型是允许批量轮询所有的节点，
+	// 可以加速验证挂载的卷，但底层插件必须由支持
 	SupportsBulkVolumeVerification() bool
 }
 
 // PersistentVolumePlugin is an extended interface of VolumePlugin and is used
 // by volumes that want to provide long term persistence of data
+// PersistentVolumePlugin是一个VolumePlugin的拓展接口，
+// 用于volume用于提供持久化存储的数据
 type PersistentVolumePlugin interface {
 	VolumePlugin
 	// GetAccessModes describes the ways a given volume can be accessed/mounted.
+	// GetAccessModes 描述给定的volume可以访问/安装的方式
 	GetAccessModes() []v1.PersistentVolumeAccessMode
 }
 
 // RecyclableVolumePlugin is an extended interface of VolumePlugin and is used
 // by persistent volumes that want to be recycled before being made available
 // again to new claims
+// RecyclableVolumePlugin是一个VolumePlugin的拓展接口，在一个新的pvc声明使用前回收pv
 type RecyclableVolumePlugin interface {
 	VolumePlugin
 
@@ -215,53 +262,65 @@ type RecyclableVolumePlugin interface {
 	// Recycle will use the provided recorder to write any events that might be
 	// interesting to user. It's expected that caller will pass these events to
 	// the PV being recycled.
+	// Recycle知道如何重新声明资源在volume从一个pvc释放后,
+	// Recycle将使用provided记录有关用户的事件。期望调用者将会通过这些事件将pv回收
 	Recycle(pvName string, spec *Spec, eventRecorder recyclerclient.RecycleEventRecorder) error
 }
 
 // DeletableVolumePlugin is an extended interface of VolumePlugin and is used
 // by persistent volumes that want to be deleted from the cluster after their
 // release from a PersistentVolumeClaim.
+// DeletableVolumePlugin是一个VolumePlugin的拓展接口，在pvc释放后被用于从集群中删除pv
 type DeletableVolumePlugin interface {
 	VolumePlugin
 	// NewDeleter creates a new volume.Deleter which knows how to delete this
 	// resource in accordance with the underlying storage provider after the
 	// volume's release from a claim
+	// NewDeleter 创建一个新的volume,
+	// 当volume从一个声明中释放底层的存储provider后，Deleter知道如何删除资源
 	NewDeleter(spec *Spec) (Deleter, error)
 }
 
 // ProvisionableVolumePlugin is an extended interface of VolumePlugin and is
 // used to create volumes for the cluster.
+// ProvisionableVolumePlugin是一个VolumePlugin的拓展接口，用于从集群中创建volume
 type ProvisionableVolumePlugin interface {
 	VolumePlugin
 	// NewProvisioner creates a new volume.Provisioner which knows how to
 	// create PersistentVolumes in accordance with the plugin's underlying
 	// storage provider
+	// 依据底层的存储provider创建pv
 	NewProvisioner(options VolumeOptions) (Provisioner, error)
 }
 
 // AttachableVolumePlugin is an extended interface of VolumePlugin and is used for volumes that require attachment
 // to a node before mounting.
+// volumeplugin接口的扩展，用于在挂载volume前请求attachment到节点？？
 type AttachableVolumePlugin interface {
 	DeviceMountableVolumePlugin
 	NewAttacher() (Attacher, error)
 	NewDetacher() (Detacher, error)
 	// CanAttach tests if provided volume spec is attachable
+	// 测试provided volume spec是可连接的
 	CanAttach(spec *Spec) (bool, error)
 }
 
 // DeviceMountableVolumePlugin is an extended interface of VolumePlugin and is used
 // for volumes that requires mount device to a node before binding to volume to pod.
+// volumeplugin接口的扩展，在volume绑定到pod前将volume挂载到节点
 type DeviceMountableVolumePlugin interface {
 	VolumePlugin
 	NewDeviceMounter() (DeviceMounter, error)
 	NewDeviceUnmounter() (DeviceUnmounter, error)
 	GetDeviceMountRefs(deviceMountPath string) ([]string, error)
 	// CanDeviceMount determines if device in volume.Spec is mountable
+	// 测试provided volume spec是可挂载的
 	CanDeviceMount(spec *Spec) (bool, error)
 }
 
 // ExpandableVolumePlugin is an extended interface of VolumePlugin and is used for volumes that can be
 // expanded via control-plane ExpandVolumeDevice call.
+// ExpandableVolumePlugin接口是一个扩展，通过控制层面可以扩展volume   。
 type ExpandableVolumePlugin interface {
 	VolumePlugin
 	ExpandVolumeDevice(spec *Spec, newSize resource.Quantity, oldSize resource.Quantity) (resource.Quantity, error)
@@ -270,15 +329,18 @@ type ExpandableVolumePlugin interface {
 
 // NodeExpandableVolumePlugin is an expanded interface of VolumePlugin and is used for volumes that
 // require expansion on the node via NodeExpand call.
+// ExpandableVolumePlugin接口是一个volumePlugin接口的扩展，通过NodeExpand调用扩展volume。
 type NodeExpandableVolumePlugin interface {
 	VolumePlugin
 	RequiresFSResize() bool
 	// NodeExpand expands volume on given deviceMountPath and returns true if resize is successful.
+	// NodeExpand 在非定的deviceMountPath扩展volume,如果调整成功返回true。
 	NodeExpand(resizeOptions NodeResizeOptions) (bool, error)
 }
 
 // VolumePluginWithAttachLimits is an extended interface of VolumePlugin that restricts number of
 // volumes that can be attached to a node.
+// 限制volume在一个node可以attach的数量
 type VolumePluginWithAttachLimits interface {
 	VolumePlugin
 	// Return maximum number of volumes that can be attached to a node for this plugin.
@@ -304,6 +366,7 @@ type VolumePluginWithAttachLimits interface {
 }
 
 // BlockVolumePlugin is an extend interface of VolumePlugin and is used for block volumes support.
+// 用于支持块的volume
 type BlockVolumePlugin interface {
 	VolumePlugin
 	// NewBlockVolumeMapper creates a new volume.BlockVolumeMapper from an API specification.
@@ -366,20 +429,26 @@ type AttachDetachVolumeHost interface {
 }
 
 // VolumeHost is an interface that plugins can use to access the kubelet.
+// VolumeHos是一个接口,插件可以通过kubelet使用。
 type VolumeHost interface {
 	// GetPluginDir returns the absolute path to a directory under which
 	// a given plugin may store data.  This directory might not actually
 	// exist on disk yet.  For plugin data that is per-pod, see
 	// GetPodPluginDir().
+	// GetPluginDir 返回一个目录(或许用来存储数据)的绝对路径，这个路径或需不在磁盘上
+	// 对于每个pod的插件数据,请参阅GetPodPluginDir()。
 	GetPluginDir(pluginName string) string
 
 	// GetVolumeDevicePluginDir returns the absolute path to a directory
 	// under which a given plugin may store data.
 	// ex. plugins/kubernetes.io/{PluginName}/{DefaultKubeletVolumeDevicesDirName}/{volumePluginDependentPath}/
+    // GetVolumeDevicePluginDir 返回一个目录(或许用来存储数据)的绝对路径
+    // 例如. plugins/kubernetes.io/{PluginName}/{DefaultKubeletVolumeDevicesDirName}/{volumePluginDependentPath}/
 	GetVolumeDevicePluginDir(pluginName string) string
 
 	// GetPodsDir returns the absolute path to a directory where all the pods
 	// information is stored
+	// GetPodsDir 返回
 	GetPodsDir() string
 
 	// GetPodVolumeDir returns the absolute path a directory which
@@ -460,16 +529,18 @@ type VolumeHost interface {
 }
 
 // VolumePluginMgr tracks registered plugins.
+// VolumePluginMgr 追踪注册的插件
 type VolumePluginMgr struct {
 	mutex                     sync.RWMutex
-	plugins                   map[string]VolumePlugin
-	prober                    DynamicPluginProber
-	probedPlugins             map[string]VolumePlugin
+	plugins                   map[string]VolumePlugin //插件
+	prober                    DynamicPluginProber //动态插件探测器
+	probedPlugins             map[string]VolumePlugin //探测器插件
 	loggedDeprecationWarnings sets.String
 	Host                      VolumeHost
 }
 
 // Spec is an internal representation of a volume.  All API volume types translate to Spec.
+// spec是一个volume的内部表示，所有的volume api(接口)类型翻译为spec
 type Spec struct {
 	Volume                          *v1.Volume
 	PersistentVolume                *v1.PersistentVolume
@@ -479,6 +550,7 @@ type Spec struct {
 }
 
 // Name returns the name of either Volume or PersistentVolume, one of which must not be nil.
+// 返回volume(或者pv)的名称，并且他们其中至少一个必须nil
 func (spec *Spec) Name() string {
 	switch {
 	case spec.Volume != nil:
@@ -493,6 +565,8 @@ func (spec *Spec) Name() string {
 // IsKubeletExpandable returns true for volume types that can be expanded only by the node
 // and not the controller. Currently Flex volume is the only one in this category since
 // it is typically not installed on the controller
+// 如果一个volume类型只能由node节点(而不是controller)扩容，IsKubeletExpandable将会返回true,
+// Flex volume是当前唯一的这种类型，因为没有安装在controller上
 func (spec *Spec) IsKubeletExpandable() bool {
 	switch {
 	case spec.Volume != nil:
@@ -509,6 +583,8 @@ func (spec *Spec) IsKubeletExpandable() bool {
 // this is used in context on the controller where the plugin lookup fails
 // as volume expansion on controller isn't supported, but a plugin name is
 // required
+// KubeletExpandablePluginName从controller的上下文中创建并返回plugin名称,
+// 此plugin不支持通过controller扩展容量，但plugin的名称又是必须的
 func (spec *Spec) KubeletExpandablePluginName() string {
 	switch {
 	case spec.Volume != nil && spec.Volume.FlexVolume != nil:
@@ -527,6 +603,8 @@ func (spec *Spec) KubeletExpandablePluginName() string {
 // values.  Those config values are then set to an instance of VolumeConfig
 // and passed to the plugin.
 //
+// VolumeConfig决定了卷插件如何接收配置，一个实例的specific通过插件的ProbeVolumePlugins函数接受
+// 默认值将由二进制插件提供,同时允许覆盖默认值，这些配置值被通过和传递给插件的一个实例。
 // Values in VolumeConfig are intended to be relevant to several plugins, but
 // not necessarily all plugins.  The preference is to leverage strong typing
 // in this struct.  All config items must have a descriptive but non-specific
@@ -535,6 +613,9 @@ func (spec *Spec) KubeletExpandablePluginName() string {
 // config names specific to plugins are unneeded and wrongly expose plugins in
 // this VolumeConfig struct.
 //
+// volumeConfigs的值是用于几个相关的插件而不是所有的插件，这个结构体的最好是强类型。
+// 所有的配置项必须是描述性名称的不带有特殊的名称(例如RecyclerMinimumTimeout是可接受的但RecyclerMinimumTimeoutForNFS是不可接受的)
+// 一个配置的实例将会定向的发给插件，所以配置名称特定于插件是不必要的和错误暴露插件在这卷配置结构。
 // OtherAttributes is a map of string values intended for one-off
 // configuration of a plugin or config that is only relevant to a single
 // plugin.  All values are passed by string and require interpretation by the
@@ -542,40 +623,51 @@ func (spec *Spec) KubeletExpandablePluginName() string {
 // used for truly one-off configuration. The binary should still use strong
 // typing for this value when binding CLI values before they are passed as
 // strings in OtherAttributes.
+// OtherAttributes是map string结构用于一次性配置的插件或相关配置相关的单例插件。所有的值都是通过字符串,需要由插件解析
+// 通过字符串作为配置是最理想的选择,而是真正可用于一次性配置。二进制在绑定cli参数是应当还是使用强类型，以字符串传递到OtherAttributes
 type VolumeConfig struct {
 	// RecyclerPodTemplate is pod template that understands how to scrub clean
 	// a persistent volume after its release. The template is used by plugins
 	// which override specific properties of the pod in accordance with that
 	// plugin. See NewPersistentVolumeRecyclerPodTemplate for the properties
 	// that are expected to be overridden.
+	// RecyclerPodTemplate是pod的模版用于清除释放后的pv,pod依据该插件，插件将使用该模版覆写spec的属性
+	// NewPersistentVolumeRecyclerPodTemplate被用于这些属性的覆写
 	RecyclerPodTemplate *v1.Pod
 
 	// RecyclerMinimumTimeout is the minimum amount of time in seconds for the
 	// recycler pod's ActiveDeadlineSeconds attribute. Added to the minimum
 	// timeout is the increment per Gi of capacity.
+	// RecyclerMinimumTimeout是最少的时间以秒为单位的回收pod的ActiveDeadlineSeconds属性。添加到最小超时的增量/Gi是能力。
 	RecyclerMinimumTimeout int
 
 	// RecyclerTimeoutIncrement is the number of seconds added to the recycler
 	// pod's ActiveDeadlineSeconds for each Gi of capacity in the persistent
 	// volume. Example: 5Gi volume x 30s increment = 150s + 30s minimum = 180s
 	// ActiveDeadlineSeconds for recycler pod
+	// RecyclerTimeoutIncrement 按持久化卷的容量计算每G增加的pod的回收器ActiveDeadlineSeconds
+	// 例如: 5Gi容量*30s增量=150s+30s最小量=180s的ActiveDeadlineSeconds pod 回收器
 	RecyclerTimeoutIncrement int
 
 	// PVName is name of the PersistentVolume instance that is being recycled.
 	// It is used to generate unique recycler pod name.
+	// PVName 被回收pv实例的名称。它是用于生成唯一的recycler pod 名。
 	PVName string
 
 	// OtherAttributes stores config as strings.  These strings are opaque to
 	// the system and only understood by the binary hosting the plugin and the
 	// plugin itself.
+	// OtherAttributes 以字符串的形式保存配置，这些字符串对于系统不是透明的，只有二进制部署的插件和插件本身理解。
 	OtherAttributes map[string]string
 
 	// ProvisioningEnabled configures whether provisioning of this plugin is
 	// enabled or not. Currently used only in host_path plugin.
+	// ProvisioningEnabled 配置provisioning是否启用，当前只用host_path 插件被使用
 	ProvisioningEnabled bool
 }
 
 // NewSpecFromVolume creates an Spec from an v1.Volume
+// 从volume创建spec
 func NewSpecFromVolume(vs *v1.Volume) *Spec {
 	return &Spec{
 		Volume: vs,
@@ -583,6 +675,7 @@ func NewSpecFromVolume(vs *v1.Volume) *Spec {
 }
 
 // NewSpecFromPersistentVolume creates an Spec from an v1.PersistentVolume
+// 从pv中创建spec
 func NewSpecFromPersistentVolume(pv *v1.PersistentVolume, readOnly bool) *Spec {
 	return &Spec{
 		PersistentVolume: pv,
@@ -593,6 +686,7 @@ func NewSpecFromPersistentVolume(pv *v1.PersistentVolume, readOnly bool) *Spec {
 // InitPlugins initializes each plugin.  All plugins must have unique names.
 // This must be called exactly once before any New* methods are called on any
 // plugins.
+// 初始化插件，所有的插件都必须有唯一的名，必须在任意插件的new*方法被调用前调用一次
 func (pm *VolumePluginMgr) InitPlugins(plugins []VolumePlugin, prober DynamicPluginProber, host VolumeHost) error {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
@@ -602,12 +696,14 @@ func (pm *VolumePluginMgr) InitPlugins(plugins []VolumePlugin, prober DynamicPlu
 
 	if prober == nil {
 		// Use a dummy prober to prevent nil deference.
+		// 使用一个虚拟探测器以防止nil。
 		pm.prober = &dummyPluginProber{}
 	} else {
 		pm.prober = prober
 	}
 	if err := pm.prober.Init(); err != nil {
 		// Prober init failure should not affect the initialization of other plugins.
+		// 探测器init失败不应该影响其他插件的初始化。
 		klog.ErrorS(err, "Error initializing dynamic plugin prober")
 		pm.prober = &dummyPluginProber{}
 	}
@@ -615,6 +711,7 @@ func (pm *VolumePluginMgr) InitPlugins(plugins []VolumePlugin, prober DynamicPlu
 	if pm.plugins == nil {
 		pm.plugins = map[string]VolumePlugin{}
 	}
+	//
 	if pm.probedPlugins == nil {
 		pm.probedPlugins = map[string]VolumePlugin{}
 	}
@@ -643,6 +740,7 @@ func (pm *VolumePluginMgr) InitPlugins(plugins []VolumePlugin, prober DynamicPlu
 	return utilerrors.NewAggregate(allErrs)
 }
 
+// 初始化探测器插件
 func (pm *VolumePluginMgr) initProbedPlugin(probedPlugin VolumePlugin) error {
 	name := probedPlugin.GetPluginName()
 	if errs := validation.IsQualifiedName(name); len(errs) != 0 {
@@ -661,6 +759,7 @@ func (pm *VolumePluginMgr) initProbedPlugin(probedPlugin VolumePlugin) error {
 // FindPluginBySpec looks for a plugin that can support a given volume
 // specification.  If no plugins can support or more than one plugin can
 // support it, return error.
+// FindPluginBySpec 通过sepc找到支持的插件，若果没有插件支持或者不止一个插件支持返回错误
 func (pm *VolumePluginMgr) FindPluginBySpec(spec *Spec) (VolumePlugin, error) {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()
@@ -676,6 +775,7 @@ func (pm *VolumePluginMgr) FindPluginBySpec(spec *Spec) (VolumePlugin, error) {
 		}
 	}
 
+	// 刷新探测器插件
 	pm.refreshProbedPlugins()
 	for _, plugin := range pm.probedPlugins {
 		if plugin.CanSupport(spec) {
@@ -701,6 +801,7 @@ func (pm *VolumePluginMgr) FindPluginBySpec(spec *Spec) (VolumePlugin, error) {
 
 // FindPluginByName fetches a plugin by name or by legacy name.  If no plugin
 // is found, returns error.
+// FindPluginByName 通过名称或者(遗留的名称)找到一个插件，如果没有插件找到，返回错误
 func (pm *VolumePluginMgr) FindPluginByName(name string) (VolumePlugin, error) {
 	pm.mutex.RLock()
 	defer pm.mutex.RUnlock()

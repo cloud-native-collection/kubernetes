@@ -28,6 +28,7 @@ import (
 // on failure of gluster SetUp and return those so kubelet can
 // properly expose them
 // return error on any failure
+// readGlusterlog 当配置gluster时发生错误，将日志文件的最后2行返回，以kubelet可以适当暴露在任何失败返回错误
 func readGlusterLog(path string, podName string) error {
 
 	var line1 string
@@ -37,11 +38,13 @@ func readGlusterLog(path string, podName string) error {
 	klog.Infof("failure, now attempting to read the gluster log for pod %s", podName)
 
 	// Check and make sure path exists
+	// 检测路径是否存在
 	if len(path) == 0 {
 		return fmt.Errorf("log file does not exist for pod %s", podName)
 	}
 
 	// open the log file
+	// 打开日志文件
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("could not open log file for pod %s", podName)
@@ -50,11 +53,13 @@ func readGlusterLog(path string, podName string) error {
 
 	// read in and scan the file using scanner
 	// from stdlib
+	// 从stdlib使用scanner扫描文件并读入
 	fscan := bufio.NewScanner(file)
 
 	// rather than guessing on bytes or using Seek
 	// going to scan entire file and take the last two lines
 	// generally the file should be small since it is pod specific
+	// 由于是pod spec,所以一般的文件应该小,将扫描整个文件,读取最后两行,而不是限制字节
 	for fscan.Scan() {
 		if linecount > 0 {
 			line1 = line2

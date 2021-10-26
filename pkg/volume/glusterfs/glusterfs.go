@@ -54,6 +54,7 @@ import (
 )
 
 // ProbeVolumePlugins is the primary entrypoint for volume plugins.
+// ProbeVolumePlugins卷插件的
 func ProbeVolumePlugins() []volume.VolumePlugin {
 	return []volume.VolumePlugin{&glusterfsPlugin{host: nil, gidTable: make(map[string]*MinMaxAllocator)}}
 }
@@ -64,6 +65,7 @@ type glusterfsPlugin struct {
 	gidTableLock sync.Mutex
 }
 
+// 检验是否实现了接口
 var _ volume.VolumePlugin = &glusterfsPlugin{}
 var _ volume.PersistentVolumePlugin = &glusterfsPlugin{}
 var _ volume.DeletableVolumePlugin = &glusterfsPlugin{}
@@ -75,7 +77,7 @@ var _ volume.Deleter = &glusterfsVolumeDeleter{}
 const (
 	glusterfsPluginName            = "kubernetes.io/glusterfs"
 	volPrefix                      = "vol_"
-	dynamicEpSvcPrefix             = "glusterfs-dynamic"
+	dynamicEpSvcPrefix             = "glusterfs-dynamic" //动态创建ep和svc的前缀
 	replicaCount                   = 3
 	secretKeyName                  = "key" // key name used in secret
 	gciLinuxGlusterMountBinaryPath = "/sbin/mount.glusterfs"
@@ -138,6 +140,7 @@ func (plugin *glusterfsPlugin) RequiresFSResize() bool {
 	return false
 }
 
+// 支持的访问模式
 func (plugin *glusterfsPlugin) GetAccessModes() []v1.PersistentVolumeAccessMode {
 	return []v1.PersistentVolumeAccessMode{
 		v1.ReadWriteOnce,
@@ -151,20 +154,25 @@ func (plugin *glusterfsPlugin) NewMounter(spec *volume.Spec, pod *v1.Pod, _ volu
 	if err != nil {
 		return nil, err
 	}
+	// kubernetes交互的客户端
 	kubeClient := plugin.host.GetKubeClient()
 	if kubeClient == nil {
 		return nil, fmt.Errorf("failed to get kube client to initialize mounter")
 	}
+	// 获取endpoint
 	ep, err := kubeClient.CoreV1().Endpoints(epNamespace).Get(context.TODO(), epName, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("failed to get endpoint %s: %v", epName, err)
 		return nil, err
 	}
 	klog.V(4).Infof("glusterfs pv endpoint %v", ep)
+	// 将卷挂载到pod中
 	return plugin.newMounterInternal(spec, ep, pod, plugin.host.GetMounter(plugin.GetPluginName()))
 }
 
+//从pv的spec中获取enname和namepaces
 func (plugin *glusterfsPlugin) getEndpointNameAndNamespace(spec *volume.Spec, defaultNamespace string) (string, string, error) {
+	// 动态的pvc
 	if spec.Volume != nil && spec.Volume.Glusterfs != nil {
 		endpoints := spec.Volume.Glusterfs.EndpointsName
 		if endpoints == "" {
@@ -188,8 +196,9 @@ func (plugin *glusterfsPlugin) getEndpointNameAndNamespace(spec *volume.Spec, de
 	return "", "", fmt.Errorf("spec does not reference a GlusterFS volume type")
 
 }
-
+// 挂载
 func (plugin *glusterfsPlugin) newMounterInternal(spec *volume.Spec, ep *v1.Endpoints, pod *v1.Pod, mounter mount.Interface) (volume.Mounter, error) {
+	// 获取卷信息
 	volPath, readOnly, err := getVolumeInfo(spec)
 	if err != nil {
 		klog.Errorf("failed to get volumesource: %v", err)
@@ -232,6 +241,7 @@ func (plugin *glusterfsPlugin) ConstructVolumeSpec(volumeName, mountPath string)
 }
 
 // Glusterfs volumes represent a bare host file or directory mount of an Glusterfs export.
+// glusterfs卷指提供一个从glusterfs导出挂载文件或目录。
 type glusterfs struct {
 	volName string
 	pod     *v1.Pod
@@ -261,6 +271,7 @@ func (b *glusterfsMounter) GetAttributes() volume.Attributes {
 // Checks prior to mount operations to verify that the required components (binaries, etc.)
 // to mount the volume are available on the underlying node.
 // If not, it returns an error
+// 测试是否可以挂载
 func (b *glusterfsMounter) CanMount() error {
 	exe := b.plugin.host.GetExec(b.plugin.GetPluginName())
 	switch runtime.GOOS {
@@ -273,10 +284,12 @@ func (b *glusterfsMounter) CanMount() error {
 }
 
 // SetUp attaches the disk and bind mounts to the volume path.
+// 连接磁盘并且挂载绑定包volume路径
 func (b *glusterfsMounter) SetUp(mounterArgs volume.MounterArgs) error {
 	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
+// 将卷挂载到目录
 func (b *glusterfsMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	notMnt, err := b.mounter.IsLikelyNotMountPoint(dir)
 	klog.V(4).Infof("mount setup: %s %v %v", dir, !notMnt, err)
@@ -289,12 +302,13 @@ func (b *glusterfsMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) e
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return err
 	}
+	// 执行挂载
 	err = b.setUpAtInternal(dir)
 	if err == nil {
 		return nil
 	}
 
-	// Cleanup upon failure.
+	// Cleanup upon failure.清除挂载失败
 	mount.CleanupMountPoint(dir, b.mounter, false)
 	return err
 }
@@ -318,6 +332,7 @@ func (c *glusterfsUnmounter) TearDownAt(dir string) error {
 	return mount.CleanupMountPoint(dir, c.mounter, false)
 }
 
+// 执行挂载
 func (b *glusterfsMounter) setUpAtInternal(dir string) error {
 	var errs error
 	options := []string{}
@@ -342,6 +357,7 @@ func (b *glusterfsMounter) setUpAtInternal(dir string) error {
 	}
 
 	// If logfile has not been provided, create driver specific log file.
+	// 创建日志目录
 	if !hasLogFile {
 		p := filepath.Join(b.glusterfs.plugin.host.GetPluginDir(glusterfsPluginName), b.glusterfs.volName)
 		if err := os.MkdirAll(p, 0750); err != nil {
@@ -395,6 +411,7 @@ func (b *glusterfsMounter) setUpAtInternal(dir string) error {
 		// will fetch all the servers mentioned in the backup-volfile-servers list.
 		// Refer to backup-volfile-servers @ http://docs.gluster.org/en/latest/Administrator%20Guide/Setting%20Up%20Clients/
 
+		// 执行挂载
 		errs = b.mounter.Mount(ip+":"+b.path, dir, "glusterfs", mountOptions)
 		if errs == nil {
 			klog.Infof("successfully mounted directory %s", dir)
@@ -424,6 +441,9 @@ func (b *glusterfsMounter) setUpAtInternal(dir string) error {
 	// Failed mount scenario.
 	// Since glusterfs does not return error text
 	// it all goes in a log file, we will read the log file
+	// 失败的场景。
+	// 因为从而不返回错误文本这一切在一个日志文件,
+	// 我们将读取日志文件
 	logErr := readGlusterLog(log, b.pod.Name)
 	if logErr != nil {
 		return fmt.Errorf("mount failed: %v, the following error information was pulled from the glusterfs log to help diagnose this issue: %v", errs, logErr)
@@ -433,6 +453,7 @@ func (b *glusterfsMounter) setUpAtInternal(dir string) error {
 }
 
 //getVolumeInfo returns 'path' and 'readonly' field values from the provided glusterfs spec.
+// 获取卷信息路径和读写
 func getVolumeInfo(spec *volume.Spec) (string, bool, error) {
 	if spec.Volume != nil && spec.Volume.Glusterfs != nil {
 		return spec.Volume.Glusterfs.Path, spec.Volume.Glusterfs.ReadOnly, nil
@@ -443,6 +464,7 @@ func getVolumeInfo(spec *volume.Spec) (string, bool, error) {
 	return "", false, fmt.Errorf("spec does not reference a Glusterfs volume type")
 }
 
+// 初始化sc的
 func (plugin *glusterfsPlugin) NewProvisioner(options volume.VolumeOptions) (volume.Provisioner, error) {
 	return plugin.newProvisionerInternal(options)
 }
@@ -635,6 +657,7 @@ func (d *glusterfsVolumeDeleter) getGid() (int, bool, error) {
 	return gid, true, err
 }
 
+// 删除存储卷
 func (d *glusterfsVolumeDeleter) Delete() error {
 	klog.V(2).Infof("delete volume %s", d.glusterfsMounter.path)
 	volumeName := d.glusterfsMounter.path
@@ -1279,3 +1302,4 @@ func (plugin *glusterfsPlugin) ExpandVolumeDevice(spec *volume.Spec, newSize res
 	newVolumeSize := resource.MustParse(fmt.Sprintf("%dGi", volumeInfoRes.Size))
 	return newVolumeSize, nil
 }
+

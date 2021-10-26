@@ -262,6 +262,7 @@ func UnmountViaEmptyDir(dir string, host volume.VolumeHost, volName string, volS
 }
 
 // MountOptionFromSpec extracts and joins mount options from volume spec with supplied options
+// 从volume的spec中获取提供的挂载选项并将其加入到挂载选项中
 func MountOptionFromSpec(spec *volume.Spec, options ...string) []string {
 	pv := spec.PersistentVolume
 

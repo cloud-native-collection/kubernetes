@@ -175,9 +175,11 @@ type Unmounter interface {
 	Volume
 	// TearDown unmounts the volume from a self-determined directory and
 	// removes traces of the SetUp procedure.
+	// 卸载卷从自定义的目录,删除设置过程的traces。
 	TearDown() error
 	// TearDown unmounts the volume from the specified directory and
 	// removes traces of the SetUp procedure.
+	// 卸载卷从指定的目录和删除设置过程的trace。
 	TearDownAt(dir string) error
 }
 
