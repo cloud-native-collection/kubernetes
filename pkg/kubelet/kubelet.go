@@ -217,6 +217,7 @@ func getContainerEtcHostsPath() string {
 }
 
 // SyncHandler is an interface implemented by Kubelet, for testability
+// 由 Kubelet 实现的接口，用于提高可测试性。它包含了一组用于处理 Pod 同步任务的方法。
 type SyncHandler interface {
 	HandlePodAdditions(pods []*v1.Pod)
 	HandlePodUpdates(pods []*v1.Pod)
@@ -230,6 +231,7 @@ type SyncHandler interface {
 type Option func(*Kubelet)
 
 // Bootstrap is a bootstrapping interface for kubelet, targets the initialization protocol
+// Bootstrap是kubelet引导接口,启动和管理 Kubernetes kubelet 的功能集合,用于初始化
 type Bootstrap interface {
 	GetConfiguration() kubeletconfiginternal.KubeletConfiguration
 	BirthCry()
@@ -244,6 +246,7 @@ type Bootstrap interface {
 // Dependencies is a bin for things we might consider "injected dependencies" -- objects constructed
 // at runtime that are necessary for running the Kubelet. This is a temporary solution for grouping
 // these objects while we figure out a more comprehensive dependency injection story for the Kubelet.
+// kubelet 依赖的模块,通过注入的方式构建
 type Dependencies struct {
 	Options []Option
 
@@ -313,12 +316,14 @@ func makePodSourceConfig(kubeCfg *kubeletconfiginternal.KubeletConfiguration, ku
 }
 
 // PreInitRuntimeService will init runtime service before RunKubelet.
+// 在启动kubelet前初始化容器运行时
 func PreInitRuntimeService(kubeCfg *kubeletconfiginternal.KubeletConfiguration, kubeDeps *Dependencies) error {
 	remoteImageEndpoint := kubeCfg.ImageServiceEndpoint
 	if remoteImageEndpoint == "" && kubeCfg.ContainerRuntimeEndpoint != "" {
 		remoteImageEndpoint = kubeCfg.ContainerRuntimeEndpoint
 	}
 	var err error
+	// 初始化容器运醒时的client
 	if kubeDeps.RemoteRuntimeService, err = remote.NewRemoteRuntimeService(kubeCfg.ContainerRuntimeEndpoint, kubeCfg.RuntimeRequestTimeout.Duration, kubeDeps.TracerProvider); err != nil {
 		return err
 	}
@@ -668,6 +673,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	if err != nil {
 		return nil, err
 	}
+	//
 	klet.containerRuntime = runtime
 	klet.streamingRuntime = runtime
 	klet.runner = runtime

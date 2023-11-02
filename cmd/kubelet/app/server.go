@@ -622,6 +622,7 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 
 	// if in standalone mode, indicate as much by setting all clients to nil
+	// kubelet 的两种模式： standalone不需要和 APIServer 交互
 	switch {
 	case standaloneMode:
 		kubeDeps.KubeClient = nil
@@ -678,6 +679,7 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		runAuthenticatorCAReload(ctx.Done())
 	}
 
+	// 初始化容器运行时
 	if err := kubelet.PreInitRuntimeService(&s.KubeletConfiguration, kubeDeps); err != nil {
 		return err
 	}
