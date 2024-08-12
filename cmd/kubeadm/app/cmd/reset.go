@@ -32,8 +32,7 @@ import (
 
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmscheme "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/scheme"
-	kubeadmapiv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta3"
-	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta4"
+	kubeadmapiv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta4"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/validation"
 	"k8s.io/kubernetes/cmd/kubeadm/app/cmd/options"
 	phases "k8s.io/kubernetes/cmd/kubeadm/app/cmd/phases/reset"
@@ -66,7 +65,8 @@ type resetOptions struct {
 	kubeconfigPath        string
 	cfgPath               string
 	ignorePreflightErrors []string
-	externalcfg           *v1beta4.ResetConfiguration
+	externalcfg           *kubeadmapiv1.ResetConfiguration
+	skipCRIDetect         bool
 }
 
 // resetData defines all the runtime information used when running the kubeadm reset workflow;
@@ -88,7 +88,7 @@ type resetData struct {
 // newResetOptions returns a struct ready for being used for creating cmd join flags.
 func newResetOptions() *resetOptions {
 	// initialize the public kubeadm config API by applying defaults
-	externalcfg := &v1beta4.ResetConfiguration{}
+	externalcfg := &kubeadmapiv1.ResetConfiguration{}
 	// Apply defaults
 	kubeadmscheme.Scheme.Default(externalcfg)
 	return &resetOptions{
@@ -107,7 +107,10 @@ func newResetData(cmd *cobra.Command, opts *resetOptions, in io.Reader, out io.W
 	var initCfg *kubeadmapi.InitConfiguration
 
 	// Either use the config file if specified, or convert public kubeadm API to the internal ResetConfiguration and validates cfg.
-	resetCfg, err := configutil.LoadOrDefaultResetConfiguration(opts.cfgPath, opts.externalcfg, allowExperimental)
+	resetCfg, err := configutil.LoadOrDefaultResetConfiguration(opts.cfgPath, opts.externalcfg, configutil.LoadOrDefaultConfigurationOptions{
+		AllowExperimental: allowExperimental,
+		SkipCRIDetect:     opts.skipCRIDetect,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -229,9 +232,9 @@ func newCmdReset(in io.Reader, out io.Writer, resetOptions *resetOptions) *cobra
 	// both when running the entire workflow or single phases
 	resetRunner.SetDataInitializer(func(cmd *cobra.Command, args []string) (workflow.RunData, error) {
 		if cmd.Flags().Lookup(options.NodeCRISocket) == nil {
-			// avoid CRI detection
+			// skip CRI detection
 			// assume that the command execution does not depend on CRISocket when --cri-socket flag is not set
-			resetOptions.externalcfg.CRISocket = kubeadmconstants.UnknownCRISocket
+			resetOptions.skipCRIDetect = true
 		}
 		data, err := newResetData(cmd, resetOptions, in, out, true)
 		if err != nil {

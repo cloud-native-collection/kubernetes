@@ -27,6 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	utilopenapi "k8s.io/apiserver/pkg/util/openapi"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
+	"k8s.io/kube-openapi/pkg/spec3"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/generated/openapi"
@@ -63,7 +64,7 @@ func DefaultOpenAPIConfig() *openapicommon.Config {
 }
 
 // DefaultOpenAPIV3Config returns an openapicommon.Config initialized to default values.
-func DefaultOpenAPIV3Config() *openapicommon.Config {
+func DefaultOpenAPIV3Config() *openapicommon.OpenAPIV3Config {
 	openAPIConfig := genericapiserver.DefaultOpenAPIV3Config(openapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(legacyscheme.Scheme))
 	openAPIConfig.Info = &spec.Info{
 		InfoProps: spec.InfoProps{
@@ -71,8 +72,8 @@ func DefaultOpenAPIV3Config() *openapicommon.Config {
 			Version: "unversioned",
 		},
 	}
-	openAPIConfig.DefaultResponse = &spec.Response{
-		ResponseProps: spec.ResponseProps{
+	openAPIConfig.DefaultResponse = &spec3.Response{
+		ResponseProps: spec3.ResponseProps{
 			Description: "Default Response.",
 		},
 	}
@@ -96,4 +97,12 @@ func SharedEtcd() *storagebackend.Config {
 	cfg := storagebackend.NewDefaultConfig(path.Join(uuid.New().String(), "registry"), nil)
 	cfg.Transport.ServerList = []string{GetEtcdURL()}
 	return cfg
+}
+
+// DefaultAPIServerFlags returns the default flags used to run kube-apiserver on tests
+func DefaultTestServerFlags() []string {
+	return []string{
+		"--endpoint-reconciler-type=none",            // Disable Endpoints Reconciler so it does not keep failing trying to use 127.0.0.1 as a valid Endpoint.
+		"--disable-admission-plugins=ServiceAccount", // Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
+	}
 }

@@ -203,6 +203,8 @@ func GetEtcdPodSpec(cfg *kubeadmapi.ClusterConfiguration, endpoint *kubeadmapi.A
 		etcdVolumeName:  staticpodutil.NewVolume(etcdVolumeName, cfg.Etcd.Local.DataDir, &pathType),
 		certsVolumeName: staticpodutil.NewVolume(certsVolumeName, cfg.CertificatesDir+"/etcd", &pathType),
 	}
+	componentHealthCheckTimeout := kubeadmapi.GetActiveTimeouts().ControlPlaneComponentHealthCheck
+
 	// probeHostname returns the correct localhost IP address family based on the endpoint AdvertiseAddress
 	probeHostname, probePort, probeScheme := staticpodutil.GetEtcdProbeEndpoint(&cfg.Etcd, utilsnet.IsIPv6String(endpoint.AdvertiseAddress))
 	return staticpodutil.ComponentPod(
@@ -222,9 +224,12 @@ func GetEtcdPodSpec(cfg *kubeadmapi.ClusterConfiguration, endpoint *kubeadmapi.A
 					v1.ResourceMemory: resource.MustParse("100Mi"),
 				},
 			},
-			LivenessProbe: staticpodutil.LivenessProbe(probeHostname, "/health?exclude=NOSPACE&serializable=true", probePort, probeScheme),
-			StartupProbe:  staticpodutil.StartupProbe(probeHostname, "/health?serializable=false", probePort, probeScheme, cfg.APIServer.TimeoutForControlPlane),
-			Env:           cfg.Etcd.Local.ExtraEnvs,
+			// The etcd probe endpoints are explained here:
+			// https://github.com/kubernetes/kubeadm/issues/3039
+			LivenessProbe:  staticpodutil.LivenessProbe(probeHostname, "/livez", probePort, probeScheme),
+			ReadinessProbe: staticpodutil.ReadinessProbe(probeHostname, "/readyz", probePort, probeScheme),
+			StartupProbe:   staticpodutil.StartupProbe(probeHostname, "/readyz", probePort, probeScheme, componentHealthCheckTimeout),
+			Env:            kubeadmutil.MergeKubeadmEnvVars(cfg.Etcd.Local.ExtraEnvs),
 		},
 		etcdMounts,
 		// etcd will listen on the advertise address of the API server, in a different port (2379)

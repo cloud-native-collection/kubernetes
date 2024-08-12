@@ -1,3 +1,15 @@
+- name: compilation_duration_seconds
+  subsystem: cel
+  namespace: apiserver
+  help: CEL compilation time in seconds.
+  type: Histogram
+  stabilityLevel: BETA
+- name: evaluation_duration_seconds
+  subsystem: cel
+  namespace: apiserver
+  help: CEL evaluation time in seconds.
+  type: Histogram
+  stabilityLevel: BETA
 - name: current_executing_requests
   subsystem: flowcontrol
   namespace: apiserver
@@ -80,6 +92,36 @@
   - 10
   - 15
   - 30
+- name: check_duration_seconds
+  subsystem: validating_admission_policy
+  namespace: apiserver
+  help: Validation admission latency for individual validation expressions in seconds,
+    labeled by policy and further including binding and enforcement action taken.
+  type: Histogram
+  stabilityLevel: BETA
+  labels:
+  - enforcement_action
+  - error_type
+  - policy
+  - policy_binding
+  buckets:
+  - 5e-07
+  - 0.001
+  - 0.01
+  - 0.1
+  - 1
+- name: check_total
+  subsystem: validating_admission_policy
+  namespace: apiserver
+  help: Validation admission policy check total, labeled by policy and further identified
+    by binding and enforcement action taken.
+  type: Counter
+  stabilityLevel: BETA
+  labels:
+  - enforcement_action
+  - error_type
+  - policy
+  - policy_binding
 - name: disabled_metrics_total
   help: The count of disabled metrics.
   type: Counter
@@ -96,23 +138,6 @@
   labels:
   - name
   - stage
-- name: healthcheck
-  namespace: kubernetes
-  help: This metric records the result of a single healthcheck.
-  type: Gauge
-  stabilityLevel: BETA
-  labels:
-  - name
-  - type
-- name: healthchecks_total
-  namespace: kubernetes
-  help: This metric records the results of all healthcheck.
-  type: Counter
-  stabilityLevel: BETA
-  labels:
-  - name
-  - status
-  - type
 - name: registered_metrics_total
   help: The count of registered metrics broken by stability level and deprecation
     version.
@@ -124,7 +149,7 @@
 - name: pod_scheduling_sli_duration_seconds
   subsystem: scheduler
   help: E2e latency for a pod being scheduled, from the time the pod enters the scheduling
-    queue an d might involve multiple scheduling attempts.
+    queue and might involve multiple scheduling attempts.
   type: Histogram
   stabilityLevel: BETA
   labels:
@@ -320,11 +345,18 @@
   - 1e+08
   - 1e+09
 - name: apiserver_storage_objects
-  help: Number of stored objects at the time of last check split by kind.
+  help: Number of stored objects at the time of last check split by kind. In case
+    of a fetching error, the value will be -1.
   type: Gauge
   stabilityLevel: STABLE
   labels:
   - resource
+- name: apiserver_storage_size_bytes
+  help: Size of the storage database file physically allocated in bytes.
+  type: Custom
+  stabilityLevel: STABLE
+  labels:
+  - storage_cluster_id
 - name: container_cpu_usage_seconds_total
   help: Cumulative cpu time consumed by the container in core-seconds
   type: Custom
@@ -384,8 +416,6 @@
   - completion_mode
   - result
   buckets:
-  - 0.001
-  - 0.002
   - 0.004
   - 0.008
   - 0.016
@@ -399,6 +429,8 @@
   - 4.096
   - 8.192
   - 16.384
+  - 32.768
+  - 65.536
 - name: job_syncs_total
   subsystem: job_controller
   help: The number of job syncs
@@ -445,6 +477,23 @@
   - priority
   - resource
   - unit
+- name: healthcheck
+  namespace: kubernetes
+  help: This metric records the result of a single healthcheck.
+  type: Gauge
+  stabilityLevel: STABLE
+  labels:
+  - name
+  - type
+- name: healthchecks_total
+  namespace: kubernetes
+  help: This metric records the results of all healthcheck.
+  type: Counter
+  stabilityLevel: STABLE
+  labels:
+  - name
+  - status
+  - type
 - name: evictions_total
   subsystem: node_collector
   help: Number of Node evictions that happened since current instance of NodeController
@@ -528,7 +577,7 @@
   help: E2e latency for a pod being scheduled which may include multiple scheduling
     attempts.
   type: Histogram
-  deprecatedVersion: 1.28.0
+  deprecatedVersion: 1.29.0
   stabilityLevel: STABLE
   labels:
   - attempts

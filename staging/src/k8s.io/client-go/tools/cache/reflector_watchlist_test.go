@@ -17,22 +17,95 @@ limitations under the License.
 package cache
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/stretchr/testify/require"
 
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	testingclock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
+
+func TestInitialEventsEndBookmarkTicker(t *testing.T) {
+	assertNoEvents := func(t *testing.T, c <-chan time.Time) {
+		select {
+		case e := <-c:
+			t.Errorf("Unexpected: %#v event received, expected no events", e)
+		default:
+			return
+		}
+	}
+
+	t.Run("testing NoopInitialEventsEndBookmarkTicker", func(t *testing.T) {
+		clock := testingclock.NewFakeClock(time.Now())
+		target := newInitialEventsEndBookmarkTickerInternal("testName", clock, clock.Now(), time.Second, false)
+
+		clock.Step(30 * time.Second)
+		assertNoEvents(t, target.C())
+		actualWarning := target.produceWarningIfExpired()
+
+		require.Empty(t, actualWarning, "didn't expect any warning")
+		// validate if the other methods don't produce panic
+		target.warnIfExpired()
+		target.observeLastEventTimeStamp(clock.Now())
+
+		// make sure that after calling the other methods
+		// nothing hasn't changed
+		actualWarning = target.produceWarningIfExpired()
+		require.Empty(t, actualWarning, "didn't expect any warning")
+		assertNoEvents(t, target.C())
+
+		target.Stop()
+	})
+
+	t.Run("testing InitialEventsEndBookmarkTicker backed by a fake clock", func(t *testing.T) {
+		clock := testingclock.NewFakeClock(time.Now())
+		target := newInitialEventsEndBookmarkTickerInternal("testName", clock, clock.Now(), time.Second, true)
+		clock.Step(500 * time.Millisecond)
+		assertNoEvents(t, target.C())
+
+		clock.Step(500 * time.Millisecond)
+		<-target.C()
+		actualWarning := target.produceWarningIfExpired()
+		require.Equal(t, errors.New("testName: awaiting required bookmark event for initial events stream, no events received for 1s"), actualWarning)
+
+		clock.Step(time.Second)
+		<-target.C()
+		actualWarning = target.produceWarningIfExpired()
+		require.Equal(t, errors.New("testName: awaiting required bookmark event for initial events stream, no events received for 2s"), actualWarning)
+
+		target.observeLastEventTimeStamp(clock.Now())
+		clock.Step(500 * time.Millisecond)
+		assertNoEvents(t, target.C())
+
+		clock.Step(500 * time.Millisecond)
+		<-target.C()
+		actualWarning = target.produceWarningIfExpired()
+		require.Equal(t, errors.New("testName: hasn't received required bookmark event marking the end of initial events stream, received last event 1s ago"), actualWarning)
+
+		clock.Step(time.Second)
+		<-target.C()
+		actualWarning = target.produceWarningIfExpired()
+		require.Equal(t, errors.New("testName: hasn't received required bookmark event marking the end of initial events stream, received last event 2s ago"), actualWarning)
+
+		target.Stop()
+		assertNoEvents(t, target.C())
+	})
+}
 
 func TestWatchList(t *testing.T) {
 	scenarios := []struct {
@@ -94,18 +167,39 @@ func TestWatchList(t *testing.T) {
 			expectedStoreContent: []v1.Pod{*makePod("p1", "1")},
 		},
 		{
-			name: "returning any other error than apierrors.NewInvalid stops the reflector and reports the error",
+			name: "returning any other error than apierrors.NewInvalid forces fallback",
 			watchOptionsPredicate: func(options metav1.ListOptions) error {
-				return fmt.Errorf("dummy error")
+				if options.SendInitialEvents != nil && *options.SendInitialEvents {
+					return fmt.Errorf("dummy error")
+				}
+				return nil
 			},
-			expectedError:         fmt.Errorf("dummy error"),
-			expectedWatchRequests: 1,
-			expectedRequestOptions: []metav1.ListOptions{{
-				SendInitialEvents:    pointer.Bool(true),
-				AllowWatchBookmarks:  true,
-				ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
-				TimeoutSeconds:       pointer.Int64(1),
-			}},
+			podList: &v1.PodList{
+				ListMeta: metav1.ListMeta{ResourceVersion: "1"},
+				Items:    []v1.Pod{*makePod("p1", "1")},
+			},
+			closeAfterWatchEvents: 1,
+			watchEvents:           []watch.Event{{Type: watch.Added, Object: makePod("p2", "2")}},
+			expectedWatchRequests: 2,
+			expectedListRequests:  1,
+			expectedStoreContent:  []v1.Pod{*makePod("p1", "1"), *makePod("p2", "2")},
+			expectedRequestOptions: []metav1.ListOptions{
+				{
+					SendInitialEvents:    pointer.Bool(true),
+					AllowWatchBookmarks:  true,
+					ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
+					TimeoutSeconds:       pointer.Int64(1),
+				},
+				{
+					ResourceVersion: "0",
+					Limit:           500,
+				},
+				{
+					AllowWatchBookmarks: true,
+					ResourceVersion:     "1",
+					TimeoutSeconds:      pointer.Int64(1),
+				},
+			},
 		},
 		{
 			name: "the reflector can fall back to old LIST/WATCH semantics when a server doesn't support streaming",
@@ -151,7 +245,7 @@ func TestWatchList(t *testing.T) {
 				{Type: watch.Bookmark, Object: &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						ResourceVersion: "2",
-						Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "true"},
 					},
 				}},
 			},
@@ -180,7 +274,7 @@ func TestWatchList(t *testing.T) {
 				{Type: watch.Bookmark, Object: &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						ResourceVersion: "5",
-						Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "true"},
 					},
 				}},
 			},
@@ -218,7 +312,7 @@ func TestWatchList(t *testing.T) {
 				{Type: watch.Bookmark, Object: &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						ResourceVersion: "2",
-						Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "true"},
 					},
 				}},
 			},
@@ -256,7 +350,7 @@ func TestWatchList(t *testing.T) {
 				{Type: watch.Bookmark, Object: &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						ResourceVersion: "1",
-						Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "true"},
 					},
 				}},
 			},
@@ -287,7 +381,7 @@ func TestWatchList(t *testing.T) {
 				{Type: watch.Bookmark, Object: &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						ResourceVersion: "2",
-						Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "true"},
 					},
 				}},
 				{Type: watch.Added, Object: makePod("p3", "3")},
@@ -328,7 +422,7 @@ func TestWatchList(t *testing.T) {
 				{Type: watch.Bookmark, Object: &v1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						ResourceVersion: "2",
-						Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "true"},
 					},
 				}},
 				{Type: watch.Added, Object: makePod("p3", "3")},
@@ -349,6 +443,27 @@ func TestWatchList(t *testing.T) {
 			},
 			expectedStoreContent: []v1.Pod{*makePod("p1", "1"), *makePod("p3", "3")},
 			expectedError:        apierrors.NewResourceExpired("rv already expired"),
+		},
+		{
+			name:                  "prove that the reflector is checking the value of the initialEventsEnd annotation",
+			closeAfterWatchEvents: 3,
+			watchEvents: []watch.Event{
+				{Type: watch.Added, Object: makePod("p1", "1")},
+				{Type: watch.Added, Object: makePod("p2", "2")},
+				{Type: watch.Bookmark, Object: &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						ResourceVersion: "2",
+						Annotations:     map[string]string{metav1.InitialEventsAnnotationKey: "false"},
+					},
+				}},
+			},
+			expectedWatchRequests: 1,
+			expectedRequestOptions: []metav1.ListOptions{{
+				SendInitialEvents:    pointer.Bool(true),
+				AllowWatchBookmarks:  true,
+				ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
+				TimeoutSeconds:       pointer.Int64(1),
+			}},
 		},
 	}
 	for _, s := range scenarios {
@@ -372,7 +487,7 @@ func TestWatchList(t *testing.T) {
 			listWatcher.customListResponse = scenario.podList
 			listWatcher.closeAfterListRequests = scenario.closeAfterListRequests
 			if scenario.disableUseWatchList {
-				reflector.UseWatchList = false
+				reflector.UseWatchList = ptr.To(false)
 			}
 
 			err := reflector.ListAndWatch(stopCh)
@@ -449,7 +564,7 @@ func verifyStore(t *testing.T, s Store, expectedPods []v1.Pod) {
 }
 
 func makePod(name, rv string) *v1.Pod {
-	return &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, ResourceVersion: rv}}
+	return &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, ResourceVersion: rv, UID: types.UID(name)}}
 }
 
 func testData() (*fakeListWatcher, Store, *Reflector, chan struct{}) {
@@ -462,7 +577,7 @@ func testData() (*fakeListWatcher, Store, *Reflector, chan struct{}) {
 		},
 	}
 	r := NewReflector(lw, &v1.Pod{}, s, 0)
-	r.UseWatchList = true
+	r.UseWatchList = ptr.To(true)
 
 	return lw, s, r, stopCh
 }

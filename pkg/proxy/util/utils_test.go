@@ -42,57 +42,6 @@ func TestValidateWorks(t *testing.T) {
 	}
 }
 
-func TestBuildPortsToEndpointsMap(t *testing.T) {
-	endpoints := &v1.Endpoints{
-		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "testnamespace"},
-		Subsets: []v1.EndpointSubset{
-			{
-				Addresses: []v1.EndpointAddress{
-					{IP: "10.0.0.1"},
-					{IP: "10.0.0.2"},
-				},
-				Ports: []v1.EndpointPort{
-					{Name: "http", Port: 80},
-					{Name: "https", Port: 443},
-				},
-			},
-			{
-				Addresses: []v1.EndpointAddress{
-					{IP: "10.0.0.1"},
-					{IP: "10.0.0.3"},
-				},
-				Ports: []v1.EndpointPort{
-					{Name: "http", Port: 8080},
-					{Name: "dns", Port: 53},
-				},
-			},
-			{
-				Addresses: []v1.EndpointAddress{},
-				Ports: []v1.EndpointPort{
-					{Name: "http", Port: 8888},
-					{Name: "ssh", Port: 22},
-				},
-			},
-			{
-				Addresses: []v1.EndpointAddress{
-					{IP: "10.0.0.1"},
-				},
-				Ports: []v1.EndpointPort{},
-			},
-		},
-	}
-	expectedPortsToEndpoints := map[string][]string{
-		"http":  {"10.0.0.1:80", "10.0.0.2:80", "10.0.0.1:8080", "10.0.0.3:8080"},
-		"https": {"10.0.0.1:443", "10.0.0.2:443"},
-		"dns":   {"10.0.0.1:53", "10.0.0.3:53"},
-	}
-
-	portsToEndpoints := BuildPortsToEndpointsMap(endpoints)
-	if !reflect.DeepEqual(expectedPortsToEndpoints, portsToEndpoints) {
-		t.Errorf("expected ports to endpoints not seen")
-	}
-}
-
 func TestShouldSkipService(t *testing.T) {
 	testCases := []struct {
 		service    *v1.Service
@@ -219,33 +168,6 @@ func TestAppendPortIfNeeded(t *testing.T) {
 	}
 }
 
-func TestShuffleStrings(t *testing.T) {
-	var src []string
-	dest := ShuffleStrings(src)
-
-	if dest != nil {
-		t.Errorf("ShuffleStrings for a nil slice got a non-nil slice")
-	}
-
-	src = []string{"a", "b", "c", "d", "e", "f"}
-	dest = ShuffleStrings(src)
-
-	if len(src) != len(dest) {
-		t.Errorf("Shuffled slice is wrong length, expected %v got %v", len(src), len(dest))
-	}
-
-	m := make(map[string]bool, len(dest))
-	for _, s := range dest {
-		m[s] = true
-	}
-
-	for _, k := range src {
-		if _, exists := m[k]; !exists {
-			t.Errorf("Element %v missing from shuffled slice", k)
-		}
-	}
-}
-
 func TestMapIPsByIPFamily(t *testing.T) {
 	testCases := []struct {
 		desc            string
@@ -338,10 +260,18 @@ func TestMapIPsByIPFamily(t *testing.T) {
 
 			ipMap := MapIPsByIPFamily(testcase.ipString)
 
-			if !reflect.DeepEqual(testcase.expectCorrect, ipMap[ipFamily]) {
+			var ipStr []string
+			for _, ip := range ipMap[ipFamily] {
+				ipStr = append(ipStr, ip.String())
+			}
+			if !reflect.DeepEqual(testcase.expectCorrect, ipStr) {
 				t.Errorf("Test %v failed: expected %v, got %v", testcase.desc, testcase.expectCorrect, ipMap[ipFamily])
 			}
-			if !reflect.DeepEqual(testcase.expectIncorrect, ipMap[otherIPFamily]) {
+			ipStr = nil
+			for _, ip := range ipMap[otherIPFamily] {
+				ipStr = append(ipStr, ip.String())
+			}
+			if !reflect.DeepEqual(testcase.expectIncorrect, ipStr) {
 				t.Errorf("Test %v failed: expected %v, got %v", testcase.desc, testcase.expectIncorrect, ipMap[otherIPFamily])
 			}
 		})
@@ -372,58 +302,58 @@ func TestMapCIDRsByIPFamily(t *testing.T) {
 		},
 		{
 			desc:            "want IPv4 and receive IPv6",
-			ipString:        []string{"fd00:20::1/64"},
+			ipString:        []string{"fd00:20::/64"},
 			wantIPv6:        false,
 			expectCorrect:   nil,
-			expectIncorrect: []string{"fd00:20::1/64"},
+			expectIncorrect: []string{"fd00:20::/64"},
 		},
 		{
 			desc:            "want IPv6 and receive IPv4",
-			ipString:        []string{"192.168.200.2/24"},
+			ipString:        []string{"192.168.200.0/24"},
 			wantIPv6:        true,
 			expectCorrect:   nil,
-			expectIncorrect: []string{"192.168.200.2/24"},
+			expectIncorrect: []string{"192.168.200.0/24"},
 		},
 		{
 			desc:            "want IPv6 and receive IPv4 and IPv6",
-			ipString:        []string{"192.168.200.2/24", "192.1.34.23/24", "fd00:20::1/64", "2001:db9::3/64"},
+			ipString:        []string{"192.168.200.0/24", "192.1.34.0/24", "fd00:20::/64", "2001:db9::/64"},
 			wantIPv6:        true,
-			expectCorrect:   []string{"fd00:20::1/64", "2001:db9::3/64"},
-			expectIncorrect: []string{"192.168.200.2/24", "192.1.34.23/24"},
+			expectCorrect:   []string{"fd00:20::/64", "2001:db9::/64"},
+			expectIncorrect: []string{"192.168.200.0/24", "192.1.34.0/24"},
 		},
 		{
 			desc:            "want IPv4 and receive IPv4 and IPv6",
-			ipString:        []string{"192.168.200.2/24", "192.1.34.23/24", "fd00:20::1/64", "2001:db9::3/64"},
+			ipString:        []string{"192.168.200.0/24", "192.1.34.0/24", "fd00:20::/64", "2001:db9::/64"},
 			wantIPv6:        false,
-			expectCorrect:   []string{"192.168.200.2/24", "192.1.34.23/24"},
-			expectIncorrect: []string{"fd00:20::1/64", "2001:db9::3/64"},
+			expectCorrect:   []string{"192.168.200.0/24", "192.1.34.0/24"},
+			expectIncorrect: []string{"fd00:20::/64", "2001:db9::/64"},
 		},
 		{
 			desc:            "want IPv4 and receive IPv4 only",
-			ipString:        []string{"192.168.200.2/24", "192.1.34.23/24"},
+			ipString:        []string{"192.168.200.0/24", "192.1.34.0/24"},
 			wantIPv6:        false,
-			expectCorrect:   []string{"192.168.200.2/24", "192.1.34.23/24"},
+			expectCorrect:   []string{"192.168.200.0/24", "192.1.34.0/24"},
 			expectIncorrect: nil,
 		},
 		{
 			desc:            "want IPv6 and receive IPv4 only",
-			ipString:        []string{"192.168.200.2/24", "192.1.34.23/24"},
+			ipString:        []string{"192.168.200.0/24", "192.1.34.0/24"},
 			wantIPv6:        true,
 			expectCorrect:   nil,
-			expectIncorrect: []string{"192.168.200.2/24", "192.1.34.23/24"},
+			expectIncorrect: []string{"192.168.200.0/24", "192.1.34.0/24"},
 		},
 		{
 			desc:            "want IPv4 and receive IPv6 only",
-			ipString:        []string{"fd00:20::1/64", "2001:db9::3/64"},
+			ipString:        []string{"fd00:20::/64", "2001:db9::/64"},
 			wantIPv6:        false,
 			expectCorrect:   nil,
-			expectIncorrect: []string{"fd00:20::1/64", "2001:db9::3/64"},
+			expectIncorrect: []string{"fd00:20::/64", "2001:db9::/64"},
 		},
 		{
 			desc:            "want IPv6 and receive IPv6 only",
-			ipString:        []string{"fd00:20::1/64", "2001:db9::3/64"},
+			ipString:        []string{"fd00:20::/64", "2001:db9::/64"},
 			wantIPv6:        true,
-			expectCorrect:   []string{"fd00:20::1/64", "2001:db9::3/64"},
+			expectCorrect:   []string{"fd00:20::/64", "2001:db9::/64"},
 			expectIncorrect: nil,
 		},
 	}
@@ -440,11 +370,20 @@ func TestMapCIDRsByIPFamily(t *testing.T) {
 
 			cidrMap := MapCIDRsByIPFamily(testcase.ipString)
 
-			if !reflect.DeepEqual(testcase.expectCorrect, cidrMap[ipFamily]) {
-				t.Errorf("Test %v failed: expected %v, got %v", testcase.desc, testcase.expectCorrect, cidrMap[ipFamily])
+			var cidrStr []string
+			for _, cidr := range cidrMap[ipFamily] {
+				cidrStr = append(cidrStr, cidr.String())
 			}
-			if !reflect.DeepEqual(testcase.expectIncorrect, cidrMap[otherIPFamily]) {
-				t.Errorf("Test %v failed: expected %v, got %v", testcase.desc, testcase.expectIncorrect, cidrMap[otherIPFamily])
+			var cidrStrOther []string
+			for _, cidr := range cidrMap[otherIPFamily] {
+				cidrStrOther = append(cidrStrOther, cidr.String())
+			}
+
+			if !reflect.DeepEqual(testcase.expectCorrect, cidrStr) {
+				t.Errorf("Test %v failed: expected %v, got %v", testcase.desc, testcase.expectCorrect, cidrStr)
+			}
+			if !reflect.DeepEqual(testcase.expectIncorrect, cidrStrOther) {
+				t.Errorf("Test %v failed: expected %v, got %v", testcase.desc, testcase.expectIncorrect, cidrStrOther)
 			}
 		})
 	}
@@ -605,103 +544,6 @@ func TestGetClusterIPByFamily(t *testing.T) {
 				t.Fatalf("expected ip:%v got %v", testCase.expectedResult, ip)
 			}
 		})
-	}
-}
-
-type fakeClosable struct {
-	closed bool
-}
-
-func (c *fakeClosable) Close() error {
-	c.closed = true
-	return nil
-}
-
-func TestRevertPorts(t *testing.T) {
-	testCases := []struct {
-		replacementPorts []netutils.LocalPort
-		existingPorts    []netutils.LocalPort
-		expectToBeClose  []bool
-	}{
-		{
-			replacementPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-			},
-			existingPorts:   []netutils.LocalPort{},
-			expectToBeClose: []bool{true, true, true},
-		},
-		{
-			replacementPorts: []netutils.LocalPort{},
-			existingPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-			},
-			expectToBeClose: []bool{},
-		},
-		{
-			replacementPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-			},
-			existingPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-			},
-			expectToBeClose: []bool{false, false, false},
-		},
-		{
-			replacementPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-			},
-			existingPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5003},
-			},
-			expectToBeClose: []bool{false, true, false},
-		},
-		{
-			replacementPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-			},
-			existingPorts: []netutils.LocalPort{
-				{Port: 5001},
-				{Port: 5002},
-				{Port: 5003},
-				{Port: 5004},
-			},
-			expectToBeClose: []bool{false, false, false},
-		},
-	}
-
-	for i, tc := range testCases {
-		replacementPortsMap := make(map[netutils.LocalPort]netutils.Closeable)
-		for _, lp := range tc.replacementPorts {
-			replacementPortsMap[lp] = &fakeClosable{}
-		}
-		existingPortsMap := make(map[netutils.LocalPort]netutils.Closeable)
-		for _, lp := range tc.existingPorts {
-			existingPortsMap[lp] = &fakeClosable{}
-		}
-		RevertPorts(replacementPortsMap, existingPortsMap)
-		for j, expectation := range tc.expectToBeClose {
-			if replacementPortsMap[tc.replacementPorts[j]].(*fakeClosable).closed != expectation {
-				t.Errorf("Expect replacement localport %v to be %v in test case %v", tc.replacementPorts[j], expectation, i)
-			}
-		}
-		for _, lp := range tc.existingPorts {
-			if existingPortsMap[lp].(*fakeClosable).closed == true {
-				t.Errorf("Expect existing localport %v to be false in test case %v", lp, i)
-			}
-		}
 	}
 }
 

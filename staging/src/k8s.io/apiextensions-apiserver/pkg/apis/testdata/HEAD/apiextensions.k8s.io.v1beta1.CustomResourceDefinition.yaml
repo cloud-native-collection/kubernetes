@@ -64,6 +64,8 @@ spec:
     singular: singularValue
   preserveUnknownFields: true
   scope: scopeValue
+  selectableFields:
+  - jsonPath: jsonPathValue
   subresources:
     scale:
       labelSelectorPath: labelSelectorPathValue
@@ -132,6 +134,7 @@ spec:
       - fieldPath: fieldPathValue
         message: messageValue
         messageExpression: messageExpressionValue
+        optionalOldSelf: true
         reason: reasonValue
         rule: ruleValue
   version: versionValue
@@ -208,8 +211,11 @@ spec:
         - fieldPath: fieldPathValue
           message: messageValue
           messageExpression: messageExpressionValue
+          optionalOldSelf: true
           reason: reasonValue
           rule: ruleValue
+    selectableFields:
+    - jsonPath: jsonPathValue
     served: true
     storage: true
     subresources:

@@ -19,10 +19,8 @@ package persistentvolume
 import (
 	"context"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/kubernetes/pkg/features"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -68,14 +66,11 @@ func (persistentvolumeStrategy) GetResetFields() map[fieldpath.APIVersion]*field
 func (persistentvolumeStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	pv := obj.(*api.PersistentVolume)
 	pv.Status = api.PersistentVolumeStatus{}
-
-	if utilfeature.DefaultFeatureGate.Enabled(features.PersistentVolumeLastPhaseTransitionTime) {
-		pv.Status.Phase = api.VolumePending
-		now := nowFunc()
-		pv.Status.LastPhaseTransitionTime = &now
-	}
-
 	pvutil.DropDisabledSpecFields(&pv.Spec, nil)
+
+	pv.Status.Phase = api.VolumePending
+	now := NowFunc()
+	pv.Status.LastPhaseTransitionTime = &now
 }
 
 func (persistentvolumeStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
@@ -103,7 +98,6 @@ func (persistentvolumeStrategy) PrepareForUpdate(ctx context.Context, obj, old r
 	newPv := obj.(*api.PersistentVolume)
 	oldPv := old.(*api.PersistentVolume)
 	newPv.Status = oldPv.Status
-
 	pvutil.DropDisabledSpecFields(&newPv.Spec, &oldPv.Spec)
 }
 
@@ -143,7 +137,7 @@ func (persistentvolumeStatusStrategy) GetResetFields() map[fieldpath.APIVersion]
 	return fields
 }
 
-var nowFunc = metav1.Now
+var NowFunc = metav1.Now
 
 // PrepareForUpdate sets the Spec field which is not allowed to be changed when updating a PV's Status
 func (persistentvolumeStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
@@ -151,20 +145,17 @@ func (persistentvolumeStatusStrategy) PrepareForUpdate(ctx context.Context, obj,
 	oldPv := old.(*api.PersistentVolume)
 	newPv.Spec = oldPv.Spec
 
-	if utilfeature.DefaultFeatureGate.Enabled(features.PersistentVolumeLastPhaseTransitionTime) {
-		switch {
-		case oldPv.Status.Phase == newPv.Status.Phase && newPv.Status.LastPhaseTransitionTime == nil:
-			// phase didn't change, preserve the existing transition time if set
-			newPv.Status.LastPhaseTransitionTime = oldPv.Status.LastPhaseTransitionTime
+	switch {
+	case oldPv.Status.Phase == newPv.Status.Phase && newPv.Status.LastPhaseTransitionTime == nil:
+		// phase didn't change, preserve the existing transition time if set
+		newPv.Status.LastPhaseTransitionTime = oldPv.Status.LastPhaseTransitionTime
 
-		case oldPv.Status.Phase != newPv.Status.Phase && (newPv.Status.LastPhaseTransitionTime == nil || newPv.Status.LastPhaseTransitionTime.Equal(oldPv.Status.LastPhaseTransitionTime)):
-			// phase changed and client didn't set or didn't change the transition time
-			now := nowFunc()
-			newPv.Status.LastPhaseTransitionTime = &now
-		}
+	case oldPv.Status.Phase != newPv.Status.Phase && (newPv.Status.LastPhaseTransitionTime == nil || newPv.Status.LastPhaseTransitionTime.Equal(oldPv.Status.LastPhaseTransitionTime)):
+		// phase changed and client didn't set or didn't change the transition time
+		now := NowFunc()
+		newPv.Status.LastPhaseTransitionTime = &now
 	}
 
-	pvutil.DropDisabledStatusFields(&oldPv.Status, &newPv.Status)
 }
 
 func (persistentvolumeStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {

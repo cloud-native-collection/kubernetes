@@ -131,6 +131,12 @@ func generateSampleAPIServerObjectNames(namespace string) sampleAPIServerObjectN
 	}
 }
 
+// SetUpSampleAPIServer sets up a sample-apiserver.
+//
+// Important:
+// Test cases that call this function should be marked as serial due to potential conflicts
+// with other test cases that also set up a sample-apiserver. For more information, see
+// https://github.com/kubernetes/kubernetes/issues/119582#issuecomment-2215054411.
 func SetUpSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclient *aggregatorclient.Clientset, image string, n sampleAPIServerObjectNames, apiServiceGroupName, apiServiceVersion string) {
 	ginkgo.By("Registering the sample API server.")
 	client := f.ClientSet
@@ -164,6 +170,7 @@ func SetUpSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclien
 			Rules: []rbacv1.PolicyRule{
 				rbacv1helpers.NewRule("get", "list", "watch").Groups("").Resources("namespaces").RuleOrDie(),
 				rbacv1helpers.NewRule("get", "list", "watch").Groups("admissionregistration.k8s.io").Resources("*").RuleOrDie(),
+				rbacv1helpers.NewRule("get", "list", "watch").Groups("flowcontrol.apiserver.k8s.io").Resources("prioritylevelconfigurations", "flowschemas").RuleOrDie(),
 			},
 		}, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "creating cluster role %s", n.clusterRole)
@@ -412,7 +419,7 @@ func SetUpSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclien
 	framework.ExpectNoError(err, "gave up waiting for apiservice wardle to come up successfully")
 }
 
-// TestSampleAPIServer is a basic test if the sample-apiserver code from 1.10 and compiled against 1.10
+// TestSampleAPIServer is a basic test if the sample-apiserver code from 1.29 and compiled against 1.29
 // will work on the current Aggregator/API-Server.
 func TestSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclient *aggregatorclient.Clientset, image, apiServiceGroupName, apiServiceVersion string) {
 	n := generateSampleAPIServerObjectNames(f.Namespace.Name)
@@ -560,7 +567,6 @@ func TestSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclient
 	ginkgo.By("Adding a label to the APIService")
 	apiServiceClient := aggrclient.ApiregistrationV1().APIServices()
 	apiServiceLabel := map[string]string{"e2e-apiservice": "patched"}
-	apiServiceLabelSelector := labels.SelectorFromSet(apiServiceLabel).String()
 	apiServicePatch, err := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"labels": apiServiceLabel,
@@ -641,7 +647,7 @@ func TestSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclient
 	framework.Logf("Found updated apiService label for %q", apiServiceName)
 
 	// kubectl delete flunder test-flunder
-	ginkgo.By(fmt.Sprintf("Delete APIService %q", flunderName))
+	ginkgo.By(fmt.Sprintf("Delete flunders resource %q", flunderName))
 	err = dynamicClient.Delete(ctx, flunderName, metav1.DeleteOptions{})
 	validateErrorWithDebugInfo(ctx, f, err, pods, "deleting flunders(%v) using dynamic client", unstructuredList.Items)
 
@@ -724,6 +730,7 @@ func TestSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclient
 	}
 	framework.Logf("Found patched status condition for %s", wardle.ObjectMeta.Name)
 
+	apiServiceLabelSelector := labels.SelectorFromSet(updatedApiService.Labels).String()
 	ginkgo.By(fmt.Sprintf("APIService deleteCollection with labelSelector: %q", apiServiceLabelSelector))
 
 	err = aggrclient.ApiregistrationV1().APIServices().DeleteCollection(ctx,
@@ -747,7 +754,7 @@ func pollTimed(ctx context.Context, interval, timeout time.Duration, condition w
 		elapsed := time.Since(start)
 		framework.Logf(msg, elapsed)
 	}(time.Now(), msg)
-	return wait.PollWithContext(ctx, interval, timeout, condition)
+	return wait.PollUntilContextTimeout(ctx, interval, timeout, false, condition)
 }
 
 func validateErrorWithDebugInfo(ctx context.Context, f *framework.Framework, err error, pods *v1.PodList, msg string, fields ...interface{}) {

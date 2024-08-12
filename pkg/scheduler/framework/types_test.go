@@ -30,7 +30,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/features"
+	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	"k8s.io/kubernetes/test/utils/ktesting"
+	"k8s.io/kubernetes/test/utils/ktesting/initoption"
 )
 
 func TestNewResource(t *testing.T) {
@@ -210,49 +214,30 @@ func TestSetMaxResource(t *testing.T) {
 	}
 }
 
-type testingMode interface {
-	Fatalf(format string, args ...interface{})
-}
-
-func makeBasePod(t testingMode, nodeName, objName, cpu, mem, extended string, ports []v1.ContainerPort, volumes []v1.Volume) *v1.Pod {
-	req := v1.ResourceList{}
-	if cpu != "" {
-		req = v1.ResourceList{
-			v1.ResourceCPU:    resource.MustParse(cpu),
-			v1.ResourceMemory: resource.MustParse(mem),
-		}
-		if extended != "" {
-			parts := strings.Split(extended, ":")
-			if len(parts) != 2 {
-				t.Fatalf("Invalid extended resource string: \"%s\"", extended)
-			}
-			req[v1.ResourceName(parts[0])] = resource.MustParse(parts[1])
-		}
-	}
-	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			UID:       types.UID(objName),
-			Namespace: "node_info_cache_test",
-			Name:      objName,
-		},
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{{
-				Resources: v1.ResourceRequirements{
-					Requests: req,
-				},
-				Ports: ports,
-			}},
-			NodeName: nodeName,
-			Volumes:  volumes,
-		},
-	}
-}
-
 func TestNewNodeInfo(t *testing.T) {
 	nodeName := "test-node"
 	pods := []*v1.Pod{
-		makeBasePod(t, nodeName, "test-1", "100m", "500", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}}, nil),
-		makeBasePod(t, nodeName, "test-2", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}, nil),
+		st.MakePod().UID("test-1").Namespace("node_info_cache_test").Name("test-1").Node(nodeName).
+			Containers([]v1.Container{st.MakeContainer().ResourceRequests(map[v1.ResourceName]string{
+				v1.ResourceCPU:    "100m",
+				v1.ResourceMemory: "500",
+			}).ContainerPort([]v1.ContainerPort{{
+				HostIP:   "127.0.0.1",
+				HostPort: 80,
+				Protocol: "TCP",
+			}}).Obj()}).
+			Obj(),
+
+		st.MakePod().UID("test-2").Namespace("node_info_cache_test").Name("test-2").Node(nodeName).
+			Containers([]v1.Container{st.MakeContainer().ResourceRequests(map[v1.ResourceName]string{
+				v1.ResourceCPU:    "200m",
+				v1.ResourceMemory: "1Ki",
+			}).ContainerPort([]v1.ContainerPort{{
+				HostIP:   "127.0.0.1",
+				HostPort: 8080,
+				Protocol: "TCP",
+			}}).Obj()}).
+			Obj(),
 	}
 
 	expected := &NodeInfo{
@@ -513,7 +498,7 @@ func TestNodeInfoClone(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-			ni := test.nodeInfo.Clone()
+			ni := test.nodeInfo.Snapshot()
 			// Modify the field to check if the result is a clone of the origin one.
 			test.nodeInfo.Generation += 10
 			test.nodeInfo.UsedPorts.Remove("127.0.0.1", "TCP", 80)
@@ -841,10 +826,28 @@ func TestNodeInfoAddPod(t *testing.T) {
 func TestNodeInfoRemovePod(t *testing.T) {
 	nodeName := "test-node"
 	pods := []*v1.Pod{
-		makeBasePod(t, nodeName, "test-1", "100m", "500", "",
-			[]v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 80, Protocol: "TCP"}},
-			[]v1.Volume{{VolumeSource: v1.VolumeSource{PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc-1"}}}}),
-		makeBasePod(t, nodeName, "test-2", "200m", "1Ki", "", []v1.ContainerPort{{HostIP: "127.0.0.1", HostPort: 8080, Protocol: "TCP"}}, nil),
+		st.MakePod().UID("test-1").Namespace("node_info_cache_test").Name("test-1").Node(nodeName).
+			Containers([]v1.Container{st.MakeContainer().ResourceRequests(map[v1.ResourceName]string{
+				v1.ResourceCPU:    "100m",
+				v1.ResourceMemory: "500",
+			}).ContainerPort([]v1.ContainerPort{{
+				HostIP:   "127.0.0.1",
+				HostPort: 80,
+				Protocol: "TCP",
+			}}).Obj()}).
+			Volumes([]v1.Volume{{VolumeSource: v1.VolumeSource{PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc-1"}}}}).
+			Obj(),
+
+		st.MakePod().UID("test-2").Namespace("node_info_cache_test").Name("test-2").Node(nodeName).
+			Containers([]v1.Container{st.MakeContainer().ResourceRequests(map[v1.ResourceName]string{
+				v1.ResourceCPU:    "200m",
+				v1.ResourceMemory: "1Ki",
+			}).ContainerPort([]v1.ContainerPort{{
+				HostIP:   "127.0.0.1",
+				HostPort: 8080,
+				Protocol: "TCP",
+			}}).Obj()}).
+			Obj(),
 	}
 
 	// add pod Overhead
@@ -861,7 +864,7 @@ func TestNodeInfoRemovePod(t *testing.T) {
 		expectedNodeInfo *NodeInfo
 	}{
 		{
-			pod:         makeBasePod(t, nodeName, "non-exist", "0", "0", "", []v1.ContainerPort{{}}, []v1.Volume{}),
+			pod:         st.MakePod().UID("non-exist").Namespace("node_info_cache_test").Node(nodeName).Obj(),
 			errExpected: true,
 			expectedNodeInfo: &NodeInfo{
 				node: &v1.Node{
@@ -1084,10 +1087,11 @@ func TestNodeInfoRemovePod(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			ni := fakeNodeInfo(pods...)
 
 			gen := ni.Generation
-			err := ni.RemovePod(test.pod)
+			err := ni.RemovePod(logger, test.pod)
 			if err != nil {
 				if test.errExpected {
 					expectedErrorMsg := fmt.Errorf("no corresponding pod %s in pods of node %s", test.pod.Name, ni.Node().Name)
@@ -1509,7 +1513,7 @@ func TestFitError_Error(t *testing.T) {
 }
 
 func TestCalculatePodResourcesWithResize(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)()
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)
 	cpu500m := resource.MustParse("500m")
 	mem500M := resource.MustParse("500Mi")
 	cpu700m := resource.MustParse("700m")
@@ -1605,5 +1609,68 @@ func TestCalculatePodResourcesWithResize(t *testing.T) {
 				t.Errorf("Test: %s expected non0Mem: %d, got: %d", tt.name, tt.expectedNon0Mem, non0Mem)
 			}
 		})
+	}
+}
+
+func TestCloudEvent_Match(t *testing.T) {
+	testCases := []struct {
+		name        string
+		event       ClusterEvent
+		comingEvent ClusterEvent
+		wantResult  bool
+	}{
+		{
+			name:        "wildcard event matches with all kinds of coming events",
+			event:       ClusterEvent{Resource: WildCard, ActionType: All},
+			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			wantResult:  true,
+		},
+		{
+			name:        "event with resource = 'Pod' matching with coming events carries same actionType",
+			event:       ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel | UpdateNodeTaint},
+			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			wantResult:  true,
+		},
+		{
+			name:        "event with resource = '*' matching with coming events carries same actionType",
+			event:       ClusterEvent{Resource: WildCard, ActionType: UpdateNodeLabel},
+			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			wantResult:  true,
+		},
+		{
+			name:        "event with resource = '*' matching with coming events carries different actionType",
+			event:       ClusterEvent{Resource: WildCard, ActionType: UpdateNodeLabel},
+			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeAllocatable},
+			wantResult:  false,
+		},
+		{
+			name:        "event matching with coming events carries '*' resources",
+			event:       ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			comingEvent: ClusterEvent{Resource: WildCard, ActionType: UpdateNodeLabel},
+			wantResult:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.event.Match(tc.comingEvent)
+			if got != tc.wantResult {
+				t.Fatalf("unexpected result")
+			}
+		})
+	}
+}
+
+func TestNodeInfoKMetadata(t *testing.T) {
+	tCtx := ktesting.Init(t, initoption.BufferLogs(true))
+	logger := tCtx.Logger()
+	logger.Info("Some NodeInfo slice", "nodes", klog.KObjSlice([]*NodeInfo{nil, {}, {node: &v1.Node{}}, {node: &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}}}))
+
+	output := logger.GetSink().(ktesting.Underlier).GetBuffer().String()
+
+	// The initial nil entry gets turned into empty ObjectRef by klog,
+	// which becomes an empty string during output formatting.
+	if !strings.Contains(output, `Some NodeInfo slice nodes=["","<no node>","","worker"]`) {
+		tCtx.Fatalf("unexpected output:\n%s", output)
 	}
 }

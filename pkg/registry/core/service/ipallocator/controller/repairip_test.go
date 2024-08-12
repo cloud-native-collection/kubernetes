@@ -23,7 +23,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	v1 "k8s.io/api/core/v1"
-	networkingv1alpha1 "k8s.io/api/networking/v1alpha1"
+	networkingv1beta1 "k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -33,7 +33,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/kubernetes/pkg/registry/core/service/ipallocator"
-	netutils "k8s.io/utils/net"
 )
 
 var (
@@ -43,8 +42,9 @@ var (
 
 type fakeRepair struct {
 	*RepairIPAddress
-	serviceStore   cache.Store
-	ipAddressStore cache.Store
+	serviceStore     cache.Store
+	ipAddressStore   cache.Store
+	serviceCIDRStore cache.Store
 }
 
 func newFakeRepair() (*fake.Clientset, *fakeRepair) {
@@ -54,47 +54,42 @@ func newFakeRepair() (*fake.Clientset, *fakeRepair) {
 	serviceInformer := informerFactory.Core().V1().Services()
 	serviceIndexer := serviceInformer.Informer().GetIndexer()
 
-	ipInformer := informerFactory.Networking().V1alpha1().IPAddresses()
+	serviceCIDRInformer := informerFactory.Networking().V1beta1().ServiceCIDRs()
+	serviceCIDRIndexer := serviceCIDRInformer.Informer().GetIndexer()
+
+	ipInformer := informerFactory.Networking().V1beta1().IPAddresses()
 	ipIndexer := ipInformer.Informer().GetIndexer()
 
 	fakeClient.PrependReactor("create", "ipaddresses", k8stesting.ReactionFunc(func(action k8stesting.Action) (bool, runtime.Object, error) {
-		ip := action.(k8stesting.CreateAction).GetObject().(*networkingv1alpha1.IPAddress)
+		ip := action.(k8stesting.CreateAction).GetObject().(*networkingv1beta1.IPAddress)
 		err := ipIndexer.Add(ip)
 		return false, ip, err
 	}))
 	fakeClient.PrependReactor("update", "ipaddresses", k8stesting.ReactionFunc(func(action k8stesting.Action) (bool, runtime.Object, error) {
-		ip := action.(k8stesting.UpdateAction).GetObject().(*networkingv1alpha1.IPAddress)
+		ip := action.(k8stesting.UpdateAction).GetObject().(*networkingv1beta1.IPAddress)
 		return false, ip, fmt.Errorf("IPAddress is inmutable after creation")
 	}))
 	fakeClient.PrependReactor("delete", "ipaddresses", k8stesting.ReactionFunc(func(action k8stesting.Action) (bool, runtime.Object, error) {
 		ip := action.(k8stesting.DeleteAction).GetName()
 		err := ipIndexer.Delete(ip)
-		return false, &networkingv1alpha1.IPAddress{}, err
+		return false, &networkingv1beta1.IPAddress{}, err
 	}))
 
-	_, primary, err := netutils.ParseCIDRSloppy(serviceCIDRv4)
-	if err != nil {
-		panic(err)
-	}
-	_, secondary, err := netutils.ParseCIDRSloppy(serviceCIDRv6)
-	if err != nil {
-		panic(err)
-	}
 	r := NewRepairIPAddress(0*time.Second,
 		fakeClient,
-		primary,
-		secondary,
 		serviceInformer,
+		serviceCIDRInformer,
 		ipInformer,
 	)
-	return fakeClient, &fakeRepair{r, serviceIndexer, ipIndexer}
+	return fakeClient, &fakeRepair{r, serviceIndexer, ipIndexer, serviceCIDRIndexer}
 }
 
 func TestRepairServiceIP(t *testing.T) {
 	tests := []struct {
 		name        string
 		svcs        []*v1.Service
-		ipAddresses []*networkingv1alpha1.IPAddress
+		ipAddresses []*networkingv1beta1.IPAddress
+		cidrs       []*networkingv1beta1.ServiceCIDR
 		expectedIPs []string
 		actions     [][]string // verb and resource
 		events      []string
@@ -102,8 +97,11 @@ func TestRepairServiceIP(t *testing.T) {
 		{
 			name: "no changes needed single stack",
 			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1"})},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc", []string{"10.0.1.1"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
 			},
 			expectedIPs: []string{"10.0.1.1"},
 			actions:     [][]string{},
@@ -112,25 +110,49 @@ func TestRepairServiceIP(t *testing.T) {
 		{
 			name: "no changes needed dual stack",
 			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1", "2001:db8::10"})},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc", []string{"10.0.1.1"})),
 				newIPAddress("2001:db8::10", newService("test-svc", []string{"2001:db8::10"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
 			},
 			expectedIPs: []string{"10.0.1.1", "2001:db8::10"},
 			actions:     [][]string{},
 			events:      []string{},
 		},
+		{
+			name: "no changes needed dual stack multiple cidrs",
+			svcs: []*v1.Service{newService("test-svc", []string{"192.168.0.1", "2001:db8:a:b::10"})},
+			ipAddresses: []*networkingv1beta1.IPAddress{
+				newIPAddress("192.168.0.1", newService("test-svc", []string{"192.168.0.1"})),
+				newIPAddress("2001:db8:a:b::10", newService("test-svc", []string{"2001:db8:a:b::10"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+				newServiceCIDR("custom", "192.168.0.0/24", "2001:db8:a:b::/64"),
+			},
+			expectedIPs: []string{"192.168.0.1", "2001:db8:a:b::10"},
+			actions:     [][]string{},
+			events:      []string{},
+		},
 		// these two cases simulate migrating from bitmaps to IPAddress objects
 		{
-			name:        "create IPAddress single stack",
-			svcs:        []*v1.Service{newService("test-svc", []string{"10.0.1.1"})},
+			name: "create IPAddress single stack",
+			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1"})},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
 			expectedIPs: []string{"10.0.1.1"},
 			actions:     [][]string{{"create", "ipaddresses"}},
 			events:      []string{"Warning ClusterIPNotAllocated Cluster IP [IPv4]: 10.0.1.1 is not allocated; repairing"},
 		},
 		{
-			name:        "create IPAddresses dual stack",
-			svcs:        []*v1.Service{newService("test-svc", []string{"10.0.1.1", "2001:db8::10"})},
+			name: "create IPAddresses dual stack",
+			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1", "2001:db8::10"})},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
 			expectedIPs: []string{"10.0.1.1", "2001:db8::10"},
 			actions:     [][]string{{"create", "ipaddresses"}, {"create", "ipaddresses"}},
 			events: []string{
@@ -139,10 +161,24 @@ func TestRepairServiceIP(t *testing.T) {
 			},
 		},
 		{
+			name: "create IPAddress single stack from secondary",
+			svcs: []*v1.Service{newService("test-svc", []string{"192.168.1.1"})},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+				newServiceCIDR("custom", "192.168.1.0/24", ""),
+			},
+			expectedIPs: []string{"192.168.1.1"},
+			actions:     [][]string{{"create", "ipaddresses"}},
+			events:      []string{"Warning ClusterIPNotAllocated Cluster IP [IPv4]: 192.168.1.1 is not allocated; repairing"},
+		},
+		{
 			name: "reconcile IPAddress single stack wrong reference",
 			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1"})},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc2", []string{"10.0.1.1"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
 			},
 			expectedIPs: []string{"10.0.1.1"},
 			actions:     [][]string{{"delete", "ipaddresses"}, {"create", "ipaddresses"}},
@@ -151,9 +187,12 @@ func TestRepairServiceIP(t *testing.T) {
 		{
 			name: "reconcile IPAddresses dual stack",
 			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1", "2001:db8::10"})},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc2", []string{"10.0.1.1"})),
 				newIPAddress("2001:db8::10", newService("test-svc2", []string{"2001:db8::10"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
 			},
 			expectedIPs: []string{"10.0.1.1", "2001:db8::10"},
 			actions:     [][]string{{"delete", "ipaddresses"}, {"create", "ipaddresses"}, {"delete", "ipaddresses"}, {"create", "ipaddresses"}},
@@ -165,28 +204,98 @@ func TestRepairServiceIP(t *testing.T) {
 		{
 			name: "one IP out of range",
 			svcs: []*v1.Service{newService("test-svc", []string{"192.168.1.1", "2001:db8::10"})},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("192.168.1.1", newService("test-svc", []string{"192.168.1.1"})),
 				newIPAddress("2001:db8::10", newService("test-svc", []string{"2001:db8::10"})),
 			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
 			expectedIPs: []string{"2001:db8::10"},
 			actions:     [][]string{},
-			events:      []string{"Warning ClusterIPOutOfRange Cluster IP [IPv4]: 192.168.1.1 is not within the configured Service CIDR 10.0.0.0/16; please recreate service"},
+			events:      []string{"Warning ClusterIPOutOfRange Cluster IP [IPv4]: 192.168.1.1 is not within any configured Service CIDR; please recreate service"},
 		},
 		{
 			name: "one IP orphan",
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc", []string{"10.0.1.1"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
 			},
 			actions: [][]string{{"delete", "ipaddresses"}},
 			events:  []string{"Warning IPAddressNotAllocated IPAddress: 10.0.1.1 for Service bar/test-svc appears to have leaked: cleaning up"},
 		},
 		{
+			name: "one IP out of range matching the network address",
+			svcs: []*v1.Service{newService("test-svc", []string{"10.0.0.0"})},
+			ipAddresses: []*networkingv1beta1.IPAddress{
+				newIPAddress("10.0.0.0", newService("test-svc", []string{"10.0.0.0"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
+			expectedIPs: []string{"10.0.0.0"},
+			actions:     [][]string{},
+			events:      []string{"Warning ClusterIPOutOfRange Cluster IP [IPv4]: 10.0.0.0 is not within any configured Service CIDR; please recreate service"},
+		},
+		{
+			name: "one IP out of range matching the broadcast address",
+			svcs: []*v1.Service{newService("test-svc", []string{"10.0.255.255"})},
+			ipAddresses: []*networkingv1beta1.IPAddress{
+				newIPAddress("10.0.255.255", newService("test-svc", []string{"10.0.255.255"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
+			expectedIPs: []string{"10.0.255.255"},
+			actions:     [][]string{},
+			events:      []string{"Warning ClusterIPOutOfRange Cluster IP [IPv4]: 10.0.255.255 is not within any configured Service CIDR; please recreate service"},
+		},
+		{
+			name: "one IPv6 out of range matching the subnet address",
+			svcs: []*v1.Service{newService("test-svc", []string{"2001:db8::"})},
+			ipAddresses: []*networkingv1beta1.IPAddress{
+				newIPAddress("2001:db8::", newService("test-svc", []string{"2001:db8::"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
+			expectedIPs: []string{"2001:db8::"},
+			actions:     [][]string{},
+			events:      []string{"Warning ClusterIPOutOfRange Cluster IP [IPv6]: 2001:db8:: is not within any configured Service CIDR; please recreate service"},
+		},
+		{
+			name: "one IPv6 matching the broadcast address",
+			svcs: []*v1.Service{newService("test-svc", []string{"2001:db8::ffff:ffff:ffff:ffff"})},
+			ipAddresses: []*networkingv1beta1.IPAddress{
+				newIPAddress("2001:db8::ffff:ffff:ffff:ffff", newService("test-svc", []string{"2001:db8::ffff:ffff:ffff:ffff"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
+			expectedIPs: []string{"2001:db8::ffff:ffff:ffff:ffff"},
+		},
+		{
+			name: "one IP orphan matching the broadcast address",
+			ipAddresses: []*networkingv1beta1.IPAddress{
+				newIPAddress("10.0.255.255", newService("test-svc", []string{"10.0.255.255"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
+			actions: [][]string{{"delete", "ipaddresses"}},
+			events:  []string{"Warning IPAddressNotAllocated IPAddress: 10.0.255.255 for Service bar/test-svc appears to have leaked: cleaning up"},
+		},
+		{
 			name: "Two IPAddresses referencing the same service",
 			svcs: []*v1.Service{newService("test-svc", []string{"10.0.1.1"})},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc", []string{"10.0.1.1"})),
 				newIPAddress("10.0.1.2", newService("test-svc", []string{"10.0.1.1"})),
+			},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
 			},
 			actions: [][]string{{"delete", "ipaddresses"}},
 			events:  []string{"Warning IPAddressWrongReference IPAddress: 10.0.1.2 for Service bar/test-svc has a wrong reference; cleaning up"},
@@ -197,10 +306,13 @@ func TestRepairServiceIP(t *testing.T) {
 				newService("test-svc", []string{"10.0.1.1"}),
 				newService("test-svc2", []string{"10.0.1.1"}),
 			},
-			ipAddresses: []*networkingv1alpha1.IPAddress{
+			ipAddresses: []*networkingv1beta1.IPAddress{
 				newIPAddress("10.0.1.1", newService("test-svc2", []string{"10.0.1.1"})),
 			},
-			events: []string{"Warning ClusterIPAlreadyAllocated Cluster IP [4]:10.0.1.1 was assigned to multiple services; please recreate service"},
+			cidrs: []*networkingv1beta1.ServiceCIDR{
+				newServiceCIDR("kubernetes", serviceCIDRv4, serviceCIDRv6),
+			},
+			events: []string{"Warning ClusterIPAlreadyAllocated Cluster IP [IPv4]:10.0.1.1 was assigned to multiple services; please recreate service"},
 		},
 	}
 
@@ -208,9 +320,18 @@ func TestRepairServiceIP(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 
 			c, r := newFakeRepair()
+			// add cidrs
+			for _, cidr := range test.cidrs {
+				err := r.serviceCIDRStore.Add(cidr)
+				if err != nil {
+					t.Errorf("Unexpected error trying to add Service %v object: %v", cidr, err)
+				}
+			}
+
 			// override for testing
 			r.servicesSynced = func() bool { return true }
 			r.ipAddressSynced = func() bool { return true }
+			r.serviceCIDRSynced = func() bool { return true }
 			recorder := events.NewFakeRecorder(100)
 			r.recorder = recorder
 			for _, svc := range test.svcs {
@@ -228,8 +349,7 @@ func TestRepairServiceIP(t *testing.T) {
 				}
 			}
 
-			err := r.runOnce()
-			if err != nil {
+			if err := r.runOnce(); err != nil {
 				t.Fatal(err)
 			}
 
@@ -250,23 +370,23 @@ func TestRepairServiceIP(t *testing.T) {
 func TestRepairIPAddress_syncIPAddress(t *testing.T) {
 	tests := []struct {
 		name    string
-		ip      *networkingv1alpha1.IPAddress
+		ip      *networkingv1beta1.IPAddress
 		actions [][]string // verb and resource
 		wantErr bool
 	}{
 		{
 			name: "correct ipv4 address",
-			ip: &networkingv1alpha1.IPAddress{
+			ip: &networkingv1beta1.IPAddress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "10.0.1.1",
 					Labels: map[string]string{
-						networkingv1alpha1.LabelIPAddressFamily: string(v1.IPv4Protocol),
-						networkingv1alpha1.LabelManagedBy:       ipallocator.ControllerName,
+						networkingv1beta1.LabelIPAddressFamily: string(v1.IPv4Protocol),
+						networkingv1beta1.LabelManagedBy:       ipallocator.ControllerName,
 					},
 					CreationTimestamp: metav1.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC),
 				},
-				Spec: networkingv1alpha1.IPAddressSpec{
-					ParentRef: &networkingv1alpha1.ParentReference{
+				Spec: networkingv1beta1.IPAddressSpec{
+					ParentRef: &networkingv1beta1.ParentReference{
 						Group:     "",
 						Resource:  "services",
 						Name:      "foo",
@@ -277,17 +397,17 @@ func TestRepairIPAddress_syncIPAddress(t *testing.T) {
 		},
 		{
 			name: "correct ipv6 address",
-			ip: &networkingv1alpha1.IPAddress{
+			ip: &networkingv1beta1.IPAddress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "2001:db8::11",
 					Labels: map[string]string{
-						networkingv1alpha1.LabelIPAddressFamily: string(v1.IPv6Protocol),
-						networkingv1alpha1.LabelManagedBy:       ipallocator.ControllerName,
+						networkingv1beta1.LabelIPAddressFamily: string(v1.IPv6Protocol),
+						networkingv1beta1.LabelManagedBy:       ipallocator.ControllerName,
 					},
 					CreationTimestamp: metav1.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC),
 				},
-				Spec: networkingv1alpha1.IPAddressSpec{
-					ParentRef: &networkingv1alpha1.ParentReference{
+				Spec: networkingv1beta1.IPAddressSpec{
+					ParentRef: &networkingv1beta1.ParentReference{
 						Group:     "",
 						Resource:  "services",
 						Name:      "foo",
@@ -298,17 +418,17 @@ func TestRepairIPAddress_syncIPAddress(t *testing.T) {
 		},
 		{
 			name: "not managed by this controller",
-			ip: &networkingv1alpha1.IPAddress{
+			ip: &networkingv1beta1.IPAddress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "2001:db8::11",
 					Labels: map[string]string{
-						networkingv1alpha1.LabelIPAddressFamily: string(v1.IPv6Protocol),
-						networkingv1alpha1.LabelManagedBy:       "controller-foo",
+						networkingv1beta1.LabelIPAddressFamily: string(v1.IPv6Protocol),
+						networkingv1beta1.LabelManagedBy:       "controller-foo",
 					},
 					CreationTimestamp: metav1.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC),
 				},
-				Spec: networkingv1alpha1.IPAddressSpec{
-					ParentRef: &networkingv1alpha1.ParentReference{
+				Spec: networkingv1beta1.IPAddressSpec{
+					ParentRef: &networkingv1beta1.ParentReference{
 						Group:     "networking.gateway.k8s.io",
 						Resource:  "gateway",
 						Name:      "foo",
@@ -319,17 +439,17 @@ func TestRepairIPAddress_syncIPAddress(t *testing.T) {
 		},
 		{
 			name: "out of range",
-			ip: &networkingv1alpha1.IPAddress{
+			ip: &networkingv1beta1.IPAddress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "fd00:db8::11",
 					Labels: map[string]string{
-						networkingv1alpha1.LabelIPAddressFamily: string(v1.IPv6Protocol),
-						networkingv1alpha1.LabelManagedBy:       ipallocator.ControllerName,
+						networkingv1beta1.LabelIPAddressFamily: string(v1.IPv6Protocol),
+						networkingv1beta1.LabelManagedBy:       ipallocator.ControllerName,
 					},
 					CreationTimestamp: metav1.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC),
 				},
-				Spec: networkingv1alpha1.IPAddressSpec{
-					ParentRef: &networkingv1alpha1.ParentReference{
+				Spec: networkingv1beta1.IPAddressSpec{
+					ParentRef: &networkingv1beta1.ParentReference{
 						Group:     "",
 						Resource:  "services",
 						Name:      "foo",
@@ -340,17 +460,17 @@ func TestRepairIPAddress_syncIPAddress(t *testing.T) {
 		},
 		{
 			name: "leaked ip",
-			ip: &networkingv1alpha1.IPAddress{
+			ip: &networkingv1beta1.IPAddress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "10.0.1.1",
 					Labels: map[string]string{
-						networkingv1alpha1.LabelIPAddressFamily: string(v1.IPv6Protocol),
-						networkingv1alpha1.LabelManagedBy:       ipallocator.ControllerName,
+						networkingv1beta1.LabelIPAddressFamily: string(v1.IPv6Protocol),
+						networkingv1beta1.LabelManagedBy:       ipallocator.ControllerName,
 					},
 					CreationTimestamp: metav1.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC),
 				},
-				Spec: networkingv1alpha1.IPAddressSpec{
-					ParentRef: &networkingv1alpha1.ParentReference{
+				Spec: networkingv1beta1.IPAddressSpec{
+					ParentRef: &networkingv1beta1.ParentReference{
 						Group:     "",
 						Resource:  "services",
 						Name:      "noexist",
@@ -400,6 +520,20 @@ func newService(name string, ips []string) *v1.Service {
 		},
 	}
 	return svc
+}
+
+func newServiceCIDR(name, primary, secondary string) *networkingv1beta1.ServiceCIDR {
+	serviceCIDR := &networkingv1beta1.ServiceCIDR{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: networkingv1beta1.ServiceCIDRSpec{},
+	}
+	serviceCIDR.Spec.CIDRs = append(serviceCIDR.Spec.CIDRs, primary)
+	if secondary != "" {
+		serviceCIDR.Spec.CIDRs = append(serviceCIDR.Spec.CIDRs, secondary)
+	}
+	return serviceCIDR
 }
 
 func expectAction(t *testing.T, actions []k8stesting.Action, expected [][]string) {

@@ -34,7 +34,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/discovery"
 	appsv1informers "k8s.io/client-go/informers/apps/v1"
 	coreinformers "k8s.io/client-go/informers/core/v1"
@@ -74,9 +73,6 @@ const (
 	// Once the timeout is reached, this controller attempts to set the status
 	// of the condition to False.
 	stalePodDisruptionTimeout = 2 * time.Minute
-
-	// field manager used to disable the pod failure condition
-	fieldManager = "DisruptionController"
 )
 
 type updater func(context.Context, *policy.PodDisruptionBudget) error
@@ -107,11 +103,11 @@ type DisruptionController struct {
 	ssListerSynced cache.InformerSynced
 
 	// PodDisruptionBudget keys that need to be synced.
-	queue        workqueue.RateLimitingInterface
-	recheckQueue workqueue.DelayingInterface
+	queue        workqueue.TypedRateLimitingInterface[string]
+	recheckQueue workqueue.TypedDelayingInterface[string]
 
 	// pod keys that need to be synced due to a stale DisruptionTarget condition.
-	stalePodDisruptionQueue   workqueue.RateLimitingInterface
+	stalePodDisruptionQueue   workqueue.TypedRateLimitingInterface[string]
 	stalePodDisruptionTimeout time.Duration
 
 	broadcaster record.EventBroadcaster
@@ -181,11 +177,30 @@ func NewDisruptionControllerInternal(ctx context.Context,
 ) *DisruptionController {
 	logger := klog.FromContext(ctx)
 	dc := &DisruptionController{
-		kubeClient:                kubeClient,
-		queue:                     workqueue.NewRateLimitingQueueWithDelayingInterface(workqueue.NewDelayingQueueWithCustomClock(clock, "disruption"), workqueue.DefaultControllerRateLimiter()),
-		recheckQueue:              workqueue.NewDelayingQueueWithCustomClock(clock, "disruption_recheck"),
-		stalePodDisruptionQueue:   workqueue.NewRateLimitingQueueWithDelayingInterface(workqueue.NewDelayingQueueWithCustomClock(clock, "stale_pod_disruption"), workqueue.DefaultControllerRateLimiter()),
-		broadcaster:               record.NewBroadcaster(),
+		kubeClient: kubeClient,
+		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[string](),
+			workqueue.TypedRateLimitingQueueConfig[string]{
+				DelayingQueue: workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{
+					Clock: clock,
+					Name:  "disruption",
+				}),
+			},
+		),
+		recheckQueue: workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{
+			Clock: clock,
+			Name:  "disruption_recheck",
+		}),
+		stalePodDisruptionQueue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[string](),
+			workqueue.TypedRateLimitingQueueConfig[string]{
+				DelayingQueue: workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{
+					Clock: clock,
+					Name:  "stale_pod_disruption",
+				}),
+			},
+		),
+		broadcaster:               record.NewBroadcaster(record.WithContext(ctx)),
 		stalePodDisruptionTimeout: stalePodDisruptionTimeout,
 	}
 	dc.recorder = dc.broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "controllermanager"})
@@ -621,13 +636,13 @@ func (dc *DisruptionController) processNextWorkItem(ctx context.Context) bool {
 	}
 	defer dc.queue.Done(dKey)
 
-	err := dc.sync(ctx, dKey.(string))
+	err := dc.sync(ctx, dKey)
 	if err == nil {
 		dc.queue.Forget(dKey)
 		return true
 	}
 
-	utilruntime.HandleError(fmt.Errorf("Error syncing PodDisruptionBudget %v, requeuing: %v", dKey.(string), err))
+	utilruntime.HandleError(fmt.Errorf("Error syncing PodDisruptionBudget %v, requeuing: %w", dKey, err)) //nolint:stylecheck
 	dc.queue.AddRateLimited(dKey)
 
 	return true
@@ -659,12 +674,12 @@ func (dc *DisruptionController) processNextStalePodDisruptionWorkItem(ctx contex
 		return false
 	}
 	defer dc.stalePodDisruptionQueue.Done(key)
-	err := dc.syncStalePodDisruption(ctx, key.(string))
+	err := dc.syncStalePodDisruption(ctx, key)
 	if err == nil {
 		dc.stalePodDisruptionQueue.Forget(key)
 		return true
 	}
-	utilruntime.HandleError(fmt.Errorf("error syncing Pod %v to clear DisruptionTarget condition, requeueing: %v", key.(string), err))
+	utilruntime.HandleError(fmt.Errorf("error syncing Pod %v to clear DisruptionTarget condition, requeueing: %w", key, err))
 	dc.stalePodDisruptionQueue.AddRateLimited(key)
 	return true
 }
@@ -770,16 +785,15 @@ func (dc *DisruptionController) syncStalePodDisruption(ctx context.Context, key 
 		return nil
 	}
 
-	podApply := corev1apply.Pod(pod.Name, pod.Namespace).
-		WithStatus(corev1apply.PodStatus()).
-		WithResourceVersion(pod.ResourceVersion)
-	podApply.Status.WithConditions(corev1apply.PodCondition().
-		WithType(v1.DisruptionTarget).
-		WithStatus(v1.ConditionFalse).
-		WithLastTransitionTime(metav1.Now()),
-	)
-
-	if _, err := dc.kubeClient.CoreV1().Pods(pod.Namespace).ApplyStatus(ctx, podApply, metav1.ApplyOptions{FieldManager: fieldManager, Force: true}); err != nil {
+	newPod := pod.DeepCopy()
+	updated := apipod.UpdatePodCondition(&newPod.Status, &v1.PodCondition{
+		Type:   v1.DisruptionTarget,
+		Status: v1.ConditionFalse,
+	})
+	if !updated {
+		return nil
+	}
+	if _, err := dc.kubeClient.CoreV1().Pods(pod.Namespace).UpdateStatus(ctx, newPod, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 	logger.V(2).Info("Reset stale DisruptionTarget condition to False", "pod", klog.KObj(pod))
@@ -999,6 +1013,7 @@ func (dc *DisruptionController) updatePdbStatus(ctx context.Context, pdb *policy
 		DisruptionsAllowed: disruptionsAllowed,
 		DisruptedPods:      disruptedPods,
 		ObservedGeneration: pdb.Generation,
+		Conditions:         newPdb.Status.Conditions,
 	}
 
 	pdbhelper.UpdateDisruptionAllowedCondition(newPdb)

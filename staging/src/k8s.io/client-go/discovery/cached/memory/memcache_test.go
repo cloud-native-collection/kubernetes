@@ -28,7 +28,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apidiscovery "k8s.io/api/apidiscovery/v2beta1"
+	apidiscovery "k8s.io/api/apidiscovery/v2"
 	errorsutil "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -411,7 +411,7 @@ func TestOpenAPIMemCache(t *testing.T) {
 	require.NoError(t, err)
 	defer fakeServer.HttpServer.Close()
 
-	require.Greater(t, len(fakeServer.ServedDocuments), 0)
+	require.NotEmpty(t, fakeServer.ServedDocuments)
 
 	client := NewMemCacheClient(
 		discovery.NewDiscoveryClientForConfigOrDie(
@@ -604,7 +604,7 @@ func TestMemCacheGroupsAndMaybeResources(t *testing.T) {
 		require.NoError(t, err)
 		// "Unaggregated" discovery always returns nil for resources.
 		assert.Nil(t, resourcesMap)
-		assert.True(t, len(failedGVs) == 0, "expected empty failed GroupVersions, got (%d)", len(failedGVs))
+		assert.Emptyf(t, failedGVs, "expected empty failed GroupVersions, got (%d)", len(failedGVs))
 		assert.False(t, memClient.receivedAggregatedDiscovery)
 		assert.True(t, memClient.Fresh())
 		// Test the expected groups are returned for the aggregated format.
@@ -1118,7 +1118,7 @@ func TestAggregatedMemCacheGroupsAndMaybeResources(t *testing.T) {
 			output, err := json.Marshal(agg)
 			require.NoError(t, err)
 			// Content-type is "aggregated" discovery format.
-			w.Header().Set("Content-Type", discovery.AcceptV2Beta1)
+			w.Header().Set("Content-Type", discovery.AcceptV2)
 			w.WriteHeader(http.StatusOK)
 			w.Write(output)
 		}))
@@ -1161,6 +1161,7 @@ func TestAggregatedMemCacheGroupsAndMaybeResources(t *testing.T) {
 		memClient.Invalidate()
 		assert.False(t, memClient.Fresh())
 		apiGroupList, _, _, err = memClient.GroupsAndMaybeResources()
+
 		require.NoError(t, err)
 		// Test the expected groups are returned for the aggregated format.
 		actualGroupNames = sets.NewString(groupNamesFromList(apiGroupList)...)

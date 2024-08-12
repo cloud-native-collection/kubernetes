@@ -43,7 +43,7 @@ func TestPullImage(t *testing.T) {
 
 	images, err := fakeManager.ListImages(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(images))
+	assert.Len(t, images, 1)
 	assert.Equal(t, images[0].RepoTags, []string{"busybox"})
 }
 
@@ -64,7 +64,7 @@ func TestPullImageWithError(t *testing.T) {
 
 	images, err := fakeManager.ListImages(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(images))
+	assert.Empty(t, images)
 }
 
 func TestPullImageWithInvalidImageName(t *testing.T) {
@@ -88,17 +88,17 @@ func TestListImages(t *testing.T) {
 	assert.NoError(t, err)
 
 	images := []string{"1111", "2222", "3333"}
-	expected := sets.NewString(images...)
+	expected := sets.New[string](images...)
 	fakeImageService.SetFakeImages(images)
 
 	actualImages, err := fakeManager.ListImages(ctx)
 	assert.NoError(t, err)
-	actual := sets.NewString()
+	actual := sets.New[string]()
 	for _, i := range actualImages {
 		actual.Insert(i.ID)
 	}
 
-	assert.Equal(t, expected.List(), actual.List())
+	assert.Equal(t, sets.List(expected), sets.List(actual))
 }
 
 func TestListImagesPinnedField(t *testing.T) {
@@ -149,6 +149,20 @@ func TestGetImageRef(t *testing.T) {
 	assert.Equal(t, image, imageRef)
 }
 
+func TestImageSize(t *testing.T) {
+	ctx := context.Background()
+	_, fakeImageService, fakeManager, err := createTestRuntimeManager()
+	assert.NoError(t, err)
+
+	const imageSize = uint64(64)
+	fakeImageService.SetFakeImageSize(imageSize)
+	image := "busybox"
+	fakeImageService.SetFakeImages([]string{image})
+	actualSize, err := fakeManager.GetImageSize(ctx, kubecontainer.ImageSpec{Image: image})
+	assert.NoError(t, err)
+	assert.Equal(t, imageSize, actualSize)
+}
+
 func TestGetImageRefImageNotAvailableLocally(t *testing.T) {
 	ctx := context.Background()
 	_, _, fakeManager, err := createTestRuntimeManager()
@@ -184,11 +198,11 @@ func TestRemoveImage(t *testing.T) {
 
 	_, err = fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: "busybox"}, nil, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(fakeImageService.Images))
+	assert.Len(t, fakeImageService.Images, 1)
 
 	err = fakeManager.RemoveImage(ctx, kubecontainer.ImageSpec{Image: "busybox"})
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(fakeImageService.Images))
+	assert.Empty(t, fakeImageService.Images)
 }
 
 func TestRemoveImageNoOpIfImageNotLocal(t *testing.T) {
@@ -207,13 +221,13 @@ func TestRemoveImageWithError(t *testing.T) {
 
 	_, err = fakeManager.PullImage(ctx, kubecontainer.ImageSpec{Image: "busybox"}, nil, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(fakeImageService.Images))
+	assert.Len(t, fakeImageService.Images, 1)
 
 	fakeImageService.InjectError("RemoveImage", fmt.Errorf("test-failure"))
 
 	err = fakeManager.RemoveImage(ctx, kubecontainer.ImageSpec{Image: "busybox"})
 	assert.Error(t, err)
-	assert.Equal(t, 1, len(fakeImageService.Images))
+	assert.Len(t, fakeImageService.Images, 1)
 }
 
 func TestImageStats(t *testing.T) {
@@ -367,7 +381,7 @@ func TestPullWithSecretsWithError(t *testing.T) {
 
 			images, err := fakeManager.ListImages(ctx)
 			assert.NoError(t, err)
-			assert.Equal(t, 0, len(images))
+			assert.Empty(t, images)
 		})
 	}
 }
@@ -389,6 +403,6 @@ func TestPullThenListWithAnnotations(t *testing.T) {
 
 	images, err := fakeManager.ListImages(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(images))
+	assert.Len(t, images, 1)
 	assert.Equal(t, images[0].Spec, imageSpec)
 }

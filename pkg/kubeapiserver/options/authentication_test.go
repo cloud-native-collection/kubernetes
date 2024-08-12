@@ -17,9 +17,11 @@ limitations under the License.
 package options
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -33,21 +35,30 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticatorfactory"
 	"k8s.io/apiserver/pkg/authentication/request/headerrequest"
 	"k8s.io/apiserver/pkg/features"
+	genericapiserver "k8s.io/apiserver/pkg/server"
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/component-base/featuregate"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	openapicommon "k8s.io/kube-openapi/pkg/common"
+	kubefeatures "k8s.io/kubernetes/pkg/features"
 	kubeauthenticator "k8s.io/kubernetes/pkg/kubeapiserver/authenticator"
+	"k8s.io/kubernetes/pkg/serviceaccount"
 	"k8s.io/utils/pointer"
 )
 
 func TestAuthenticationValidate(t *testing.T) {
 	testCases := []struct {
-		name                         string
-		testOIDC                     *OIDCAuthenticationOptions
-		testSA                       *ServiceAccountAuthenticationOptions
-		testWebHook                  *WebHookAuthenticationOptions
-		testAuthenticationConfigFile string
-		expectErr                    string
+		name                              string
+		testAnonymous                     *AnonymousAuthenticationOptions
+		testOIDC                          *OIDCAuthenticationOptions
+		testSA                            *ServiceAccountAuthenticationOptions
+		testWebHook                       *WebHookAuthenticationOptions
+		testAuthenticationConfigFile      string
+		expectErr                         string
+		enabledFeatures, disabledFeatures []featuregate.Feature
 	}{
 		{
 			name: "test when OIDC and ServiceAccounts are nil",
@@ -210,9 +221,9 @@ func TestAuthenticationValidate(t *testing.T) {
 			expectErr: "number of webhook retry attempts must be greater than 0, but is: 0",
 		},
 		{
-			name:                         "test when authentication config file is set without feature gate",
+			name:                         "test when authentication config file is set (feature gate enabled by default)",
 			testAuthenticationConfigFile: "configfile",
-			expectErr:                    "set --feature-gates=StructuredAuthenticationConfiguration=true to use authentication-config file",
+			expectErr:                    "",
 		},
 		{
 			name:                         "test when authentication config file and oidc-* flags are set",
@@ -226,16 +237,37 @@ func TestAuthenticationValidate(t *testing.T) {
 			},
 			expectErr: "authentication-config file and oidc-* flags are mutually exclusive",
 		},
+		{
+			name:             "fails to validate if ServiceAccountTokenNodeBindingValidation is disabled and ServiceAccountTokenNodeBinding is enabled",
+			enabledFeatures:  []featuregate.Feature{kubefeatures.ServiceAccountTokenNodeBinding},
+			disabledFeatures: []featuregate.Feature{kubefeatures.ServiceAccountTokenNodeBindingValidation},
+			expectErr:        "the \"ServiceAccountTokenNodeBinding\" feature gate can only be enabled if the \"ServiceAccountTokenNodeBindingValidation\" feature gate is also enabled",
+		},
+		{
+			name:                         "test when authentication config file and anonymous-auth flags are set AnonymousAuthConfigurableEndpoints disabled",
+			disabledFeatures:             []featuregate.Feature{features.AnonymousAuthConfigurableEndpoints},
+			testAuthenticationConfigFile: "configfile",
+			testAnonymous: &AnonymousAuthenticationOptions{
+				Allow:       true,
+				areFlagsSet: func() bool { return true },
+			},
+		},
 	}
 
 	for _, testcase := range testCases {
 		t.Run(testcase.name, func(t *testing.T) {
 			options := NewBuiltInAuthenticationOptions()
+			options.Anonymous = testcase.testAnonymous
 			options.OIDC = testcase.testOIDC
 			options.ServiceAccounts = testcase.testSA
 			options.WebHook = testcase.testWebHook
 			options.AuthenticationConfigFile = testcase.testAuthenticationConfigFile
-
+			for _, f := range testcase.enabledFeatures {
+				featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, f, true)
+			}
+			for _, f := range testcase.disabledFeatures {
+				featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, f, false)
+			}
 			errs := options.Validate()
 			if len(errs) > 0 && (!strings.Contains(utilerrors.NewAggregate(errs).Error(), testcase.expectErr) || testcase.expectErr == "") {
 				t.Errorf("Got err: %v, Expected err: %s", errs, testcase.expectErr)
@@ -289,7 +321,7 @@ func TestToAuthenticationConfig(t *testing.T) {
 
 	expectConfig := kubeauthenticator.Config{
 		APIAudiences:            authenticator.Audiences{"http://foo.bar.com"},
-		Anonymous:               false,
+		Anonymous:               apiserver.AnonymousAuthConfig{Enabled: false},
 		BootstrapToken:          false,
 		ClientCAContentProvider: nil, // this is nil because you can't compare functions
 		TokenAuthFile:           "/testTokenFile",
@@ -440,12 +472,326 @@ func TestBuiltInAuthenticationOptionsAddFlags(t *testing.T) {
 	// nil these out because you cannot compare functions
 	opts.OIDC.areFlagsConfigured = nil
 
+	if !opts.Anonymous.areFlagsSet() {
+		t.Fatalf("Anonymous flags should be configured")
+	}
+
+	// nil these out because you cannot compare functions
+	opts.Anonymous.areFlagsSet = nil
+
 	if !reflect.DeepEqual(opts, expected) {
-		t.Error(cmp.Diff(opts, expected, cmp.AllowUnexported(OIDCAuthenticationOptions{})))
+		t.Error(cmp.Diff(opts, expected, cmp.AllowUnexported(OIDCAuthenticationOptions{}, AnonymousAuthenticationOptions{})))
+	}
+}
+
+func TestWithTokenGetterFunction(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, kubefeatures.ServiceAccountTokenNodeBindingValidation, false)
+	fakeClientset := fake.NewSimpleClientset()
+	versionedInformer := informers.NewSharedInformerFactory(fakeClientset, 0)
+	{
+		var called bool
+		f := func(factory informers.SharedInformerFactory) serviceaccount.ServiceAccountTokenGetter {
+			called = true
+			return nil
+		}
+		opts := NewBuiltInAuthenticationOptions().WithServiceAccounts()
+		opts.ServiceAccounts.OptionalTokenGetter = f
+		err := opts.ApplyTo(context.Background(), &genericapiserver.AuthenticationInfo{}, nil, nil, &openapicommon.Config{}, nil, fakeClientset, versionedInformer, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !called {
+			t.Fatal("expected token getter function to be called")
+		}
+	}
+	{
+		opts := NewBuiltInAuthenticationOptions().WithServiceAccounts()
+		err := opts.ApplyTo(context.Background(), &genericapiserver.AuthenticationInfo{}, nil, nil, &openapicommon.Config{}, nil, fakeClientset, versionedInformer, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestToAuthenticationConfig_Anonymous(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, true)
+	testCases := []struct {
+		name                     string
+		args                     []string
+		expectConfig             kubeauthenticator.Config
+		enableAnonymousEndpoints bool
+		expectErr                string
+	}{
+		{
+			name: "flag-none",
+			args: []string{},
+			expectConfig: kubeauthenticator.Config{
+				Anonymous:            apiserver.AnonymousAuthConfig{Enabled: true},
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{},
+				TokenSuccessCacheTTL: 10 * time.Second,
+			},
+		},
+		{
+			name: "flag-anonymous-enabled",
+			args: []string{"--anonymous-auth=True"},
+			expectConfig: kubeauthenticator.Config{
+				Anonymous:            apiserver.AnonymousAuthConfig{Enabled: true},
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{},
+				TokenSuccessCacheTTL: 10 * time.Second,
+			},
+		},
+		{
+			name: "flag-anonymous-disabled",
+			args: []string{"--anonymous-auth=False"},
+			expectConfig: kubeauthenticator.Config{
+				Anonymous:            apiserver.AnonymousAuthConfig{Enabled: false},
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{},
+				TokenSuccessCacheTTL: 10 * time.Second,
+			},
+		},
+		{
+			name: "file-anonymous-disabled-AnonymousAuthConfigurableEndpoints-disabled",
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: false
+`),
+			},
+			expectErr: "anonymous is not supported when AnonymousAuthConfigurableEnpoints feature gate is disabled",
+		},
+		{
+			name:                     "file-anonymous-disabled-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: false
+`),
+			},
+			expectConfig: kubeauthenticator.Config{
+				Anonymous:            apiserver.AnonymousAuthConfig{Enabled: false},
+				TokenSuccessCacheTTL: 10 * time.Second,
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{
+					Anonymous: &apiserver.AnonymousAuthConfig{Enabled: false},
+				},
+				AuthenticationConfigData: `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: false
+`,
+				OIDCSigningAlgs: []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
+			},
+		},
+		{
+			name:                     "file-anonymous-enabled-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+`),
+			},
+			expectConfig: kubeauthenticator.Config{
+				Anonymous:            apiserver.AnonymousAuthConfig{Enabled: true},
+				TokenSuccessCacheTTL: 10 * time.Second,
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{
+					Anonymous: &apiserver.AnonymousAuthConfig{Enabled: true},
+				},
+				AuthenticationConfigData: `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+`,
+				OIDCSigningAlgs: []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
+			},
+		},
+		{
+			name:                     "file-anonymous-disabled-with-conditions-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: false
+  conditions:
+  - path: "/livez"
+`),
+			},
+			expectErr: "enabled should be set to true when conditions are defined",
+		},
+		{
+			name:                     "file-anonymous-missing-with-conditions-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  conditions:
+  - path: "/livez"
+`),
+			},
+			expectErr: "enabled should be set to true when conditions are defined",
+		},
+		{
+			name:                     "file-anonymous-enabled-with-conditions-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+  conditions:
+  - path: "/livez"
+`),
+			},
+			expectConfig: kubeauthenticator.Config{
+				Anonymous: apiserver.AnonymousAuthConfig{
+					Enabled: true,
+					Conditions: []apiserver.AnonymousAuthCondition{
+						{
+							Path: "/livez",
+						},
+					},
+				},
+				TokenSuccessCacheTTL: 10 * time.Second,
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{
+					Anonymous: &apiserver.AnonymousAuthConfig{
+						Enabled: true,
+						Conditions: []apiserver.AnonymousAuthCondition{
+							{
+								Path: "/livez",
+							},
+						},
+					},
+				},
+				AuthenticationConfigData: `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+  conditions:
+  - path: "/livez"
+`,
+				OIDCSigningAlgs: []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
+			},
+		},
+		{
+			name:                     "flag-anonymous-enabled-file-anonymous-enabled-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{"--anonymous-auth=True",
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+`),
+			},
+			expectErr: "--anonynous-auth flag cannot be set when anonymous field is configured in authentication configuration file",
+		},
+		{
+			name:                     "flag-anonymous-enabled-file-anonymous-notset-AnonymousAuthConfigurableEndpoints-enabled",
+			enableAnonymousEndpoints: true,
+			args: []string{"--anonymous-auth=True",
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+    audiences: [ "🐼" ]
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`),
+			},
+			expectConfig: kubeauthenticator.Config{
+				TokenSuccessCacheTTL: 10 * time.Second,
+				Anonymous:            apiserver.AnonymousAuthConfig{Enabled: true},
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{
+					JWT: []apiserver.JWTAuthenticator{
+						{
+							Issuer: apiserver.Issuer{
+								URL:       "https://test-issuer",
+								Audiences: []string{"🐼"},
+							},
+							ClaimMappings: apiserver.ClaimMappings{
+								Username: apiserver.PrefixedClaimOrExpression{
+									Claim:  "sub",
+									Prefix: pointer.String(""),
+								},
+							},
+						},
+					},
+				},
+				AuthenticationConfigData: `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+    audiences: [ "🐼" ]
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`,
+				OIDCSigningAlgs: []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
+			},
+		},
+	}
+
+	for _, testcase := range testCases {
+		t.Run(testcase.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.AnonymousAuthConfigurableEndpoints, testcase.enableAnonymousEndpoints)
+			opts := NewBuiltInAuthenticationOptions().WithAnonymous()
+			pf := pflag.NewFlagSet("test-builtin-authentication-opts", pflag.ContinueOnError)
+			opts.AddFlags(pf)
+
+			if err := pf.Parse(testcase.args); err != nil {
+				t.Fatal(err)
+			}
+
+			resultConfig, err := opts.ToAuthenticationConfig()
+
+			if testcase.expectErr != "" {
+				if err == nil {
+					t.Fatalf("Got err: %v; Want err: %v", err, testcase.expectErr)
+				}
+
+				if !strings.Contains(err.Error(), testcase.expectErr) {
+					t.Fatalf("Got err: %v; Want err: %v", err, testcase.expectErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(resultConfig, testcase.expectConfig) {
+				t.Error(cmp.Diff(resultConfig, testcase.expectConfig))
+			}
+		})
 	}
 }
 
 func TestToAuthenticationConfig_OIDC(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, true)
+
 	testCases := []struct {
 		name         string
 		args         []string
@@ -640,6 +986,55 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 				OIDCSigningAlgs: []string{"RS256"},
 			},
 		},
+		{
+			name: "basic authentication configuration",
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+    audiences: [ "🐼" ]
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`),
+			},
+			expectConfig: kubeauthenticator.Config{
+				TokenSuccessCacheTTL: 10 * time.Second,
+				AuthenticationConfig: &apiserver.AuthenticationConfiguration{
+					JWT: []apiserver.JWTAuthenticator{
+						{
+							Issuer: apiserver.Issuer{
+								URL:       "https://test-issuer",
+								Audiences: []string{"🐼"},
+							},
+							ClaimMappings: apiserver.ClaimMappings{
+								Username: apiserver.PrefixedClaimOrExpression{
+									Claim:  "sub",
+									Prefix: pointer.String(""),
+								},
+							},
+						},
+					},
+				},
+				AuthenticationConfigData: `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+    audiences: [ "🐼" ]
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`,
+				OIDCSigningAlgs: []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
+			},
+		},
 	}
 
 	for _, testcase := range testCases {
@@ -808,7 +1203,7 @@ func TestValidateOIDCOptions(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, tt.structuredAuthenticationConfigEnabled)()
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, tt.structuredAuthenticationConfigEnabled)
 
 			opts := NewBuiltInAuthenticationOptions().WithOIDC()
 			pf := pflag.NewFlagSet("test-builtin-authentication-opts", pflag.ContinueOnError)
@@ -834,15 +1229,16 @@ func TestValidateOIDCOptions(t *testing.T) {
 
 func TestLoadAuthenticationConfig(t *testing.T) {
 	testCases := []struct {
-		name           string
-		file           func() string
-		expectErr      string
-		expectedConfig *apiserver.AuthenticationConfiguration
+		name                string
+		file                func() string
+		expectErr           string
+		expectedConfig      *apiserver.AuthenticationConfiguration
+		expectedContentData string
 	}{
 		{
 			name:           "empty file",
 			file:           func() string { return writeTempFile(t, ``) },
-			expectErr:      "empty config file",
+			expectErr:      "empty config data",
 			expectedConfig: nil,
 		},
 		{
@@ -862,11 +1258,15 @@ func TestLoadAuthenticationConfig(t *testing.T) {
 					},
 				},
 			},
+			expectedContentData: `{
+						"apiVersion":"apiserver.config.k8s.io/v1alpha1",
+						"kind":"AuthenticationConfiguration",
+						"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`,
 		},
 		{
 			name:           "missing file",
 			file:           func() string { return "bogus-missing-file" },
-			expectErr:      "no such file or directory",
+			expectErr:      syscall.Errno(syscall.ENOENT).Error(),
 			expectedConfig: nil,
 		},
 		{
@@ -935,6 +1335,10 @@ func TestLoadAuthenticationConfig(t *testing.T) {
 					},
 				},
 			},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1alpha1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`,
 		},
 		{
 			name: "v1alpha1 - yaml",
@@ -966,6 +1370,17 @@ jwt:
 					},
 				},
 			},
+			expectedContentData: `
+apiVersion: apiserver.config.k8s.io/v1alpha1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`,
 		},
 		{
 			name: "v1alpha1 - no jwt",
@@ -975,17 +1390,99 @@ jwt:
 							"kind":"AuthenticationConfiguration"}`)
 			},
 			expectedConfig: &apiserver.AuthenticationConfiguration{},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1alpha1",
+							"kind":"AuthenticationConfiguration"}`,
+		},
+		{
+			name: "v1beta1 - json",
+			file: func() string {
+				return writeTempFile(t, `{
+							"apiVersion":"apiserver.config.k8s.io/v1beta1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{
+				JWT: []apiserver.JWTAuthenticator{
+					{
+						Issuer: apiserver.Issuer{
+							URL: "https://test-issuer",
+						},
+					},
+				},
+			},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1beta1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`,
+		},
+		{
+			name: "v1beta1 - yaml",
+			file: func() string {
+				return writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{
+				JWT: []apiserver.JWTAuthenticator{
+					{
+						Issuer: apiserver.Issuer{
+							URL: "https://test-issuer",
+						},
+						ClaimMappings: apiserver.ClaimMappings{
+							Username: apiserver.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: pointer.String(""),
+							},
+						},
+					},
+				},
+			},
+			expectedContentData: `
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`,
+		},
+		{
+			name: "v1beta1 - no jwt",
+			file: func() string {
+				return writeTempFile(t, `{
+							"apiVersion":"apiserver.config.k8s.io/v1beta1",
+							"kind":"AuthenticationConfiguration"}`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1beta1",
+							"kind":"AuthenticationConfiguration"}`,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			config, err := loadAuthenticationConfig(tc.file())
+			config, contentData, err := loadAuthenticationConfig(tc.file())
 			if !strings.Contains(errString(err), tc.expectErr) {
 				t.Fatalf("expected error %q, got %v", tc.expectErr, err)
 			}
 			if !reflect.DeepEqual(config, tc.expectedConfig) {
 				t.Fatalf("unexpected config:\n%s", cmp.Diff(tc.expectedConfig, config))
+			}
+			if contentData != tc.expectedContentData {
+				t.Errorf("unexpected content data: want=%q, got=%q", tc.expectedContentData, contentData)
 			}
 		})
 	}
@@ -998,6 +1495,10 @@ func writeTempFile(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		// An open file cannot be removed on Windows. Close it first.
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Remove(file.Name()); err != nil {
 			t.Fatal(err)
 		}

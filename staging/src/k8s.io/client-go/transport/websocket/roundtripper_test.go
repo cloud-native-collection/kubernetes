@@ -49,12 +49,12 @@ func TestWebSocketRoundTripper_RoundTripperSucceeds(t *testing.T) {
 	// Create the wrapped roundtripper and websocket upgrade roundtripper and call "RoundTrip()".
 	websocketLocation, err := url.Parse(websocketServer.URL)
 	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(context.Background(), "POST", websocketServer.URL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", websocketServer.URL, nil)
 	require.NoError(t, err)
 	rt, wsRt, err := RoundTripperFor(&restclient.Config{Host: websocketLocation.Host})
 	require.NoError(t, err)
 	requestedProtocol := remotecommand.StreamProtocolV5Name
-	req.Header[httpstream.HeaderProtocolVersion] = []string{requestedProtocol}
+	req.Header[wsstream.WebSocketProtocolHeader] = []string{requestedProtocol}
 	_, err = rt.RoundTrip(req)
 	require.NoError(t, err)
 	// WebSocket Connection is stored in websocket RoundTripper.
@@ -67,28 +67,29 @@ func TestWebSocketRoundTripper_RoundTripperSucceeds(t *testing.T) {
 func TestWebSocketRoundTripper_RoundTripperFails(t *testing.T) {
 	// Create fake WebSocket server.
 	websocketServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		conns, err := webSocketServerStreams(req, w)
-		if err != nil {
-			t.Fatalf("error on webSocketServerStreams: %v", err)
-		}
-		defer conns.conn.Close()
+		// Bad handshake means websocket server will not completely initialize.
+		_, err := webSocketServerStreams(req, w)
+		require.Error(t, err)
+		assert.True(t, strings.Contains(err.Error(), "websocket server finished before becoming ready"))
 	}))
 	defer websocketServer.Close()
 
 	// Create the wrapped roundtripper and websocket upgrade roundtripper and call "RoundTrip()".
 	websocketLocation, err := url.Parse(websocketServer.URL)
 	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(context.Background(), "POST", websocketServer.URL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", websocketServer.URL, nil)
 	require.NoError(t, err)
 	rt, _, err := RoundTripperFor(&restclient.Config{Host: websocketLocation.Host})
 	require.NoError(t, err)
 	// Requested subprotocol version 1 is not supported by test websocket server.
 	requestedProtocol := remotecommand.StreamProtocolV1Name
-	req.Header[httpstream.HeaderProtocolVersion] = []string{requestedProtocol}
+	req.Header[wsstream.WebSocketProtocolHeader] = []string{requestedProtocol}
 	_, err = rt.RoundTrip(req)
 	// Ensure a "bad handshake" error is returned, since requested protocol is not supported.
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "bad handshake"))
+	assert.True(t, strings.Contains(err.Error(), "websocket: bad handshake"))
+	assert.True(t, strings.Contains(err.Error(), "403 Forbidden"))
+	assert.True(t, httpstream.IsUpgradeFailure(err))
 }
 
 func TestWebSocketRoundTripper_NegotiateCreatesConnection(t *testing.T) {
@@ -105,7 +106,7 @@ func TestWebSocketRoundTripper_NegotiateCreatesConnection(t *testing.T) {
 	// Create the websocket roundtripper and call "Negotiate" to create websocket connection.
 	websocketLocation, err := url.Parse(websocketServer.URL)
 	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(context.Background(), "POST", websocketServer.URL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", websocketServer.URL, nil)
 	require.NoError(t, err)
 	rt, wsRt, err := RoundTripperFor(&restclient.Config{Host: websocketLocation.Host})
 	require.NoError(t, err)

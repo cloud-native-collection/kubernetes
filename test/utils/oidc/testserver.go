@@ -18,6 +18,7 @@ package oidc
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/tls"
 	"encoding/hex"
@@ -30,9 +31,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/square/go-jose.v2"
+	"k8s.io/kubernetes/test/utils/oidc/handlers"
 )
 
 const (
@@ -49,17 +50,17 @@ var (
 
 type TestServer struct {
 	httpServer   *httptest.Server
-	tokenHandler *MockTokenHandler
-	jwksHandler  *MockJWKsHandler
+	tokenHandler *handlers.MockTokenHandler
+	jwksHandler  *handlers.MockJWKsHandler
 }
 
 // JwksHandler is getter of JSON Web Key Sets handler
-func (ts *TestServer) JwksHandler() *MockJWKsHandler {
+func (ts *TestServer) JwksHandler() *handlers.MockJWKsHandler {
 	return ts.jwksHandler
 }
 
 // TokenHandler is getter of JWT token handler
-func (ts *TestServer) TokenHandler() *MockTokenHandler {
+func (ts *TestServer) TokenHandler() *handlers.MockTokenHandler {
 	return ts.tokenHandler
 }
 
@@ -79,7 +80,7 @@ func (ts *TestServer) TokenURL() (string, error) {
 }
 
 // BuildAndRunTestServer configures OIDC TLS server and its routing
-func BuildAndRunTestServer(t *testing.T, caPath, caKeyPath string) *TestServer {
+func BuildAndRunTestServer(t *testing.T, caPath, caKeyPath, issuerOverride string) *TestServer {
 	t.Helper()
 
 	certContent, err := os.ReadFile(caPath)
@@ -97,46 +98,31 @@ func BuildAndRunTestServer(t *testing.T, caPath, caKeyPath string) *TestServer {
 	}
 	httpServer.StartTLS()
 
-	mockCtrl := gomock.NewController(t)
-
 	t.Cleanup(func() {
-		mockCtrl.Finish()
 		httpServer.Close()
 	})
 
 	oidcServer := &TestServer{
 		httpServer:   httpServer,
-		tokenHandler: NewMockTokenHandler(mockCtrl),
-		jwksHandler:  NewMockJWKsHandler(mockCtrl),
+		tokenHandler: handlers.NewMockTokenHandler(t),
+		jwksHandler:  handlers.NewMockJWKsHandler(t),
+	}
+
+	issuer := httpServer.URL
+	// issuerOverride is used to override the issuer URL in the well-known configuration.
+	// This is useful to validate scenarios where discovery url is different from the issuer url.
+	if len(issuerOverride) > 0 {
+		issuer = issuerOverride
 	}
 
 	mux.HandleFunc(openIDWellKnownWebPath, func(writer http.ResponseWriter, request *http.Request) {
-		authURL, err := url.JoinPath(httpServer.URL + authWebPath)
-		require.NoError(t, err)
-		tokenURL, err := url.JoinPath(httpServer.URL + tokenWebPath)
-		require.NoError(t, err)
-		jwksURL, err := url.JoinPath(httpServer.URL + jwksWebPath)
-		require.NoError(t, err)
-		userInfoURL, err := url.JoinPath(httpServer.URL + authWebPath)
-		require.NoError(t, err)
+		discoveryDocHandler(t, writer, httpServer.URL, issuer)
+	})
 
-		err = json.NewEncoder(writer).Encode(struct {
-			Issuer      string `json:"issuer"`
-			AuthURL     string `json:"authorization_endpoint"`
-			TokenURL    string `json:"token_endpoint"`
-			JWKSURL     string `json:"jwks_uri"`
-			UserInfoURL string `json:"userinfo_endpoint"`
-		}{
-			Issuer:      httpServer.URL,
-			AuthURL:     authURL,
-			TokenURL:    tokenURL,
-			JWKSURL:     jwksURL,
-			UserInfoURL: userInfoURL,
-		})
-		require.NoError(t, err)
-
-		writer.Header().Add("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusOK)
+	// /c/d/bar/.well-known/openid-configuration is used to validate scenarios where discovery url is different from the issuer url
+	// and discovery url contains path.
+	mux.HandleFunc("/c/d/bar"+openIDWellKnownWebPath, func(writer http.ResponseWriter, request *http.Request) {
+		discoveryDocHandler(t, writer, httpServer.URL, issuer)
 	})
 
 	mux.HandleFunc(tokenWebPath, func(writer http.ResponseWriter, request *http.Request) {
@@ -170,36 +156,52 @@ func BuildAndRunTestServer(t *testing.T, caPath, caKeyPath string) *TestServer {
 	return oidcServer
 }
 
-// TokenHandlerBehaviourReturningPredefinedJWT describes the scenario when signed JWT token is being created.
-// This behaviour should being applied to the MockTokenHandler.
-func TokenHandlerBehaviourReturningPredefinedJWT(
+func discoveryDocHandler(t *testing.T, writer http.ResponseWriter, httpServerURL, issuer string) {
+	authURL, err := url.JoinPath(httpServerURL + authWebPath)
+	require.NoError(t, err)
+	tokenURL, err := url.JoinPath(httpServerURL + tokenWebPath)
+	require.NoError(t, err)
+	jwksURL, err := url.JoinPath(httpServerURL + jwksWebPath)
+	require.NoError(t, err)
+	userInfoURL, err := url.JoinPath(httpServerURL + authWebPath)
+	require.NoError(t, err)
+
+	writer.Header().Add("Content-Type", "application/json")
+
+	err = json.NewEncoder(writer).Encode(struct {
+		Issuer      string `json:"issuer"`
+		AuthURL     string `json:"authorization_endpoint"`
+		TokenURL    string `json:"token_endpoint"`
+		JWKSURL     string `json:"jwks_uri"`
+		UserInfoURL string `json:"userinfo_endpoint"`
+	}{
+		Issuer:      issuer,
+		AuthURL:     authURL,
+		TokenURL:    tokenURL,
+		JWKSURL:     jwksURL,
+		UserInfoURL: userInfoURL,
+	})
+	require.NoError(t, err)
+}
+
+type JosePrivateKey interface {
+	*rsa.PrivateKey | *ecdsa.PrivateKey
+}
+
+// TokenHandlerBehaviorReturningPredefinedJWT describes the scenario when signed JWT token is being created.
+// This behavior should being applied to the MockTokenHandler.
+func TokenHandlerBehaviorReturningPredefinedJWT[K JosePrivateKey](
 	t *testing.T,
-	rsaPrivateKey *rsa.PrivateKey,
-	issClaim,
-	audClaim,
-	subClaim,
-	accessToken,
-	refreshToken string,
-	expClaim int64,
-) func() (Token, error) {
+	privateKey K,
+	claims map[string]interface{}, accessToken, refreshToken string,
+) func() (handlers.Token, error) {
 	t.Helper()
 
-	return func() (Token, error) {
-		signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: rsaPrivateKey}, nil)
+	return func() (handlers.Token, error) {
+		signer, err := jose.NewSigner(jose.SigningKey{Algorithm: GetSignatureAlgorithm(privateKey), Key: privateKey}, nil)
 		require.NoError(t, err)
 
-		payload := struct {
-			Iss string `json:"iss"`
-			Aud string `json:"aud"`
-			Sub string `json:"sub"`
-			Exp int64  `json:"exp"`
-		}{
-			Iss: issClaim,
-			Aud: audClaim,
-			Sub: subClaim,
-			Exp: expClaim,
-		}
-		payloadJSON, err := json.Marshal(payload)
+		payloadJSON, err := json.Marshal(claims)
 		require.NoError(t, err)
 
 		idTokenSignature, err := signer.Sign(payloadJSON)
@@ -207,7 +209,7 @@ func TokenHandlerBehaviourReturningPredefinedJWT(
 		idToken, err := idTokenSignature.CompactSerialize()
 		require.NoError(t, err)
 
-		return Token{
+		return handlers.Token{
 			IDToken:      idToken,
 			AccessToken:  accessToken,
 			RefreshToken: refreshToken,
@@ -215,13 +217,17 @@ func TokenHandlerBehaviourReturningPredefinedJWT(
 	}
 }
 
-// DefaultJwksHandlerBehaviour describes the scenario when JSON Web Key Set token is being returned.
-// This behaviour should being applied to the MockJWKsHandler.
-func DefaultJwksHandlerBehaviour(t *testing.T, verificationPublicKey *rsa.PublicKey) func() jose.JSONWebKeySet {
+type JosePublicKey interface {
+	*rsa.PublicKey | *ecdsa.PublicKey
+}
+
+// DefaultJwksHandlerBehavior describes the scenario when JSON Web Key Set token is being returned.
+// This behavior should being applied to the MockJWKsHandler.
+func DefaultJwksHandlerBehavior[K JosePublicKey](t *testing.T, verificationPublicKey K) func() jose.JSONWebKeySet {
 	t.Helper()
 
 	return func() jose.JSONWebKeySet {
-		key := jose.JSONWebKey{Key: verificationPublicKey, Use: "sig", Algorithm: string(jose.RS256)}
+		key := jose.JSONWebKey{Key: verificationPublicKey, Use: "sig", Algorithm: string(GetSignatureAlgorithm(verificationPublicKey))}
 
 		thumbprint, err := key.Thumbprint(crypto.SHA256)
 		require.NoError(t, err)
@@ -230,5 +236,18 @@ func DefaultJwksHandlerBehaviour(t *testing.T, verificationPublicKey *rsa.Public
 		return jose.JSONWebKeySet{
 			Keys: []jose.JSONWebKey{key},
 		}
+	}
+}
+
+type JoseKey interface{ JosePrivateKey | JosePublicKey }
+
+func GetSignatureAlgorithm[K JoseKey](key K) jose.SignatureAlgorithm {
+	switch any(key).(type) {
+	case *rsa.PrivateKey, *rsa.PublicKey:
+		return jose.RS256
+	case *ecdsa.PrivateKey, *ecdsa.PublicKey:
+		return jose.ES256
+	default:
+		panic("unknown key type") // should be impossible
 	}
 }

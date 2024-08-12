@@ -21,7 +21,9 @@ package winstats
 
 import (
 	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,14 +162,16 @@ func TestConvertCPUValue(t *testing.T) {
 }
 
 func TestGetCPUUsageNanoCores(t *testing.T) {
+	// Scaled expected unit test values by the frequency the CPU perf counters are polled.
+	perfCounterUpdatePeriodSeconds := uint64(perfCounterUpdatePeriod / time.Second)
 	testCases := []struct {
 		latestValue   uint64
 		previousValue uint64
 		expected      uint64
 	}{
 		{latestValue: uint64(0), previousValue: uint64(0), expected: uint64(0)},
-		{latestValue: uint64(2000000000), previousValue: uint64(0), expected: uint64(200000000)},
-		{latestValue: uint64(5000000000), previousValue: uint64(2000000000), expected: uint64(300000000)},
+		{latestValue: uint64(2000000000), previousValue: uint64(0), expected: uint64(200000000 * perfCounterUpdatePeriodSeconds)},
+		{latestValue: uint64(5000000000), previousValue: uint64(2000000000), expected: uint64(300000000 * perfCounterUpdatePeriodSeconds)},
 	}
 
 	for _, tc := range testCases {
@@ -185,4 +189,14 @@ func testGetPhysicallyInstalledSystemMemoryBytes(t *testing.T) {
 	totalMemory, err := getPhysicallyInstalledSystemMemoryBytes()
 	assert.NoError(t, err)
 	assert.NotZero(t, totalMemory)
+}
+
+func TestGetSystemUUID(t *testing.T) {
+	uuidFromRegistry, err := getSystemUUID()
+	assert.NoError(t, err)
+
+	uuidFromWmi, err := exec.Command("powershell.exe", "Get-WmiObject", "Win32_ComputerSystemProduct", "|", "Select-Object", "-ExpandProperty UUID").Output()
+	assert.NoError(t, err)
+	uuidFromWmiString := strings.Trim(string(uuidFromWmi), "\r\n")
+	assert.Equal(t, uuidFromWmiString, uuidFromRegistry)
 }

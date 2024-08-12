@@ -22,6 +22,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	storagev1beta1 "k8s.io/api/storage/v1beta1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/test/e2e/framework"
@@ -130,6 +131,15 @@ type SnapshottableTestDriver interface {
 	GetSnapshotClass(ctx context.Context, config *PerTestConfig, parameters map[string]string) *unstructured.Unstructured
 }
 
+// VolumeAttributesClassTestDriver represents an interface for a TestDriver that supports
+// creating and modifying volumes via VolumeAttributesClass objects
+type VolumeAttributesClassTestDriver interface {
+	TestDriver
+	// GetVolumeAttributesClass returns a VolumeAttributesClass to create/modify PVCs
+	// It will return nil if the TestDriver does not support VACs
+	GetVolumeAttributesClass(ctx context.Context, config *PerTestConfig) *storagev1beta1.VolumeAttributesClass
+}
+
 // CustomTimeoutsTestDriver represents an interface fo a TestDriver that supports custom timeouts.
 type CustomTimeoutsTestDriver interface {
 	TestDriver
@@ -219,7 +229,7 @@ type DriverInfo struct {
 	// plugin if it exists and is empty if this DriverInfo represents a CSI
 	// Driver
 	InTreePluginName string
-	FeatureTag       string // FeatureTag for the driver
+	TestTags         []interface{} // tags for the driver (e.g. framework.WithSlow())
 
 	// Maximum single file size supported by this driver
 	MaxFileSize int64

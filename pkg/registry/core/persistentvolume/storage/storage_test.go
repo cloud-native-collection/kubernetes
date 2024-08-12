@@ -17,7 +17,9 @@ limitations under the License.
 package storage
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -32,6 +34,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	etcd3testing "k8s.io/apiserver/pkg/storage/etcd3/testing"
 	api "k8s.io/kubernetes/pkg/apis/core"
+	"k8s.io/kubernetes/pkg/registry/core/persistentvolume"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 )
 
@@ -57,6 +60,7 @@ func newHostPathType(pathType string) *api.HostPathType {
 }
 
 func validNewPersistentVolume(name string) *api.PersistentVolume {
+	now := persistentvolume.NowFunc()
 	pv := &api.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -72,9 +76,10 @@ func validNewPersistentVolume(name string) *api.PersistentVolume {
 			PersistentVolumeReclaimPolicy: api.PersistentVolumeReclaimRetain,
 		},
 		Status: api.PersistentVolumeStatus{
-			Phase:   api.VolumePending,
-			Message: "bar",
-			Reason:  "foo",
+			Phase:                   api.VolumePending,
+			Message:                 "bar",
+			Reason:                  "foo",
+			LastPhaseTransitionTime: &now,
 		},
 	}
 	return pv
@@ -177,12 +182,22 @@ func TestUpdateStatus(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
+	pvStartTimestamp, err := getPhaseTranstitionTime(ctx, pvStart.Name, storage)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// We need to set custom timestamp which is not the same as the one on existing PV
+	// - doing so will prevent timestamp update on phase change and custom one is used instead.
+	pvStartTimestamp = &metav1.Time{Time: pvStartTimestamp.Time.Add(time.Second)}
+
 	pvIn := &api.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "foo",
 		},
 		Status: api.PersistentVolumeStatus{
-			Phase: api.VolumeBound,
+			Phase:                   api.VolumeBound,
+			LastPhaseTransitionTime: pvStartTimestamp,
 		},
 	}
 
@@ -199,6 +214,14 @@ func TestUpdateStatus(t *testing.T) {
 	if !apiequality.Semantic.DeepEqual(pvIn.Status, pvOut.Status) {
 		t.Errorf("unexpected object: %s", cmp.Diff(pvIn.Status, pvOut.Status))
 	}
+}
+
+func getPhaseTranstitionTime(ctx context.Context, pvName string, storage *REST) (*metav1.Time, error) {
+	obj, err := storage.Get(ctx, pvName, &metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return obj.(*api.PersistentVolume).Status.LastPhaseTransitionTime, nil
 }
 
 func TestShortNames(t *testing.T) {

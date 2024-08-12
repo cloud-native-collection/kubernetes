@@ -26,7 +26,7 @@ import (
 	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	configv1 "k8s.io/kubernetes/pkg/scheduler/apis/config/v1"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
@@ -56,7 +56,7 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 		PodMaxBackoffSeconds:     podMaxBackoffSeconds,
 		Profiles: []config.KubeSchedulerProfile{{
 			SchedulerName:            "me",
-			PercentageOfNodesToScore: pointer.Int32(35),
+			PercentageOfNodesToScore: ptr.To[int32](35),
 			Plugins: &config.Plugins{
 				QueueSort: config.PluginSet{
 					Enabled: []config.Plugin{{Name: "CustomSort"}},
@@ -71,7 +71,7 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 			}},
 		}, {
 			SchedulerName:            "other",
-			PercentageOfNodesToScore: pointer.Int32(35),
+			PercentageOfNodesToScore: ptr.To[int32](35),
 			Plugins: &config.Plugins{
 				QueueSort: config.PluginSet{
 					Enabled: []config.Plugin{{Name: "CustomSort"}},
@@ -103,17 +103,11 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 	enableContentProfilingSetWithoutEnableProfiling.EnableProfiling = false
 	enableContentProfilingSetWithoutEnableProfiling.EnableContentionProfiling = true
 
-	metricsBindAddrInvalid := validConfig.DeepCopy()
-	metricsBindAddrInvalid.MetricsBindAddress = "0.0.0.0:9090"
-
-	healthzBindAddrInvalid := validConfig.DeepCopy()
-	healthzBindAddrInvalid.HealthzBindAddress = "0.0.0.0:9090"
-
 	percentageOfNodesToScore101 := validConfig.DeepCopy()
-	percentageOfNodesToScore101.PercentageOfNodesToScore = pointer.Int32(101)
+	percentageOfNodesToScore101.PercentageOfNodesToScore = ptr.To[int32](101)
 
 	percentageOfNodesToScoreNegative := validConfig.DeepCopy()
-	percentageOfNodesToScoreNegative.PercentageOfNodesToScore = pointer.Int32(-1)
+	percentageOfNodesToScoreNegative.PercentageOfNodesToScore = ptr.To[int32](-1)
 
 	schedulerNameNotSet := validConfig.DeepCopy()
 	schedulerNameNotSet.Profiles[1].SchedulerName = ""
@@ -122,10 +116,10 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 	repeatedSchedulerName.Profiles[0].SchedulerName = "other"
 
 	profilePercentageOfNodesToScore101 := validConfig.DeepCopy()
-	profilePercentageOfNodesToScore101.Profiles[1].PercentageOfNodesToScore = pointer.Int32(101)
+	profilePercentageOfNodesToScore101.Profiles[1].PercentageOfNodesToScore = ptr.To[int32](101)
 
 	profilePercentageOfNodesToScoreNegative := validConfig.DeepCopy()
-	profilePercentageOfNodesToScoreNegative.Profiles[1].PercentageOfNodesToScore = pointer.Int32(-1)
+	profilePercentageOfNodesToScoreNegative.Profiles[1].PercentageOfNodesToScore = ptr.To[int32](-1)
 
 	differentQueueSort := validConfig.DeepCopy()
 	differentQueueSort.Profiles[1].Plugins.QueueSort.Enabled[0].Name = "AnotherSort"
@@ -195,6 +189,12 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 	validPlugins := validConfig.DeepCopy()
 	validPlugins.Profiles[0].Plugins.Score.Enabled = append(validPlugins.Profiles[0].Plugins.Score.Enabled, config.Plugin{Name: "PodTopologySpread", Weight: 2})
 
+	invalidPlugins := validConfig.DeepCopy()
+	invalidPlugins.Profiles[0].Plugins.Score.Enabled = append(invalidPlugins.Profiles[0].Plugins.Score.Enabled, config.Plugin{Name: "AzureDiskLimits"})
+	invalidPlugins.Profiles[0].Plugins.Score.Enabled = append(invalidPlugins.Profiles[0].Plugins.Score.Enabled, config.Plugin{Name: "CinderLimits"})
+	invalidPlugins.Profiles[0].Plugins.Score.Enabled = append(invalidPlugins.Profiles[0].Plugins.Score.Enabled, config.Plugin{Name: "EBSLimits"})
+	invalidPlugins.Profiles[0].Plugins.Score.Enabled = append(invalidPlugins.Profiles[0].Plugins.Score.Enabled, config.Plugin{Name: "GCEPDLimits"})
+
 	scenarios := map[string]struct {
 		config   *config.KubeSchedulerConfiguration
 		wantErrs field.ErrorList
@@ -235,24 +235,6 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
 					Field: "leaderElection.resourceLock",
-				},
-			},
-		},
-		"non-empty-metrics-bind-addr": {
-			config: metricsBindAddrInvalid,
-			wantErrs: field.ErrorList{
-				&field.Error{
-					Type:  field.ErrorTypeInvalid,
-					Field: "metricsBindAddress",
-				},
-			},
-		},
-		"non-empty-healthz-bind-addr": {
-			config: healthzBindAddrInvalid,
-			wantErrs: field.ErrorList{
-				&field.Error{
-					Type:  field.ErrorTypeInvalid,
-					Field: "healthzBindAddress",
 				},
 			},
 		},
@@ -388,6 +370,27 @@ func TestValidateKubeSchedulerConfigurationV1(t *testing.T) {
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
 					Field: "profiles[1].plugins.queueSort",
+				},
+			},
+		},
+		"invalid-plugins": {
+			config: invalidPlugins,
+			wantErrs: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "profiles[0].plugins.score.enabled[0]",
+				},
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "profiles[0].plugins.score.enabled[1]",
+				},
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "profiles[0].plugins.score.enabled[2]",
+				},
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "profiles[0].plugins.score.enabled[3]",
 				},
 			},
 		},

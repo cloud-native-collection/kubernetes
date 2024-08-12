@@ -142,7 +142,8 @@
                 "message": "messageValue",
                 "messageExpression": "messageExpressionValue",
                 "reason": "reasonValue",
-                "fieldPath": "fieldPathValue"
+                "fieldPath": "fieldPathValue",
+                "optionalOldSelf": true
               }
             ]
           }
@@ -162,6 +163,11 @@
             "format": "formatValue",
             "description": "descriptionValue",
             "priority": 5,
+            "jsonPath": "jsonPathValue"
+          }
+        ],
+        "selectableFields": [
+          {
             "jsonPath": "jsonPathValue"
           }
         ]

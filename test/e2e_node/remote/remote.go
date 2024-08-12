@@ -153,9 +153,21 @@ func RunRemote(cfg RunRemoteConfig) (string, bool, error) {
 		return "", false, fmt.Errorf("failed to create test result directory %q on Host %q: %v Output: %q", resultDir, cfg.Host, err, output)
 	}
 
+	allGinkgoFlags := cfg.GinkgoArgs
+	if !strings.Contains(allGinkgoFlags, "--timeout") {
+		klog.Warningf("ginkgo flags are missing explicit --timeout (ginkgo defaults to 60 minutes)")
+		// see https://github.com/onsi/ginkgo/blob/master/docs/index.md#:~:text=ginkgo%20%2D%2Dtimeout%3Dduration
+		// ginkgo suite timeout should be more than the default but less than the
+		// full test timeout, so we should use the average of the two.
+		suiteTimeout := int(testTimeout.Minutes())
+		suiteTimeout = (60 + suiteTimeout) / 2
+		allGinkgoFlags = fmt.Sprintf("%s --timeout=%dm", allGinkgoFlags, suiteTimeout)
+		klog.Infof("updated ginkgo flags: %s", allGinkgoFlags)
+	}
+
 	klog.V(2).Infof("Running test on %q", cfg.Host)
 	output, err := cfg.Suite.RunTest(cfg.Host, workspace, resultDir, cfg.ImageDesc, cfg.JunitFileName, cfg.TestArgs,
-		cfg.GinkgoArgs, cfg.SystemSpecName, cfg.ExtraEnvs, cfg.RuntimeConfig, *testTimeout)
+		allGinkgoFlags, cfg.SystemSpecName, cfg.ExtraEnvs, cfg.RuntimeConfig, *testTimeout)
 
 	var aggErrs []error
 	// Do not log the Output here, let the caller deal with the test Output.
@@ -208,7 +220,7 @@ func getTestArtifacts(host, testDir string) error {
 		return fmt.Errorf("failed to create log directory %q: %w", logPath, err)
 	}
 	// Copy logs (if any) to artifacts/hostname
-	if _, err := SSH(host, "ls", fmt.Sprintf("%s:%s/results/*.log", GetHostnameOrIP(host), testDir)); err == nil {
+	if _, err := SSH(host, "ls", fmt.Sprintf("%s/results/*.log", testDir)); err == nil {
 		if _, err := runSSHCommand(host, "scp", "-r", fmt.Sprintf("%s:%s/results/*.log", GetHostnameOrIP(host), testDir), logPath); err != nil {
 			return err
 		}

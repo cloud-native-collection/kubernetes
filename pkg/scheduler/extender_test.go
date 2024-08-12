@@ -31,38 +31,38 @@ import (
 	extenderv1 "k8s.io/kube-scheduler/extender/v1"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
-	"k8s.io/kubernetes/pkg/scheduler/framework/fake"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	internalcache "k8s.io/kubernetes/pkg/scheduler/internal/cache"
 	internalqueue "k8s.io/kubernetes/pkg/scheduler/internal/queue"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
 )
 
 func TestSchedulerWithExtenders(t *testing.T) {
 	tests := []struct {
 		name            string
-		registerPlugins []st.RegisterPluginFunc
-		extenders       []st.FakeExtender
+		registerPlugins []tf.RegisterPluginFunc
+		extenders       []tf.FakeExtender
 		nodes           []string
 		expectedResult  ScheduleResult
 		expectsErr      bool
 	}{
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
 				},
 				{
 					ExtenderName: "FakeExtender2",
-					Predicates:   []st.FitPredicate{st.ErrorPredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.ErrorPredicateExtender},
 				},
 			},
 			nodes:      []string{"node1", "node2"},
@@ -70,19 +70,19 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			name:       "test 1",
 		},
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
 				},
 				{
 					ExtenderName: "FakeExtender2",
-					Predicates:   []st.FitPredicate{st.FalsePredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.FalsePredicateExtender},
 				},
 			},
 			nodes:      []string{"node1", "node2"},
@@ -90,19 +90,20 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			name:       "test 2",
 		},
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterScorePlugin("EqualPrioritizerPlugin", tf.NewEqualPrioritizerPlugin(), 1),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
 				},
 				{
 					ExtenderName: "FakeExtender2",
-					Predicates:   []st.FitPredicate{st.Node1PredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.Node1PredicateExtender},
 				},
 			},
 			nodes: []string{"node1", "node2"},
@@ -114,19 +115,19 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			name: "test 3",
 		},
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.Node2PredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.Node2PredicateExtender},
 				},
 				{
 					ExtenderName: "FakeExtender2",
-					Predicates:   []st.FitPredicate{st.Node1PredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.Node1PredicateExtender},
 				},
 			},
 			nodes:      []string{"node1", "node2"},
@@ -134,16 +135,16 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			name:       "test 4",
 		},
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
-					Prioritizers: []st.PriorityConfig{{Function: st.ErrorPrioritizerExtender, Weight: 10}},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
+					Prioritizers: []tf.PriorityConfig{{Function: tf.ErrorPrioritizerExtender, Weight: 10}},
 					Weight:       1,
 				},
 			},
@@ -156,22 +157,22 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			name: "test 5",
 		},
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
-					Prioritizers: []st.PriorityConfig{{Function: st.Node1PrioritizerExtender, Weight: 10}},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
+					Prioritizers: []tf.PriorityConfig{{Function: tf.Node1PrioritizerExtender, Weight: 10}},
 					Weight:       1,
 				},
 				{
 					ExtenderName: "FakeExtender2",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
-					Prioritizers: []st.PriorityConfig{{Function: st.Node2PrioritizerExtender, Weight: 10}},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
+					Prioritizers: []tf.PriorityConfig{{Function: tf.Node2PrioritizerExtender, Weight: 10}},
 					Weight:       5,
 				},
 			},
@@ -184,17 +185,17 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			name: "test 6",
 		},
 		{
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterScorePlugin("Node2Prioritizer", st.NewNode2PrioritizerPlugin(), 20),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterScorePlugin("Node2Prioritizer", tf.NewNode2PrioritizerPlugin(), 20),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.TruePredicateExtender},
-					Prioritizers: []st.PriorityConfig{{Function: st.Node1PrioritizerExtender, Weight: 10}},
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
+					Prioritizers: []tf.PriorityConfig{{Function: tf.Node1PrioritizerExtender, Weight: 10}},
 					Weight:       1,
 				},
 			},
@@ -214,17 +215,17 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			// If scheduler sends the pod by mistake, the test would fail
 			// because of the errors from errorPredicateExtender and/or
 			// errorPrioritizerExtender.
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterScorePlugin("Node2Prioritizer", st.NewNode2PrioritizerPlugin(), 1),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterScorePlugin("Node2Prioritizer", tf.NewNode2PrioritizerPlugin(), 1),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.ErrorPredicateExtender},
-					Prioritizers: []st.PriorityConfig{{Function: st.ErrorPrioritizerExtender, Weight: 10}},
+					Predicates:   []tf.FitPredicate{tf.ErrorPredicateExtender},
+					Prioritizers: []tf.PriorityConfig{{Function: tf.ErrorPrioritizerExtender, Weight: 10}},
 					UnInterested: true,
 				},
 			},
@@ -243,20 +244,21 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			//
 			// If scheduler did not ignore the extender, the test would fail
 			// because of the errors from errorPredicateExtender.
-			registerPlugins: []st.RegisterPluginFunc{
-				st.RegisterFilterPlugin("TrueFilter", st.NewTrueFilterPlugin),
-				st.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
-				st.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterScorePlugin("EqualPrioritizerPlugin", tf.NewEqualPrioritizerPlugin(), 1),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
 			},
-			extenders: []st.FakeExtender{
+			extenders: []tf.FakeExtender{
 				{
 					ExtenderName: "FakeExtender1",
-					Predicates:   []st.FitPredicate{st.ErrorPredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.ErrorPredicateExtender},
 					Ignorable:    true,
 				},
 				{
 					ExtenderName: "FakeExtender2",
-					Predicates:   []st.FitPredicate{st.Node1PredicateExtender},
+					Predicates:   []tf.FitPredicate{tf.Node1PredicateExtender},
 				},
 			},
 			nodes:      []string{"node1", "node2"},
@@ -268,11 +270,54 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			},
 			name: "test 9",
 		},
+		{
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterFilterPlugin("TrueFilter", tf.NewTrueFilterPlugin),
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			},
+			extenders: []tf.FakeExtender{
+				{
+					ExtenderName: "FakeExtender1",
+					Predicates:   []tf.FitPredicate{tf.TruePredicateExtender},
+				},
+				{
+					ExtenderName: "FakeExtender2",
+					Predicates:   []tf.FitPredicate{tf.Node1PredicateExtender},
+				},
+			},
+			nodes: []string{"node1", "node2"},
+			expectedResult: ScheduleResult{
+				SuggestedHost:  "node1",
+				EvaluatedNodes: 2,
+				FeasibleNodes:  1,
+			},
+			name: "test 10 - no scoring, extender filters configured, multiple feasible nodes are evaluated",
+		},
+		{
+			registerPlugins: []tf.RegisterPluginFunc{
+				tf.RegisterQueueSortPlugin(queuesort.Name, queuesort.New),
+				tf.RegisterBindPlugin(defaultbinder.Name, defaultbinder.New),
+			},
+			extenders: []tf.FakeExtender{
+				{
+					ExtenderName: "FakeExtender1",
+					Binder:       func() error { return nil },
+				},
+			},
+			nodes: []string{"node1", "node2"},
+			expectedResult: ScheduleResult{
+				SuggestedHost:  "node1",
+				EvaluatedNodes: 1,
+				FeasibleNodes:  1,
+			},
+			name: "test 11 - no scoring, no prefilters or  extender filters configured, a single feasible node is evaluated",
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			client := clientsetfake.NewSimpleClientset()
+			client := clientsetfake.NewClientset()
 			informerFactory := informers.NewSharedInformerFactory(client, 0)
 
 			var extenders []framework.Extender
@@ -287,12 +332,12 @@ func TestSchedulerWithExtenders(t *testing.T) {
 			for _, name := range test.nodes {
 				cache.AddNode(logger, createNode(name))
 			}
-			fwk, err := st.NewFramework(
+			fwk, err := tf.NewFramework(
 				ctx,
 				test.registerPlugins, "",
 				runtime.WithClientSet(client),
 				runtime.WithInformerFactory(informerFactory),
-				runtime.WithPodNominator(internalqueue.NewPodNominator(informerFactory.Core().V1().Pods().Lister())),
+				runtime.WithPodNominator(internalqueue.NewTestPodNominator(informerFactory.Core().V1().Pods().Lister())),
 				runtime.WithLogger(logger),
 			)
 			if err != nil {
@@ -510,7 +555,7 @@ func TestConvertToVictims(t *testing.T) {
 				nodeInfo.AddPod(tt.podsInNodeList[i+2])
 				nodeInfoList = append(nodeInfoList, nodeInfo)
 			}
-			tt.nodeInfos = fake.NodeInfoLister(nodeInfoList)
+			tt.nodeInfos = tf.NodeInfoLister(nodeInfoList)
 
 			got, err := tt.httpExtender.convertToVictims(tt.nodeNameToMetaVictims, tt.nodeInfos)
 			if (err != nil) != tt.wantErr {

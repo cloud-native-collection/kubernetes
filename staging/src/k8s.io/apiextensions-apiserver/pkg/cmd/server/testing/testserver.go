@@ -18,6 +18,7 @@ package testing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -27,11 +28,17 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"k8s.io/apiextensions-apiserver/pkg/apiserver"
+	extensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apiextensions-apiserver/pkg/cmd/server/options"
+	generatedopenapi "k8s.io/apiextensions-apiserver/pkg/generated/openapi"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/apiserver/pkg/util/openapi"
+	utilversion "k8s.io/apiserver/pkg/util/version"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	logsapi "k8s.io/component-base/logs/api/v1"
@@ -58,7 +65,7 @@ type TestServer struct {
 	ServerOpts      *options.CustomResourceDefinitionsServerOptions // ServerOpts
 	TearDownFn      TearDownFunc                                    // TearDown function
 	TmpDir          string                                          // Temp Dir used, by the apiserver
-	CompletedConfig apiserver.CompletedConfig
+	CompletedConfig extensionsapiserver.CompletedConfig
 }
 
 // Logger allows t.Testing and b.Testing to be passed to StartTestServer and StartTestServerOrDie
@@ -80,13 +87,15 @@ func NewDefaultTestServerOptions() *TestServerInstanceOptions {
 // files that because Golang testing's call to os.Exit will not give a stop channel go routine
 // enough time to remove temporary files.
 func StartTestServer(t Logger, _ *TestServerInstanceOptions, customFlags []string, storageConfig *storagebackend.Config) (result TestServer, err error) {
-	stopCh := make(chan struct{})
+	// TODO: this is a candidate for using what is now test/utils/ktesting,
+	// should that become a staging repo.
+	ctx, cancel := context.WithCancelCause(context.Background())
 	var errCh chan error
 	tearDown := func() {
-		// Closing stopCh is stopping apiextensions apiserver and its
+		// Cancel is stopping apiextensions apiserver and its
 		// delegates, which itself is cleaning up after itself,
 		// including shutting down its storage layer.
-		close(stopCh)
+		cancel(errors.New("tearing down"))
 
 		// If the apiextensions apiserver was started, let's wait for
 		// it to shutdown clearly.
@@ -114,6 +123,10 @@ func StartTestServer(t Logger, _ *TestServerInstanceOptions, customFlags []strin
 
 	fs := pflag.NewFlagSet("test", pflag.PanicOnError)
 
+	featureGate := utilfeature.DefaultMutableFeatureGate
+	effectiveVersion := utilversion.DefaultKubeEffectiveVersion()
+	utilversion.DefaultComponentGlobalsRegistry.Reset()
+	utilruntime.Must(utilversion.DefaultComponentGlobalsRegistry.Register(utilversion.DefaultKubeComponent, effectiveVersion, featureGate))
 	s := options.NewCustomResourceDefinitionsServerOptions(os.Stdout, os.Stderr)
 	s.AddFlags(fs)
 
@@ -137,6 +150,10 @@ func StartTestServer(t Logger, _ *TestServerInstanceOptions, customFlags []strin
 
 	fs.Parse(customFlags)
 
+	if err := utilversion.DefaultComponentGlobalsRegistry.Set(); err != nil {
+		return result, err
+	}
+
 	if err := s.Complete(); err != nil {
 		return result, fmt.Errorf("failed to set default options: %v", err)
 	}
@@ -151,6 +168,11 @@ func StartTestServer(t Logger, _ *TestServerInstanceOptions, customFlags []strin
 	if err != nil {
 		return result, fmt.Errorf("failed to create config from options: %v", err)
 	}
+
+	getOpenAPIDefinitions := openapi.GetOpenAPIDefinitionsWithoutDisabledFeatures(generatedopenapi.GetOpenAPIDefinitions)
+	namer := openapinamer.NewDefinitionNamer(extensionsapiserver.Scheme)
+	config.GenericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(getOpenAPIDefinitions, namer)
+
 	completedConfig := config.Complete()
 	server, err := completedConfig.New(genericapiserver.NewEmptyDelegate())
 	if err != nil {
@@ -158,13 +180,13 @@ func StartTestServer(t Logger, _ *TestServerInstanceOptions, customFlags []strin
 	}
 
 	errCh = make(chan error)
-	go func(stopCh <-chan struct{}) {
+	go func() {
 		defer close(errCh)
 
-		if err := server.GenericAPIServer.PrepareRun().Run(stopCh); err != nil {
+		if err := server.GenericAPIServer.PrepareRun().RunWithContext(ctx); err != nil {
 			errCh <- err
 		}
-	}(stopCh)
+	}()
 
 	t.Logf("Waiting for /healthz to be ok...")
 

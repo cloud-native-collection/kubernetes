@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 	"k8s.io/mount-utils"
@@ -35,6 +34,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	utiltesting "k8s.io/client-go/util/testing"
 	cadvisortest "k8s.io/kubernetes/pkg/kubelet/cadvisor/testing"
+	"k8s.io/kubernetes/pkg/kubelet/clustertrustbundle"
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	"k8s.io/kubernetes/pkg/kubelet/configmap"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
@@ -56,22 +56,21 @@ import (
 
 func TestRunOnce(t *testing.T) {
 	ctx := context.Background()
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 
-	cadvisor := cadvisortest.NewMockInterface(mockCtrl)
-	cadvisor.EXPECT().MachineInfo().Return(&cadvisorapi.MachineInfo{}, nil).AnyTimes()
+	cadvisor := cadvisortest.NewMockInterface(t)
+	cadvisor.EXPECT().MachineInfo().Return(&cadvisorapi.MachineInfo{}, nil).Maybe()
 	cadvisor.EXPECT().ImagesFsInfo().Return(cadvisorapiv2.FsInfo{
 		Usage:     400,
 		Capacity:  1000,
 		Available: 600,
-	}, nil).AnyTimes()
+	}, nil).Maybe()
 	cadvisor.EXPECT().RootFsInfo().Return(cadvisorapiv2.FsInfo{
 		Usage:    9,
 		Capacity: 10,
-	}, nil).AnyTimes()
+	}, nil).Maybe()
 	fakeSecretManager := secret.NewFakeManager()
 	fakeConfigMapManager := configmap.NewFakeManager()
+	clusterTrustBundleManager := &clustertrustbundle.NoopManager{}
 	podManager := kubepod.NewBasicPodManager()
 	fakeRuntime := &containertest.FakeRuntime{}
 	podStartupLatencyTracker := kubeletutil.NewPodStartupLatencyTracker()
@@ -82,6 +81,7 @@ func TestRunOnce(t *testing.T) {
 	defer os.RemoveAll(basePath)
 	kb := &Kubelet{
 		rootDirectory:    filepath.Clean(basePath),
+		podLogsDirectory: filepath.Join(basePath, "pod-logs"),
 		recorder:         &record.FakeRecorder{},
 		cadvisor:         cadvisor,
 		nodeLister:       testNodeLister{},
@@ -103,7 +103,7 @@ func TestRunOnce(t *testing.T) {
 
 	plug := &volumetest.FakeVolumePlugin{PluginName: "fake", Host: nil}
 	kb.volumePluginMgr, err =
-		NewInitializedVolumePluginMgr(kb, fakeSecretManager, fakeConfigMapManager, nil, []volume.VolumePlugin{plug}, nil /* prober */)
+		NewInitializedVolumePluginMgr(kb, fakeSecretManager, fakeConfigMapManager, nil, clusterTrustBundleManager, []volume.VolumePlugin{plug}, nil /* prober */)
 	if err != nil {
 		t.Fatalf("failed to initialize VolumePluginMgr: %v", err)
 	}
@@ -119,7 +119,6 @@ func TestRunOnce(t *testing.T) {
 		kb.hostutil,
 		kb.getPodsDir(),
 		kb.recorder,
-		false, /* keepTerminatedPodVolumes */
 		volumetest.NewBlockVolumePathHandler())
 
 	// TODO: Factor out "stats.Provider" from Kubelet so we don't have a cyclic dependency

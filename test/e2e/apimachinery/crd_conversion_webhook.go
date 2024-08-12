@@ -44,9 +44,6 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/test/integration"
-
-	// ensure libs have a chance to initialize
-	_ "github.com/stretchr/testify/assert"
 )
 
 const (
@@ -483,7 +480,7 @@ func testCRListConversion(ctx context.Context, f *framework.Framework, testCrd *
 
 // waitWebhookConversionReady sends stub custom resource creation requests requiring conversion until one succeeds.
 func waitWebhookConversionReady(ctx context.Context, f *framework.Framework, crd *apiextensionsv1.CustomResourceDefinition, customResourceClients map[string]dynamic.ResourceInterface, version string) {
-	framework.ExpectNoError(wait.PollImmediateWithContext(ctx, 100*time.Millisecond, 30*time.Second, func(ctx context.Context) (bool, error) {
+	framework.ExpectNoError(wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		crInstance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"kind":       crd.Spec.Names.Kind,

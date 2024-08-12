@@ -21,6 +21,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -81,7 +82,9 @@ func NewCommand() *cobra.Command {
 	profilePath := fs.String("pprof-path", "", "The HTTP path where pprof profiling will be available, disabled if empty.")
 
 	fs = sharedFlagSets.FlagSet("CDI")
-	driverName := fs.String("drivername", "test-driver.cdi.k8s.io", "Resource driver name.")
+	driverNameFlagName := "drivername"
+	driverName := fs.String(driverNameFlagName, "test-driver.cdi.k8s.io", "Resource driver name.")
+	driverNameFlag := fs.Lookup(driverNameFlagName)
 
 	fs = sharedFlagSets.FlagSet("other")
 	featureGate := featuregate.NewFeatureGate()
@@ -192,6 +195,7 @@ func NewCommand() *cobra.Command {
 		"Duration, in seconds, that the acting leader will retry refreshing leadership before giving up.")
 	leaderElectionRetryPeriod := fs.Duration("leader-election-retry-period", 5*time.Second,
 		"Duration, in seconds, the LeaderElector clients should wait between tries of actions.")
+	fs = controllerFlagSets.FlagSet("controller")
 	resourceConfig := fs.String("resource-config", "", "A JSON file containing a Resources struct. Defaults are unshared, network-attached resources.")
 	fs = controller.Flags()
 	for _, f := range controllerFlagSets.FlagSets {
@@ -211,9 +215,12 @@ func NewCommand() *cobra.Command {
 				return fmt.Errorf("parse resource config %q: %w", *resourceConfig, err)
 			}
 		}
+		if resources.DriverName == "" || driverNameFlag.Changed {
+			resources.DriverName = *driverName
+		}
 
 		run := func() {
-			controller := NewController(clientset, *driverName, resources)
+			controller := NewController(clientset, resources)
 			controller.Run(ctx, *workers)
 		}
 
@@ -266,6 +273,7 @@ func NewCommand() *cobra.Command {
 	draAddress := fs.String("dra-address", "/var/lib/kubelet/plugins/test-driver/dra.sock", "The Unix domain socket that kubelet will connect to for dynamic resource allocation requests, in the filesystem of kubelet.")
 	fs = kubeletPluginFlagSets.FlagSet("CDI")
 	cdiDir := fs.String("cdi-dir", "/var/run/cdi", "directory for dynamically created CDI JSON files")
+	nodeName := fs.String("node-name", "", "name of the node that the kubelet plugin is responsible for")
 	fs = kubeletPlugin.Flags()
 	for _, f := range kubeletPluginFlagSets.FlagSets {
 		fs.AddFlagSet(f)
@@ -281,7 +289,11 @@ func NewCommand() *cobra.Command {
 			return fmt.Errorf("create socket directory: %w", err)
 		}
 
-		plugin, err := StartPlugin(logger, *cdiDir, *driverName, "", FileOperations{},
+		if *nodeName == "" {
+			return errors.New("--node-name not set")
+		}
+
+		plugin, err := StartPlugin(cmd.Context(), *cdiDir, *driverName, clientset, *nodeName, FileOperations{},
 			kubeletplugin.PluginSocketPath(*endpoint),
 			kubeletplugin.RegistrarSocketPath(path.Join(*pluginRegistrationPath, *driverName+"-reg.sock")),
 			kubeletplugin.KubeletPluginSocketPath(*draAddress),

@@ -24,11 +24,12 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	types "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/e2e/network/common"
 	admissionapi "k8s.io/pod-security-admission/api"
@@ -38,7 +39,7 @@ import (
 	"github.com/onsi/gomega"
 )
 
-var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
+var _ = common.SIGDescribe("IngressClass", feature.Ingress, func() {
 	f := framework.NewDefaultFramework("ingressclass")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	var cs clientset.Interface
@@ -46,7 +47,7 @@ var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
 		cs = f.ClientSet
 	})
 
-	ginkgo.It("should set default value on new IngressClass [Serial]", func(ctx context.Context) {
+	f.It("should set default value on new IngressClass", f.WithSerial(), func(ctx context.Context) {
 		ingressClass1, err := createIngressClass(ctx, cs, "ingressclass1", true, f.UniqueName)
 		framework.ExpectNoError(err)
 		ginkgo.DeferCleanup(deleteIngressClass, cs, ingressClass1.Name)
@@ -56,7 +57,7 @@ var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
 		lastFailure := ""
 
 		// the admission controller may take a few seconds to observe the ingress classes
-		if err := wait.PollWithContext(ctx, time.Second, time.Minute, func(ctx context.Context) (bool, error) {
+		if err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, false, func(ctx context.Context) (bool, error) {
 			lastFailure = ""
 
 			ingress, err := createBasicIngress(ctx, cs, f.Namespace.Name)
@@ -83,7 +84,7 @@ var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
 		}
 	})
 
-	ginkgo.It("should not set default value if no default IngressClass [Serial]", func(ctx context.Context) {
+	f.It("should not set default value if no default IngressClass", f.WithSerial(), func(ctx context.Context) {
 		ingressClass1, err := createIngressClass(ctx, cs, "ingressclass1", false, f.UniqueName)
 		framework.ExpectNoError(err)
 		ginkgo.DeferCleanup(deleteIngressClass, cs, ingressClass1.Name)
@@ -93,7 +94,7 @@ var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
 		lastFailure := ""
 
 		// the admission controller may take a few seconds to observe the ingress classes
-		if err := wait.PollWithContext(ctx, time.Second, time.Minute, func(ctx context.Context) (bool, error) {
+		if err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, false, func(ctx context.Context) (bool, error) {
 			lastFailure = ""
 
 			ingress, err := createBasicIngress(ctx, cs, f.Namespace.Name)
@@ -117,7 +118,7 @@ var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
 		}
 	})
 
-	ginkgo.It("should choose the one with the later CreationTimestamp, if equal the one with the lower name when two ingressClasses are marked as default[Serial]", func(ctx context.Context) {
+	f.It("should choose the one with the later CreationTimestamp, if equal the one with the lower name when two ingressClasses are marked as default", f.WithSerial(), func(ctx context.Context) {
 		ingressClass1, err := createIngressClass(ctx, cs, "ingressclass1", true, f.UniqueName)
 		framework.ExpectNoError(err)
 		ginkgo.DeferCleanup(deleteIngressClass, cs, ingressClass1.Name)
@@ -165,7 +166,7 @@ var _ = common.SIGDescribe("IngressClass [Feature:Ingress]", func() {
 		}
 	})
 
-	ginkgo.It("should allow IngressClass to have Namespace-scoped parameters [Serial]", func(ctx context.Context) {
+	f.It("should allow IngressClass to have Namespace-scoped parameters", f.WithSerial(), func(ctx context.Context) {
 		ingressClass := &networkingv1.IngressClass{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "ingressclass1",
@@ -264,7 +265,7 @@ var _ = common.SIGDescribe("IngressClass API", func() {
 		- The ingressclasses resource MUST exist in the /apis/networking.k8s.io/v1 discovery document.
 		- The ingressclass resource must support create, get, list, watch, update, patch, delete, and deletecollection.
 	*/
-	framework.ConformanceIt(" should support creating IngressClass API operations", func(ctx context.Context) {
+	framework.ConformanceIt("should support creating IngressClass API operations", func(ctx context.Context) {
 
 		// Setup
 		icClient := f.ClientSet.NetworkingV1().IngressClasses()

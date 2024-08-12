@@ -17,6 +17,8 @@ cgroupsPerQOS: true
 configMapAndSecretChangeDetectionStrategy: Watch
 containerLogMaxFiles: 5
 containerLogMaxSize: 10Mi
+containerLogMaxWorkers: 1
+containerLogMonitorInterval: 10s
 containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
 contentType: application/vnd.kubernetes.protobuf
 cpuCFSQuota: true
@@ -35,6 +37,7 @@ enforceNodeAllocatable:
 eventBurst: 10
 eventRecordQPS: 5
 evictionPressureTransitionPeriod: 5m0s
+failCgroupV1: false
 failSwapOn: true
 fileCheckFrequency: 20s
 hairpinMode: promiscuous-bridge
@@ -43,6 +46,7 @@ healthzPort: 10248
 httpCheckFrequency: 20s
 imageGCHighThresholdPercent: 85
 imageGCLowThresholdPercent: 80
+imageMaximumGCAge: 0s
 imageMinimumGCAge: 2m0s
 iptablesDropBit: 15
 iptablesMasqueradeBit: 14
@@ -56,6 +60,8 @@ logging:
   options:
     json:
       infoBufferSize: "0"
+    text:
+      infoBufferSize: "0"
   verbosity: 0
 makeIPTablesUtilChains: true
 maxOpenFiles: 1000000
@@ -68,6 +74,7 @@ nodeStatusMaxImages: 50
 nodeStatusReportFrequency: 5m0s
 nodeStatusUpdateFrequency: 10s
 oomScoreAdj: -999
+podLogsDir: /var/log/pods
 podPidsLimit: -1
 port: 10250
 registerNode: true

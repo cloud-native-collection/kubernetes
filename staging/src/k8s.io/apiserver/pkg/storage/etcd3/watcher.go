@@ -26,27 +26,29 @@ import (
 	"sync"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/storage/value"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
-
-	clientv3 "go.etcd.io/etcd/client/v3"
-
 	"k8s.io/klog/v2"
 )
 
 const (
 	// We have set a buffer in order to reduce times of context switches.
-	incomingBufSize = 100
-	outgoingBufSize = 100
+	incomingBufSize         = 100
+	outgoingBufSize         = 100
+	processEventConcurrency = 10
 )
 
 // defaultWatcherMaxLimit is used to facilitate construction tests
@@ -67,13 +69,14 @@ func TestOnlySetFatalOnDecodeError(b bool) {
 }
 
 type watcher struct {
-	client        *clientv3.Client
-	codec         runtime.Codec
-	newFunc       func() runtime.Object
-	objectType    string
-	groupResource schema.GroupResource
-	versioner     storage.Versioner
-	transformer   value.Transformer
+	client              *clientv3.Client
+	codec               runtime.Codec
+	newFunc             func() runtime.Object
+	objectType          string
+	groupResource       schema.GroupResource
+	versioner           storage.Versioner
+	transformer         value.Transformer
+	getCurrentStorageRV func(context.Context) (uint64, error)
 }
 
 // watchChan implements watch.Interface.
@@ -105,8 +108,12 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage
 	if opts.ProgressNotify && w.newFunc == nil {
 		return nil, apierrors.NewInternalError(errors.New("progressNotify for watch is unsupported by the etcd storage because no newFunc was provided"))
 	}
-	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, opts.ProgressNotify, opts.Predicate)
-	go wc.run()
+	startWatchRV, err := w.getStartWatchResourceVersion(ctx, rev, opts)
+	if err != nil {
+		return nil, err
+	}
+	wc := w.createWatchChan(ctx, key, startWatchRV, opts.Recursive, opts.ProgressNotify, opts.Predicate)
+	go wc.run(isInitialEventsEndBookmarkRequired(opts), areInitialEventsRequired(rev, opts))
 
 	// For etcd watch we don't have an easy way to answer whether the watch
 	// has already caught up. So in the initial version (given that watchcache
@@ -138,6 +145,62 @@ func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, re
 	return wc
 }
 
+// getStartWatchResourceVersion returns a ResourceVersion
+// the watch will be started from.
+// Depending on the input parameters the semantics of the returned ResourceVersion are:
+//   - start at Exact (return resourceVersion)
+//   - start at Most Recent (return an RV from etcd)
+func (w *watcher) getStartWatchResourceVersion(ctx context.Context, resourceVersion int64, opts storage.ListOptions) (int64, error) {
+	if resourceVersion > 0 {
+		return resourceVersion, nil
+	}
+	if !utilfeature.DefaultFeatureGate.Enabled(features.WatchList) {
+		return 0, nil
+	}
+	if opts.SendInitialEvents == nil || *opts.SendInitialEvents {
+		// note that when opts.SendInitialEvents=true
+		// we will be issuing a consistent LIST request
+		// against etcd followed by the special bookmark event
+		return 0, nil
+	}
+	// at this point the clients is interested
+	// only in getting a stream of events
+	// starting at the MostRecent point in time (RV)
+	currentStorageRV, err := w.getCurrentStorageRV(ctx)
+	if err != nil {
+		return 0, err
+	}
+	// currentStorageRV is taken from resp.Header.Revision (int64)
+	// and cast to uint64, so it is safe to do reverse
+	// at some point we should unify the interface but that
+	// would require changing  Versioner.UpdateList
+	return int64(currentStorageRV), nil
+}
+
+// isInitialEventsEndBookmarkRequired since there is no way to directly set
+// opts.ProgressNotify from the API and the etcd3 impl doesn't support
+// notification for external clients we simply return initialEventsEndBookmarkRequired
+// to only send the bookmark event after the initial list call.
+//
+// see: https://github.com/kubernetes/kubernetes/issues/120348
+func isInitialEventsEndBookmarkRequired(opts storage.ListOptions) bool {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.WatchList) {
+		return false
+	}
+	return opts.SendInitialEvents != nil && *opts.SendInitialEvents && opts.Predicate.AllowWatchBookmarks
+}
+
+// areInitialEventsRequired returns true if all events from the etcd should be returned.
+func areInitialEventsRequired(resourceVersion int64, opts storage.ListOptions) bool {
+	if opts.SendInitialEvents == nil && resourceVersion == 0 {
+		return true // legacy case
+	}
+	if !utilfeature.DefaultFeatureGate.Enabled(features.WatchList) {
+		return false
+	}
+	return opts.SendInitialEvents != nil && *opts.SendInitialEvents
+}
+
 type etcdError interface {
 	Code() grpccodes.Code
 	Error() string
@@ -163,13 +226,12 @@ func isCancelError(err error) bool {
 	return false
 }
 
-func (wc *watchChan) run() {
+func (wc *watchChan) run(initialEventsEndBookmarkRequired, forceInitialEvents bool) {
 	watchClosedCh := make(chan struct{})
-	go wc.startWatching(watchClosedCh)
+	go wc.startWatching(watchClosedCh, initialEventsEndBookmarkRequired, forceInitialEvents)
 
 	var resultChanWG sync.WaitGroup
-	resultChanWG.Add(1)
-	go wc.processEvent(&resultChanWG)
+	wc.processEvents(&resultChanWG)
 
 	select {
 	case err := <-wc.errChan:
@@ -284,13 +346,43 @@ func logWatchChannelErr(err error) {
 // startWatching does:
 // - get current objects if initialRev=0; set initialRev to current rev
 // - watch on given key and send events to process.
-func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
-	if wc.initialRev == 0 {
+//
+// initialEventsEndBookmarkSent helps us keep track
+// of whether we have sent an annotated bookmark event.
+//
+// it's important to note that we don't
+// need to track the actual RV because
+// we only send the bookmark event
+// after the initial list call.
+//
+// when this variable is set to false,
+// it means we don't have any specific
+// preferences for delivering bookmark events.
+func (wc *watchChan) startWatching(watchClosedCh chan struct{}, initialEventsEndBookmarkRequired, forceInitialEvents bool) {
+	if wc.initialRev > 0 && forceInitialEvents {
+		currentStorageRV, err := wc.watcher.getCurrentStorageRV(wc.ctx)
+		if err != nil {
+			wc.sendError(err)
+			return
+		}
+		if uint64(wc.initialRev) > currentStorageRV {
+			wc.sendError(storage.NewTooLargeResourceVersionError(uint64(wc.initialRev), currentStorageRV, int(wait.Jitter(1*time.Second, 3).Seconds())))
+			return
+		}
+	}
+	if forceInitialEvents {
 		if err := wc.sync(); err != nil {
 			klog.Errorf("failed to sync with latest state: %v", err)
 			wc.sendError(err)
 			return
 		}
+	}
+	if initialEventsEndBookmarkRequired {
+		wc.sendEvent(func() *event {
+			e := progressNotifyEvent(wc.initialRev)
+			e.isInitialEventsEndBookmark = true
+			return e
+		}())
 	}
 	opts := []clientv3.OpOption{clientv3.WithRev(wc.initialRev + 1), clientv3.WithPrevKV()}
 	if wc.recursive {
@@ -332,10 +424,17 @@ func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
 	close(watchClosedCh)
 }
 
-// processEvent processes events from etcd watcher and sends results to resultChan.
-func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
+// processEvents processes events from etcd watcher and sends results to resultChan.
+func (wc *watchChan) processEvents(wg *sync.WaitGroup) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.ConcurrentWatchObjectDecode) {
+		wc.concurrentProcessEvents(wg)
+	} else {
+		wg.Add(1)
+		go wc.serialProcessEvents(wg)
+	}
+}
+func (wc *watchChan) serialProcessEvents(wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	for {
 		select {
 		case e := <-wc.incomingEventChan:
@@ -343,7 +442,7 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 			if res == nil {
 				continue
 			}
-			if len(wc.resultChan) == outgoingBufSize {
+			if len(wc.resultChan) == cap(wc.resultChan) {
 				klog.V(3).InfoS("Fast watcher, slow processing. Probably caused by slow dispatching events to watchers", "outgoingEvents", outgoingBufSize, "objectType", wc.watcher.objectType, "groupResource", wc.watcher.groupResource)
 			}
 			// If user couldn't receive results fast enough, we also block incoming events from watcher.
@@ -356,6 +455,95 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 			}
 		case <-wc.ctx.Done():
 			return
+		}
+	}
+}
+
+func (wc *watchChan) concurrentProcessEvents(wg *sync.WaitGroup) {
+	p := concurrentOrderedEventProcessing{
+		input:           wc.incomingEventChan,
+		processFunc:     wc.transform,
+		output:          wc.resultChan,
+		processingQueue: make(chan chan *watch.Event, processEventConcurrency-1),
+
+		objectType:    wc.watcher.objectType,
+		groupResource: wc.watcher.groupResource,
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.scheduleEventProcessing(wc.ctx, wg)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.collectEventProcessing(wc.ctx)
+	}()
+}
+
+type concurrentOrderedEventProcessing struct {
+	input       chan *event
+	processFunc func(*event) *watch.Event
+	output      chan watch.Event
+
+	processingQueue chan chan *watch.Event
+	// Metadata for logging
+	objectType    string
+	groupResource schema.GroupResource
+}
+
+func (p *concurrentOrderedEventProcessing) scheduleEventProcessing(ctx context.Context, wg *sync.WaitGroup) {
+	var e *event
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e = <-p.input:
+		}
+		processingResponse := make(chan *watch.Event, 1)
+		select {
+		case <-ctx.Done():
+			return
+		case p.processingQueue <- processingResponse:
+		}
+		wg.Add(1)
+		go func(e *event, response chan<- *watch.Event) {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+			case response <- p.processFunc(e):
+			}
+		}(e, processingResponse)
+	}
+}
+
+func (p *concurrentOrderedEventProcessing) collectEventProcessing(ctx context.Context) {
+	var processingResponse chan *watch.Event
+	var e *watch.Event
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case processingResponse = <-p.processingQueue:
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case e = <-processingResponse:
+		}
+		if e == nil {
+			continue
+		}
+		if len(p.output) == cap(p.output) {
+			klog.V(3).InfoS("Fast watcher, slow processing. Probably caused by slow dispatching events to watchers", "outgoingEvents", outgoingBufSize, "objectType", p.objectType, "groupResource", p.groupResource)
+		}
+		// If user couldn't receive results fast enough, we also block incoming events from watcher.
+		// Because storing events in local will cause more memory usage.
+		// The worst case would be closing the fast watcher.
+		select {
+		case <-ctx.Done():
+			return
+		case p.output <- *e:
 		}
 	}
 }
@@ -387,6 +575,12 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 		if err := wc.watcher.versioner.UpdateObject(object, uint64(e.rev)); err != nil {
 			klog.Errorf("failed to propagate object version: %v", err)
 			return nil
+		}
+		if e.isInitialEventsEndBookmark {
+			if err := storage.AnnotateInitialEventsEndBookmark(object); err != nil {
+				wc.sendError(fmt.Errorf("error while accessing object's metadata gr: %v, type: %v, obj: %#v, err: %v", wc.watcher.groupResource, wc.watcher.objectType, object, err))
+				return nil
+			}
 		}
 		res = &watch.Event{
 			Type:   watch.Bookmark,

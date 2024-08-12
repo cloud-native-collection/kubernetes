@@ -23,7 +23,10 @@ import (
 	v1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration/apiextensions/v1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration/apiextensions/v1beta1"
+	internal "k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration/internal"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
+	testing "k8s.io/client-go/testing"
 )
 
 // ForKind returns an apply configuration type for the given GroupVersionKind, or nil if no
@@ -57,6 +60,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiextensionsv1.ExternalDocumentationApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("JSONSchemaProps"):
 		return &apiextensionsv1.JSONSchemaPropsApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("SelectableField"):
+		return &apiextensionsv1.SelectableFieldApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("ServiceReference"):
 		return &apiextensionsv1.ServiceReferenceApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("ValidationRule"):
@@ -93,6 +98,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiextensionsv1beta1.ExternalDocumentationApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("JSONSchemaProps"):
 		return &apiextensionsv1beta1.JSONSchemaPropsApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("SelectableField"):
+		return &apiextensionsv1beta1.SelectableFieldApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ServiceReference"):
 		return &apiextensionsv1beta1.ServiceReferenceApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ValidationRule"):
@@ -102,4 +109,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 
 	}
 	return nil
+}
+
+func NewTypeConverter(scheme *runtime.Scheme) *testing.TypeConverter {
+	return &testing.TypeConverter{Scheme: scheme, TypeResolver: internal.Parser()}
 }

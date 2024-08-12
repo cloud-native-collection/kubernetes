@@ -474,7 +474,7 @@ func TestDeleteFinalStateUnknown(t *testing.T) {
 		// DeletedFinalStateUnknown should queue the embedded DS if found.
 		manager.deleteDaemonset(logger, cache.DeletedFinalStateUnknown{Key: "foo", Obj: ds})
 		enqueuedKey, _ := manager.queue.Get()
-		if enqueuedKey.(string) != "default/foo" {
+		if enqueuedKey != "default/foo" {
 			t.Errorf("expected delete of DeletedFinalStateUnknown to enqueue the daemonset but found: %#v", enqueuedKey)
 		}
 	}
@@ -2890,7 +2890,7 @@ func TestAddNode(t *testing.T) {
 		t.Fatalf("queue.Len() = %v, want %v", got, want)
 	}
 	key, done := manager.queue.Get()
-	if key == nil || done {
+	if key == "" || done {
 		t.Fatalf("failed to enqueue controller for node %v", node2.Name)
 	}
 }
@@ -2920,11 +2920,11 @@ func TestAddPod(t *testing.T) {
 			t.Fatalf("queue.Len() = %v, want %v", got, want)
 		}
 		key, done := manager.queue.Get()
-		if key == nil || done {
+		if key == "" || done {
 			t.Fatalf("failed to enqueue controller for pod %v", pod1.Name)
 		}
 		expectedKey, _ := controller.KeyFunc(ds1)
-		if got, want := key.(string), expectedKey; got != want {
+		if got, want := key, expectedKey; got != want {
 			t.Errorf("queue.Get() = %v, want %v", got, want)
 		}
 
@@ -2934,11 +2934,11 @@ func TestAddPod(t *testing.T) {
 			t.Fatalf("queue.Len() = %v, want %v", got, want)
 		}
 		key, done = manager.queue.Get()
-		if key == nil || done {
+		if key == "" || done {
 			t.Fatalf("failed to enqueue controller for pod %v", pod2.Name)
 		}
 		expectedKey, _ = controller.KeyFunc(ds2)
-		if got, want := key.(string), expectedKey; got != want {
+		if got, want := key, expectedKey; got != want {
 			t.Errorf("queue.Get() = %v, want %v", got, want)
 		}
 	}
@@ -3011,11 +3011,11 @@ func TestUpdatePod(t *testing.T) {
 			t.Fatalf("queue.Len() = %v, want %v", got, want)
 		}
 		key, done := manager.queue.Get()
-		if key == nil || done {
+		if key == "" || done {
 			t.Fatalf("failed to enqueue controller for pod %v", pod1.Name)
 		}
 		expectedKey, _ := controller.KeyFunc(ds1)
-		if got, want := key.(string), expectedKey; got != want {
+		if got, want := key, expectedKey; got != want {
 			t.Errorf("queue.Get() = %v, want %v", got, want)
 		}
 
@@ -3027,11 +3027,11 @@ func TestUpdatePod(t *testing.T) {
 			t.Fatalf("queue.Len() = %v, want %v", got, want)
 		}
 		key, done = manager.queue.Get()
-		if key == nil || done {
+		if key == "" || done {
 			t.Fatalf("failed to enqueue controller for pod %v", pod2.Name)
 		}
 		expectedKey, _ = controller.KeyFunc(ds2)
-		if got, want := key.(string), expectedKey; got != want {
+		if got, want := key, expectedKey; got != want {
 			t.Errorf("queue.Get() = %v, want %v", got, want)
 		}
 	}
@@ -3189,11 +3189,11 @@ func TestDeletePod(t *testing.T) {
 			t.Fatalf("queue.Len() = %v, want %v", got, want)
 		}
 		key, done := manager.queue.Get()
-		if key == nil || done {
+		if key == "" || done {
 			t.Fatalf("failed to enqueue controller for pod %v", pod1.Name)
 		}
 		expectedKey, _ := controller.KeyFunc(ds1)
-		if got, want := key.(string), expectedKey; got != want {
+		if got, want := key, expectedKey; got != want {
 			t.Errorf("queue.Get() = %v, want %v", got, want)
 		}
 
@@ -3203,11 +3203,11 @@ func TestDeletePod(t *testing.T) {
 			t.Fatalf("queue.Len() = %v, want %v", got, want)
 		}
 		key, done = manager.queue.Get()
-		if key == nil || done {
+		if key == "" || done {
 			t.Fatalf("failed to enqueue controller for pod %v", pod2.Name)
 		}
 		expectedKey, _ = controller.KeyFunc(ds2)
-		if got, want := key.(string), expectedKey; got != want {
+		if got, want := key, expectedKey; got != want {
 			t.Errorf("queue.Get() = %v, want %v", got, want)
 		}
 	}
@@ -3255,7 +3255,7 @@ func bumpResourceVersion(obj metav1.Object) {
 
 // getQueuedKeys returns a sorted list of keys in the queue.
 // It can be used to quickly check that multiple keys are in there.
-func getQueuedKeys(queue workqueue.RateLimitingInterface) []string {
+func getQueuedKeys(queue workqueue.TypedRateLimitingInterface[string]) []string {
 	var keys []string
 	count := queue.Len()
 	for i := 0; i < count; i++ {
@@ -3263,7 +3263,7 @@ func getQueuedKeys(queue workqueue.RateLimitingInterface) []string {
 		if done {
 			return keys
 		}
-		keys = append(keys, key.(string))
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
@@ -3578,5 +3578,45 @@ func TestStoreDaemonSetStatus(t *testing.T) {
 				t.Errorf("UpdateStatus() was called %v times, expected %v times", updateCalled, tt.expectedUpdateCalled)
 			}
 		})
+	}
+}
+
+func TestShouldIgnoreNodeUpdate(t *testing.T) {
+	cases := []struct {
+		name           string
+		newNode        *v1.Node
+		oldNode        *v1.Node
+		expectedResult bool
+	}{
+		{
+			name:           "Nothing changed",
+			oldNode:        newNode("node1", nil),
+			newNode:        newNode("node1", nil),
+			expectedResult: true,
+		},
+		{
+			name:           "Node labels changed",
+			oldNode:        newNode("node1", nil),
+			newNode:        newNode("node1", simpleNodeLabel),
+			expectedResult: false,
+		},
+		{
+			name: "Node taints changed",
+			oldNode: func() *v1.Node {
+				node := newNode("node1", nil)
+				setNodeTaint(node, noScheduleTaints)
+				return node
+			}(),
+			newNode:        newNode("node1", nil),
+			expectedResult: false,
+		},
+	}
+
+	for _, c := range cases {
+		result := shouldIgnoreNodeUpdate(*c.oldNode, *c.newNode)
+
+		if result != c.expectedResult {
+			t.Errorf("[%s] unexpected results: %v", c.name, result)
+		}
 	}
 }

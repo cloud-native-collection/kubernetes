@@ -56,7 +56,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 			Create the custom resource definition and then delete it. The creation and deletion MUST
 			be successful.
 		*/
-		framework.ConformanceIt("creating/deleting custom resource definition objects works ", func(ctx context.Context) {
+		framework.ConformanceIt("creating/deleting custom resource definition objects works", func(ctx context.Context) {
 
 			config, err := framework.LoadConfig()
 			framework.ExpectNoError(err, "loading config")
@@ -83,7 +83,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 			custom resource definitions via delete collection; the delete MUST be successful and MUST delete only the
 			labeled custom resource definitions.
 		*/
-		framework.ConformanceIt("listing custom resource definition objects works ", func(ctx context.Context) {
+		framework.ConformanceIt("listing custom resource definition objects works", func(ctx context.Context) {
 			testListSize := 10
 			config, err := framework.LoadConfig()
 			framework.ExpectNoError(err, "loading config")
@@ -123,7 +123,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 						expected = e
 					}
 				}
-				framework.ExpectNotEqual(expected, nil)
+				gomega.Expect(expected).ToNot(gomega.BeNil())
 				if !equality.Semantic.DeepEqual(actual.Spec, expected.Spec) {
 					framework.Failf("Expected CustomResourceDefinition in list with name %s to match crd created with same name, but got different specs:\n%s",
 						actual.Name, cmp.Diff(expected.Spec, actual.Spec))
@@ -143,7 +143,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 			Description: Create a custom resource definition. Attempt to read, update and patch its status sub-resource;
 			all mutating sub-resource operations MUST be visible to subsequent reads.
 		*/
-		framework.ConformanceIt("getting/updating/patching custom resource definition status sub-resource works ", func(ctx context.Context) {
+		framework.ConformanceIt("getting/updating/patching custom resource definition status sub-resource works", func(ctx context.Context) {
 			config, err := framework.LoadConfig()
 			framework.ExpectNoError(err, "loading config")
 			apiExtensionClient, err := clientset.NewForConfig(config)
@@ -211,7 +211,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 					break
 				}
 			}
-			framework.ExpectNotEqual(group, nil, "apiextensions.k8s.io API group not found in /apis discovery document")
+			gomega.Expect(group).ToNot(gomega.BeNil(), "apiextensions.k8s.io API group not found in /apis discovery document")
 
 			ginkgo.By("finding the apiextensions.k8s.io/v1 API group/version in the /apis discovery document")
 			var version *metav1.GroupVersionForDiscovery
@@ -221,7 +221,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 					break
 				}
 			}
-			framework.ExpectNotEqual(version, nil, "apiextensions.k8s.io/v1 API group version not found in /apis discovery document")
+			gomega.Expect(version).ToNot(gomega.BeNil(), "apiextensions.k8s.io/v1 API group version not found in /apis discovery document")
 		}
 
 		{
@@ -239,7 +239,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 					break
 				}
 			}
-			framework.ExpectNotEqual(version, nil, "apiextensions.k8s.io/v1 API group version not found in /apis/apiextensions.k8s.io discovery document")
+			gomega.Expect(version).ToNot(gomega.BeNil(), "apiextensions.k8s.io/v1 API group version not found in /apis/apiextensions.k8s.io discovery document")
 		}
 
 		{
@@ -256,7 +256,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 					crdResource = &apiResourceList.APIResources[i]
 				}
 			}
-			framework.ExpectNotEqual(crdResource, nil, "customresourcedefinitions resource not found in /apis/apiextensions.k8s.io/v1 discovery document")
+			gomega.Expect(crdResource).ToNot(gomega.BeNil(), "customresourcedefinitions resource not found in /apis/apiextensions.k8s.io/v1 discovery document")
 		}
 	})
 
@@ -267,7 +267,7 @@ var _ = SIGDescribe("CustomResourceDefinition resources [Privileged:ClusterAdmin
 		the default is applied. Create another CR. Remove default, add default for another field and read CR until
 		new field is defaulted, but old default stays.
 	*/
-	framework.ConformanceIt("custom resource defaulting for requests and from storage works ", func(ctx context.Context) {
+	framework.ConformanceIt("custom resource defaulting for requests and from storage works", func(ctx context.Context) {
 		config, err := framework.LoadConfig()
 		framework.ExpectNoError(err, "loading config")
 		apiExtensionClient, err := clientset.NewForConfig(config)

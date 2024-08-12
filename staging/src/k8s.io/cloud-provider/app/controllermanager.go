@@ -18,7 +18,6 @@ package app
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"math/rand"
 	"os"
@@ -32,7 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/server/healthz"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	cacheddiscovery "k8s.io/client-go/discovery/cached"
+	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/informers"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/metadata"
@@ -130,14 +129,6 @@ the cloud specific control loops shipped with Kubernetes.`,
 	logsapi.AddFlags(logOptions, globalFlagSet)
 	globalflag.AddGlobalFlags(globalFlagSet, cmd.Name(), logs.SkipLoggingConfigurationFlags())
 
-	if flag.CommandLine.Lookup("cloud-provider-gce-lb-src-cidrs") != nil {
-		// hoist this flag from the global flagset to preserve the commandline until
-		// the gce cloudprovider is removed.
-		globalflag.Register(namedFlagSets.FlagSet("generic"), "cloud-provider-gce-lb-src-cidrs")
-	}
-	if flag.CommandLine.Lookup("cloud-provider-gce-l7lb-src-cidrs") != nil {
-		globalflag.Register(namedFlagSets.FlagSet("generic"), "cloud-provider-gce-l7lb-src-cidrs")
-	}
 	for _, f := range namedFlagSets.FlagSets {
 		fs.AddFlagSet(f)
 	}
@@ -202,9 +193,9 @@ func Run(c *cloudcontrollerconfig.CompletedConfig, cloud cloudprovider.Interface
 	// Start the controller manager HTTP server
 	if c.SecureServing != nil {
 		unsecuredMux := genericcontrollermanager.NewBaseHandler(&c.ComponentConfig.Generic.Debugging, healthzHandler)
-		if utilfeature.DefaultFeatureGate.Enabled(features.ComponentSLIs) {
-			slis.SLIMetricsWithReset{}.Install(unsecuredMux)
-		}
+
+		slis.SLIMetricsWithReset{}.Install(unsecuredMux)
+
 		handler := genericcontrollermanager.BuildHandlerChain(unsecuredMux, &c.Authorization, &c.Authentication)
 		// TODO: handle stoppedCh and listenerStoppedCh returned by c.SecureServing.Serve
 		if _, _, err := c.SecureServing.Serve(handler, 0, stopCh); err != nil {

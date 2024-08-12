@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -33,11 +34,12 @@ import (
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
 	"k8s.io/kubernetes/pkg/controller/endpoint"
 	"k8s.io/kubernetes/test/integration/framework"
+	"k8s.io/kubernetes/test/utils/ktesting"
 )
 
 func TestEndpointUpdates(t *testing.T) {
 	// Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
-	server := kubeapiservertesting.StartTestServerOrDie(t, nil, []string{"--disable-admission-plugins=ServiceAccount"}, framework.SharedEtcd())
+	server := kubeapiservertesting.StartTestServerOrDie(t, nil, framework.DefaultTestServerFlags(), framework.SharedEtcd())
 	defer server.TearDownFn()
 
 	client, err := clientset.NewForConfig(server.ClientConfig)
@@ -47,7 +49,9 @@ func TestEndpointUpdates(t *testing.T) {
 
 	informers := informers.NewSharedInformerFactory(client, 0)
 
+	tCtx := ktesting.Init(t)
 	epController := endpoint.NewEndpointController(
+		tCtx,
 		informers.Core().V1().Pods(),
 		informers.Core().V1().Services(),
 		informers.Core().V1().Endpoints(),
@@ -55,10 +59,8 @@ func TestEndpointUpdates(t *testing.T) {
 		0)
 
 	// Start informer and controllers
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	informers.Start(ctx.Done())
-	go epController.Run(ctx, 1)
+	informers.Start(tCtx.Done())
+	go epController.Run(tCtx, 1)
 
 	// Create namespace
 	ns := framework.CreateNamespaceOrDie(client, "test-endpoints-updates", t)
@@ -82,7 +84,7 @@ func TestEndpointUpdates(t *testing.T) {
 		},
 	}
 
-	createdPod, err := client.CoreV1().Pods(ns.Name).Create(ctx, pod, metav1.CreateOptions{})
+	createdPod, err := client.CoreV1().Pods(ns.Name).Create(tCtx, pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create pod %s: %v", pod.Name, err)
 	}
@@ -92,14 +94,14 @@ func TestEndpointUpdates(t *testing.T) {
 		Phase:  v1.PodRunning,
 		PodIPs: []v1.PodIP{{IP: "1.1.1.1"}, {IP: "2001:db8::"}},
 	}
-	_, err = client.CoreV1().Pods(ns.Name).UpdateStatus(ctx, createdPod, metav1.UpdateOptions{})
+	_, err = client.CoreV1().Pods(ns.Name).UpdateStatus(tCtx, createdPod, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to update status of pod %s: %v", pod.Name, err)
 	}
 
 	// Create a service associated to the pod
 	svc := newService(ns.Name, "foo1")
-	svc1, err := client.CoreV1().Services(ns.Name).Create(ctx, svc, metav1.CreateOptions{})
+	svc1, err := client.CoreV1().Services(ns.Name).Create(tCtx, svc, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create service %s: %v", svc.Name, err)
 	}
@@ -107,7 +109,7 @@ func TestEndpointUpdates(t *testing.T) {
 	// Obtain ResourceVersion of the new endpoint created
 	var resVersion string
 	if err := wait.PollImmediate(1*time.Second, wait.ForeverTestTimeout, func() (bool, error) {
-		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc.Name, metav1.GetOptions{})
+		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc.Name, metav1.GetOptions{})
 		if err != nil {
 			t.Logf("error fetching endpoints: %v", err)
 			return false, nil
@@ -120,7 +122,7 @@ func TestEndpointUpdates(t *testing.T) {
 
 	// Force recomputation on the endpoint controller
 	svc1.SetAnnotations(map[string]string{"foo": "bar"})
-	_, err = client.CoreV1().Services(ns.Name).Update(ctx, svc1, metav1.UpdateOptions{})
+	_, err = client.CoreV1().Services(ns.Name).Update(tCtx, svc1, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to update service %s: %v", svc1.Name, err)
 	}
@@ -130,13 +132,13 @@ func TestEndpointUpdates(t *testing.T) {
 	// was recomputed before asserting, since we only have 1 worker
 	// in the endpoint controller
 	svc2 := newService(ns.Name, "foo2")
-	_, err = client.CoreV1().Services(ns.Name).Create(ctx, svc2, metav1.CreateOptions{})
+	_, err = client.CoreV1().Services(ns.Name).Create(tCtx, svc2, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create service %s: %v", svc.Name, err)
 	}
 
 	if err := wait.PollImmediate(1*time.Second, wait.ForeverTestTimeout, func() (bool, error) {
-		_, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc2.Name, metav1.GetOptions{})
+		_, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc2.Name, metav1.GetOptions{})
 		if err != nil {
 			t.Logf("error fetching endpoints: %v", err)
 			return false, nil
@@ -148,7 +150,7 @@ func TestEndpointUpdates(t *testing.T) {
 
 	// the endpoint controller should not update the endpoint created for the original
 	// service since nothing has changed, the resource version has to be the same
-	endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc.Name, metav1.GetOptions{})
+	endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("error fetching endpoints: %v", err)
 	}
@@ -158,12 +160,10 @@ func TestEndpointUpdates(t *testing.T) {
 
 }
 
-// TestExternalNameToClusterIPTransition tests that Service of type ExternalName
-// does not get endpoints, and after transition to ClusterIP, service gets endpoint,
-// without headless label
-func TestExternalNameToClusterIPTransition(t *testing.T) {
+// Regression test for https://issues.k8s.io/125638
+func TestEndpointWithMultiplePodUpdates(t *testing.T) {
 	// Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
-	server := kubeapiservertesting.StartTestServerOrDie(t, nil, []string{"--disable-admission-plugins=ServiceAccount"}, framework.SharedEtcd())
+	server := kubeapiservertesting.StartTestServerOrDie(t, nil, framework.DefaultTestServerFlags(), framework.SharedEtcd())
 	defer server.TearDownFn()
 
 	client, err := clientset.NewForConfig(server.ClientConfig)
@@ -173,18 +173,20 @@ func TestExternalNameToClusterIPTransition(t *testing.T) {
 
 	informers := informers.NewSharedInformerFactory(client, 0)
 
+	tCtx := ktesting.Init(t)
 	epController := endpoint.NewEndpointController(
+		tCtx,
 		informers.Core().V1().Pods(),
 		informers.Core().V1().Services(),
 		informers.Core().V1().Endpoints(),
 		client,
 		0)
 
+	// Process 10 services in parallel to increase likelihood of outdated informer cache.
+	concurrency := 10
 	// Start informer and controllers
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	informers.Start(ctx.Done())
-	go epController.Run(ctx, 1)
+	informers.Start(tCtx.Done())
+	go epController.Run(tCtx, concurrency)
 
 	// Create namespace
 	ns := framework.CreateNamespaceOrDie(client, "test-endpoints-updates", t)
@@ -208,7 +210,148 @@ func TestExternalNameToClusterIPTransition(t *testing.T) {
 		},
 	}
 
-	createdPod, err := client.CoreV1().Pods(ns.Name).Create(ctx, pod, metav1.CreateOptions{})
+	pod, err = client.CoreV1().Pods(ns.Name).Create(tCtx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to create pod %s: %v", pod.Name, err)
+	}
+
+	// Set pod status
+	pod.Status = v1.PodStatus{
+		Phase:      v1.PodRunning,
+		Conditions: []v1.PodCondition{{Type: v1.PodReady, Status: v1.ConditionTrue}},
+		PodIPs:     []v1.PodIP{{IP: "1.1.1.1"}},
+	}
+	pod, err = client.CoreV1().Pods(ns.Name).UpdateStatus(tCtx, pod, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to update status of pod %s: %v", pod.Name, err)
+	}
+
+	var services []*v1.Service
+	// Create services associated to the pod
+	for i := 0; i < concurrency; i++ {
+		svc := newService(ns.Name, fmt.Sprintf("foo%d", i))
+		_, err = client.CoreV1().Services(ns.Name).Create(tCtx, svc, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatalf("Failed to create service %s: %v", svc.Name, err)
+		}
+		services = append(services, svc)
+	}
+
+	for _, service := range services {
+		// Ensure the new endpoints are created.
+		if err := wait.PollUntilContextTimeout(tCtx, 1*time.Second, 10*time.Second, true, func(context.Context) (bool, error) {
+			_, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, service.Name, metav1.GetOptions{})
+			if err != nil {
+				return false, nil
+			}
+			return true, nil
+		}); err != nil {
+			t.Fatalf("endpoints not found: %v", err)
+		}
+	}
+
+	// Update pod's status and revert it immediately. The endpoints should be in-sync with the pod's status eventually.
+	pod.Status.Conditions[0].Status = v1.ConditionFalse
+	pod, err = client.CoreV1().Pods(ns.Name).UpdateStatus(tCtx, pod, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to update pod %s to not ready: %v", pod.Name, err)
+	}
+
+	pod.Status.Conditions[0].Status = v1.ConditionTrue
+	pod, err = client.CoreV1().Pods(ns.Name).UpdateStatus(tCtx, pod, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatalf("Failed to update pod %s to ready: %v", pod.Name, err)
+	}
+
+	// Some workers might update endpoints twice (Ready->NotReady->Ready), while others may not update endpoints at all
+	// if they receive the 2nd pod update quickly. Consequently, we can't rely on endpoints resource version to
+	// determine if the controller has processed the pod updates. Instead, we will wait for 1 second, assuming that this
+	// provides enough time for the workers to process endpoints at least once.
+	time.Sleep(1 * time.Second)
+	expectedEndpointAddresses := []v1.EndpointAddress{
+		{
+			IP:       pod.Status.PodIP,
+			NodeName: &pod.Spec.NodeName,
+			TargetRef: &v1.ObjectReference{
+				Kind:      "Pod",
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+				UID:       pod.UID,
+			},
+		},
+	}
+	for _, service := range services {
+		var endpoints *v1.Endpoints
+		if err := wait.PollUntilContextTimeout(tCtx, 1*time.Second, 10*time.Second, true, func(context.Context) (bool, error) {
+			endpoints, err = client.CoreV1().Endpoints(ns.Name).Get(tCtx, service.Name, metav1.GetOptions{})
+			if err != nil {
+				t.Logf("Error fetching endpoints: %v", err)
+				return false, nil
+			}
+			if len(endpoints.Subsets) == 0 {
+				return false, nil
+			}
+			if !reflect.DeepEqual(expectedEndpointAddresses, endpoints.Subsets[0].Addresses) {
+				return false, nil
+			}
+			return true, nil
+		}); err != nil {
+			t.Fatalf("Expected endpoints %v to contain ready endpoint addresses %v", endpoints, expectedEndpointAddresses)
+		}
+	}
+}
+
+// TestExternalNameToClusterIPTransition tests that Service of type ExternalName
+// does not get endpoints, and after transition to ClusterIP, service gets endpoint,
+// without headless label
+func TestExternalNameToClusterIPTransition(t *testing.T) {
+	// Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
+	server := kubeapiservertesting.StartTestServerOrDie(t, nil, framework.DefaultTestServerFlags(), framework.SharedEtcd())
+	defer server.TearDownFn()
+
+	client, err := clientset.NewForConfig(server.ClientConfig)
+	if err != nil {
+		t.Fatalf("Error creating clientset: %v", err)
+	}
+
+	informers := informers.NewSharedInformerFactory(client, 0)
+
+	tCtx := ktesting.Init(t)
+	epController := endpoint.NewEndpointController(
+		tCtx,
+		informers.Core().V1().Pods(),
+		informers.Core().V1().Services(),
+		informers.Core().V1().Endpoints(),
+		client,
+		0)
+
+	// Start informer and controllers
+	informers.Start(tCtx.Done())
+	go epController.Run(tCtx, 1)
+
+	// Create namespace
+	ns := framework.CreateNamespaceOrDie(client, "test-endpoints-updates", t)
+	defer framework.DeleteNamespaceOrDie(client, ns, t)
+
+	// Create a pod with labels
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: ns.Name,
+			Labels:    labelMap(),
+		},
+		Spec: v1.PodSpec{
+			NodeName: "fakenode",
+			Containers: []v1.Container{
+				{
+					Name:  "fake-name",
+					Image: "fakeimage",
+				},
+			},
+		},
+	}
+
+	createdPod, err := client.CoreV1().Pods(ns.Name).Create(tCtx, pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create pod %s: %v", pod.Name, err)
 	}
@@ -218,20 +361,20 @@ func TestExternalNameToClusterIPTransition(t *testing.T) {
 		Phase:  v1.PodRunning,
 		PodIPs: []v1.PodIP{{IP: "1.1.1.1"}, {IP: "2001:db8::"}},
 	}
-	_, err = client.CoreV1().Pods(ns.Name).UpdateStatus(ctx, createdPod, metav1.UpdateOptions{})
+	_, err = client.CoreV1().Pods(ns.Name).UpdateStatus(tCtx, createdPod, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to update status of pod %s: %v", pod.Name, err)
 	}
 
 	// Create an ExternalName service associated to the pod
 	svc := newExternalNameService(ns.Name, "foo1")
-	svc1, err := client.CoreV1().Services(ns.Name).Create(ctx, svc, metav1.CreateOptions{})
+	svc1, err := client.CoreV1().Services(ns.Name).Create(tCtx, svc, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create service %s: %v", svc.Name, err)
 	}
 
 	err = wait.PollImmediate(1*time.Second, 10*time.Second, func() (bool, error) {
-		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc.Name, metav1.GetOptions{})
+		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc.Name, metav1.GetOptions{})
 		if err == nil {
 			t.Errorf("expected no endpoints for externalName service, got: %v", endpoints)
 			return true, nil
@@ -244,13 +387,13 @@ func TestExternalNameToClusterIPTransition(t *testing.T) {
 
 	// update service to ClusterIP type and verify endpoint was created
 	svc1.Spec.Type = v1.ServiceTypeClusterIP
-	_, err = client.CoreV1().Services(ns.Name).Update(ctx, svc1, metav1.UpdateOptions{})
+	_, err = client.CoreV1().Services(ns.Name).Update(tCtx, svc1, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to update service %s: %v", svc1.Name, err)
 	}
 
 	if err := wait.PollImmediate(1*time.Second, wait.ForeverTestTimeout, func() (bool, error) {
-		ep, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc1.Name, metav1.GetOptions{})
+		ep, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc1.Name, metav1.GetOptions{})
 		if err != nil {
 			t.Logf("no endpoints found, error: %v", err)
 			return false, nil
@@ -272,7 +415,7 @@ func TestExternalNameToClusterIPTransition(t *testing.T) {
 // this behavior accidentally.
 func TestEndpointWithTerminatingPod(t *testing.T) {
 	// Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
-	server := kubeapiservertesting.StartTestServerOrDie(t, nil, []string{"--disable-admission-plugins=ServiceAccount"}, framework.SharedEtcd())
+	server := kubeapiservertesting.StartTestServerOrDie(t, nil, framework.DefaultTestServerFlags(), framework.SharedEtcd())
 	defer server.TearDownFn()
 
 	client, err := clientset.NewForConfig(server.ClientConfig)
@@ -282,7 +425,9 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 
 	informers := informers.NewSharedInformerFactory(client, 0)
 
+	tCtx := ktesting.Init(t)
 	epController := endpoint.NewEndpointController(
+		tCtx,
 		informers.Core().V1().Pods(),
 		informers.Core().V1().Services(),
 		informers.Core().V1().Endpoints(),
@@ -290,10 +435,8 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 		0)
 
 	// Start informer and controllers
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	informers.Start(ctx.Done())
-	go epController.Run(ctx, 1)
+	informers.Start(tCtx.Done())
+	go epController.Run(tCtx, 1)
 
 	// Create namespace
 	ns := framework.CreateNamespaceOrDie(client, "test-endpoints-terminating", t)
@@ -337,13 +480,13 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 		},
 	}
 
-	createdPod, err := client.CoreV1().Pods(ns.Name).Create(ctx, pod, metav1.CreateOptions{})
+	createdPod, err := client.CoreV1().Pods(ns.Name).Create(tCtx, pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create pod %s: %v", pod.Name, err)
 	}
 
 	createdPod.Status = pod.Status
-	_, err = client.CoreV1().Pods(ns.Name).UpdateStatus(ctx, createdPod, metav1.UpdateOptions{})
+	_, err = client.CoreV1().Pods(ns.Name).UpdateStatus(tCtx, createdPod, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to update status of pod %s: %v", pod.Name, err)
 	}
@@ -366,14 +509,14 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 			},
 		},
 	}
-	_, err = client.CoreV1().Services(ns.Name).Create(ctx, svc, metav1.CreateOptions{})
+	_, err = client.CoreV1().Services(ns.Name).Create(tCtx, svc, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Failed to create service %s: %v", svc.Name, err)
 	}
 
 	// poll until associated Endpoints to the previously created Service exists
 	if err := wait.PollImmediate(1*time.Second, 10*time.Second, func() (bool, error) {
-		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc.Name, metav1.GetOptions{})
+		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, nil
 		}
@@ -392,7 +535,7 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 		t.Fatalf("endpoints not found: %v", err)
 	}
 
-	err = client.CoreV1().Pods(ns.Name).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+	err = client.CoreV1().Pods(ns.Name).Delete(tCtx, pod.Name, metav1.DeleteOptions{})
 	if err != nil {
 		t.Fatalf("error deleting test pod: %v", err)
 	}
@@ -401,7 +544,7 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 	if err := wait.PollImmediate(1*time.Second, 10*time.Second, func() (bool, error) {
 		// Ensure that the recently deleted Pod exists but with a deletion timestamp. If the Pod does not exist,
 		// we should fail the test since it is no longer validating against a terminating pod.
-		pod, err := client.CoreV1().Pods(ns.Name).Get(ctx, pod.Name, metav1.GetOptions{})
+		pod, err := client.CoreV1().Pods(ns.Name).Get(tCtx, pod.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			return false, fmt.Errorf("expected Pod %q to exist with deletion timestamp but was not found: %v", pod.Name, err)
 		}
@@ -413,7 +556,7 @@ func TestEndpointWithTerminatingPod(t *testing.T) {
 			return false, errors.New("pod did not have deletion timestamp set")
 		}
 
-		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(ctx, svc.Name, metav1.GetOptions{})
+		endpoints, err := client.CoreV1().Endpoints(ns.Name).Get(tCtx, svc.Name, metav1.GetOptions{})
 		if err != nil {
 			return false, nil
 		}

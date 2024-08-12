@@ -48,9 +48,6 @@ import (
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
-
-	// ensure libs have a chance to initialize
-	_ "github.com/stretchr/testify/assert"
 )
 
 type priorityPair struct {
@@ -64,7 +61,7 @@ const (
 	testFinalizer = "example.com/test-finalizer"
 )
 
-var _ = SIGDescribe("SchedulerPreemption [Serial]", func() {
+var _ = SIGDescribe("SchedulerPreemption", framework.WithSerial(), func() {
 	var cs clientset.Interface
 	var nodeList *v1.NodeList
 	var ns string
@@ -320,15 +317,20 @@ var _ = SIGDescribe("SchedulerPreemption [Serial]", func() {
 		}
 	})
 
-	// 1. Run a low priority pod with finalizer which consumes 1/1 of node resources
-	// 2. Schedule a higher priority pod which also consumes 1/1 of node resources
-	// 3. See if the pod with lower priority is preempted and has the pod disruption condition
-	// 4. Remove the finalizer so that the pod can be deleted by GC
-	ginkgo.It("validates pod disruption condition is added to the preempted pod", func(ctx context.Context) {
+	/*
+		Release: v1.31
+		Testname: Verify the DisruptionTarget condition is added to the preempted pod
+		Description:
+		1. Run a low priority pod with finalizer which consumes 1/1 of node resources
+		2. Schedule a higher priority pod which also consumes 1/1 of node resources
+		3. See if the pod with lower priority is preempted and has the pod disruption condition
+		4. Remove the finalizer so that the pod can be deleted by GC
+	*/
+	framework.ConformanceIt("validates pod disruption condition is added to the preempted pod", func(ctx context.Context) {
 		podRes := v1.ResourceList{testExtendedResource: resource.MustParse("1")}
 
 		ginkgo.By("Select a node to run the lower and higher priority pods")
-		framework.ExpectNotEqual(len(nodeList.Items), 0, "We need at least one node for the test to run")
+		gomega.Expect(nodeList.Items).ToNot(gomega.BeEmpty(), "We need at least one node for the test to run")
 		node := nodeList.Items[0]
 		nodeCopy := node.DeepCopy()
 		nodeCopy.Status.Capacity[testExtendedResource] = resource.MustParse("1")

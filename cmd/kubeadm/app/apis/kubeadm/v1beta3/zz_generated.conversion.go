@@ -49,11 +49,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*APIServer)(nil), (*kubeadm.APIServer)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1beta3_APIServer_To_kubeadm_APIServer(a.(*APIServer), b.(*kubeadm.APIServer), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*kubeadm.APIServer)(nil), (*APIServer)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_kubeadm_APIServer_To_v1beta3_APIServer(a.(*kubeadm.APIServer), b.(*APIServer), scope)
 	}); err != nil {
@@ -69,23 +64,8 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*ClusterConfiguration)(nil), (*kubeadm.ClusterConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1beta3_ClusterConfiguration_To_kubeadm_ClusterConfiguration(a.(*ClusterConfiguration), b.(*kubeadm.ClusterConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*kubeadm.ClusterConfiguration)(nil), (*ClusterConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration(a.(*kubeadm.ClusterConfiguration), b.(*ClusterConfiguration), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*DNS)(nil), (*kubeadm.DNS)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta3_DNS_To_kubeadm_DNS(a.(*DNS), b.(*kubeadm.DNS), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*kubeadm.DNS)(nil), (*DNS)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_kubeadm_DNS_To_v1beta3_DNS(a.(*kubeadm.DNS), b.(*DNS), scope)
 	}); err != nil {
 		return err
 	}
@@ -149,11 +129,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*JoinConfiguration)(nil), (*kubeadm.JoinConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1beta3_JoinConfiguration_To_kubeadm_JoinConfiguration(a.(*JoinConfiguration), b.(*kubeadm.JoinConfiguration), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*JoinControlPlane)(nil), (*kubeadm.JoinControlPlane)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta3_JoinControlPlane_To_kubeadm_JoinControlPlane(a.(*JoinControlPlane), b.(*kubeadm.JoinControlPlane), scope)
 	}); err != nil {
@@ -184,8 +159,18 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddConversionFunc((*kubeadm.ClusterConfiguration)(nil), (*ClusterConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration(a.(*kubeadm.ClusterConfiguration), b.(*ClusterConfiguration), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddConversionFunc((*kubeadm.ControlPlaneComponent)(nil), (*ControlPlaneComponent)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_kubeadm_ControlPlaneComponent_To_v1beta3_ControlPlaneComponent(a.(*kubeadm.ControlPlaneComponent), b.(*ControlPlaneComponent), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddConversionFunc((*kubeadm.DNS)(nil), (*DNS)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_kubeadm_DNS_To_v1beta3_DNS(a.(*kubeadm.DNS), b.(*DNS), scope)
 	}); err != nil {
 		return err
 	}
@@ -209,6 +194,16 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddConversionFunc((*APIServer)(nil), (*kubeadm.APIServer)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta3_APIServer_To_kubeadm_APIServer(a.(*APIServer), b.(*kubeadm.APIServer), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddConversionFunc((*ClusterConfiguration)(nil), (*kubeadm.ClusterConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta3_ClusterConfiguration_To_kubeadm_ClusterConfiguration(a.(*ClusterConfiguration), b.(*kubeadm.ClusterConfiguration), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddConversionFunc((*ControlPlaneComponent)(nil), (*kubeadm.ControlPlaneComponent)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta3_ControlPlaneComponent_To_kubeadm_ControlPlaneComponent(a.(*ControlPlaneComponent), b.(*kubeadm.ControlPlaneComponent), scope)
 	}); err != nil {
@@ -216,6 +211,11 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddConversionFunc((*InitConfiguration)(nil), (*kubeadm.InitConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta3_InitConfiguration_To_kubeadm_InitConfiguration(a.(*InitConfiguration), b.(*kubeadm.InitConfiguration), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddConversionFunc((*JoinConfiguration)(nil), (*kubeadm.JoinConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta3_JoinConfiguration_To_kubeadm_JoinConfiguration(a.(*JoinConfiguration), b.(*kubeadm.JoinConfiguration), scope)
 	}); err != nil {
 		return err
 	}
@@ -261,11 +261,6 @@ func autoConvert_v1beta3_APIServer_To_kubeadm_APIServer(in *APIServer, out *kube
 	out.CertSANs = *(*[]string)(unsafe.Pointer(&in.CertSANs))
 	out.TimeoutForControlPlane = (*v1.Duration)(unsafe.Pointer(in.TimeoutForControlPlane))
 	return nil
-}
-
-// Convert_v1beta3_APIServer_To_kubeadm_APIServer is an autogenerated conversion function.
-func Convert_v1beta3_APIServer_To_kubeadm_APIServer(in *APIServer, out *kubeadm.APIServer, s conversion.Scope) error {
-	return autoConvert_v1beta3_APIServer_To_kubeadm_APIServer(in, out, s)
 }
 
 func autoConvert_kubeadm_APIServer_To_v1beta3_APIServer(in *kubeadm.APIServer, out *APIServer, s conversion.Scope) error {
@@ -336,11 +331,6 @@ func autoConvert_v1beta3_ClusterConfiguration_To_kubeadm_ClusterConfiguration(in
 	return nil
 }
 
-// Convert_v1beta3_ClusterConfiguration_To_kubeadm_ClusterConfiguration is an autogenerated conversion function.
-func Convert_v1beta3_ClusterConfiguration_To_kubeadm_ClusterConfiguration(in *ClusterConfiguration, out *kubeadm.ClusterConfiguration, s conversion.Scope) error {
-	return autoConvert_v1beta3_ClusterConfiguration_To_kubeadm_ClusterConfiguration(in, out, s)
-}
-
 func autoConvert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration(in *kubeadm.ClusterConfiguration, out *ClusterConfiguration, s conversion.Scope) error {
 	// INFO: in.ComponentConfigs opted out of conversion generation
 	if err := Convert_kubeadm_Etcd_To_v1beta3_Etcd(&in.Etcd, &out.Etcd, s); err != nil {
@@ -364,17 +354,16 @@ func autoConvert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration(in
 	if err := Convert_kubeadm_DNS_To_v1beta3_DNS(&in.DNS, &out.DNS, s); err != nil {
 		return err
 	}
+	// WARNING: in.Proxy requires manual conversion: does not exist in peer-type
 	out.CertificatesDir = in.CertificatesDir
 	out.ImageRepository = in.ImageRepository
 	// INFO: in.CIImageRepository opted out of conversion generation
 	out.FeatureGates = *(*map[string]bool)(unsafe.Pointer(&in.FeatureGates))
 	out.ClusterName = in.ClusterName
+	// WARNING: in.EncryptionAlgorithm requires manual conversion: does not exist in peer-type
+	// WARNING: in.CertificateValidityPeriod requires manual conversion: does not exist in peer-type
+	// WARNING: in.CACertificateValidityPeriod requires manual conversion: does not exist in peer-type
 	return nil
-}
-
-// Convert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration is an autogenerated conversion function.
-func Convert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration(in *kubeadm.ClusterConfiguration, out *ClusterConfiguration, s conversion.Scope) error {
-	return autoConvert_kubeadm_ClusterConfiguration_To_v1beta3_ClusterConfiguration(in, out, s)
 }
 
 func autoConvert_v1beta3_ControlPlaneComponent_To_kubeadm_ControlPlaneComponent(in *ControlPlaneComponent, out *kubeadm.ControlPlaneComponent, s conversion.Scope) error {
@@ -406,12 +395,8 @@ func autoConvert_kubeadm_DNS_To_v1beta3_DNS(in *kubeadm.DNS, out *DNS, s convers
 	if err := Convert_kubeadm_ImageMeta_To_v1beta3_ImageMeta(&in.ImageMeta, &out.ImageMeta, s); err != nil {
 		return err
 	}
+	// WARNING: in.Disabled requires manual conversion: does not exist in peer-type
 	return nil
-}
-
-// Convert_kubeadm_DNS_To_v1beta3_DNS is an autogenerated conversion function.
-func Convert_kubeadm_DNS_To_v1beta3_DNS(in *kubeadm.DNS, out *DNS, s conversion.Scope) error {
-	return autoConvert_kubeadm_DNS_To_v1beta3_DNS(in, out, s)
 }
 
 func autoConvert_v1beta3_Discovery_To_kubeadm_Discovery(in *Discovery, out *kubeadm.Discovery, s conversion.Scope) error {
@@ -601,6 +586,7 @@ func autoConvert_kubeadm_InitConfiguration_To_v1beta3_InitConfiguration(in *kube
 	out.CertificateKey = in.CertificateKey
 	out.SkipPhases = *(*[]string)(unsafe.Pointer(&in.SkipPhases))
 	out.Patches = (*Patches)(unsafe.Pointer(in.Patches))
+	// WARNING: in.Timeouts requires manual conversion: does not exist in peer-type
 	return nil
 }
 
@@ -618,11 +604,6 @@ func autoConvert_v1beta3_JoinConfiguration_To_kubeadm_JoinConfiguration(in *Join
 	return nil
 }
 
-// Convert_v1beta3_JoinConfiguration_To_kubeadm_JoinConfiguration is an autogenerated conversion function.
-func Convert_v1beta3_JoinConfiguration_To_kubeadm_JoinConfiguration(in *JoinConfiguration, out *kubeadm.JoinConfiguration, s conversion.Scope) error {
-	return autoConvert_v1beta3_JoinConfiguration_To_kubeadm_JoinConfiguration(in, out, s)
-}
-
 func autoConvert_kubeadm_JoinConfiguration_To_v1beta3_JoinConfiguration(in *kubeadm.JoinConfiguration, out *JoinConfiguration, s conversion.Scope) error {
 	// WARNING: in.DryRun requires manual conversion: does not exist in peer-type
 	if err := Convert_kubeadm_NodeRegistrationOptions_To_v1beta3_NodeRegistrationOptions(&in.NodeRegistration, &out.NodeRegistration, s); err != nil {
@@ -635,6 +616,7 @@ func autoConvert_kubeadm_JoinConfiguration_To_v1beta3_JoinConfiguration(in *kube
 	out.ControlPlane = (*JoinControlPlane)(unsafe.Pointer(in.ControlPlane))
 	out.SkipPhases = *(*[]string)(unsafe.Pointer(&in.SkipPhases))
 	out.Patches = (*Patches)(unsafe.Pointer(in.Patches))
+	// WARNING: in.Timeouts requires manual conversion: does not exist in peer-type
 	return nil
 }
 
@@ -728,6 +710,7 @@ func autoConvert_kubeadm_NodeRegistrationOptions_To_v1beta3_NodeRegistrationOpti
 	// WARNING: in.KubeletExtraArgs requires manual conversion: inconvertible types ([]k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm.Arg vs map[string]string)
 	out.IgnorePreflightErrors = *(*[]string)(unsafe.Pointer(&in.IgnorePreflightErrors))
 	out.ImagePullPolicy = corev1.PullPolicy(in.ImagePullPolicy)
+	// WARNING: in.ImagePullSerial requires manual conversion: does not exist in peer-type
 	return nil
 }
 

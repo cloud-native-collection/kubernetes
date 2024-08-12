@@ -38,6 +38,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
+
 	"k8s.io/kubernetes/pkg/features"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
@@ -68,7 +69,7 @@ func TestRemoveContainer(t *testing.T) {
 
 	// Create fake sandbox and container
 	_, fakeContainers := makeAndSetFakePod(t, m, fakeRuntime, pod)
-	assert.Equal(t, len(fakeContainers), 1)
+	assert.Len(t, fakeContainers, 1)
 
 	containerID := fakeContainers[0].Id
 	fakeOS := m.osInterface.(*containertest.FakeOS)
@@ -77,8 +78,9 @@ func TestRemoveContainer(t *testing.T) {
 		pattern = strings.Replace(pattern, "\\", "\\\\", -1)
 		return regexp.MustCompile(pattern).MatchString(path)
 	}
-	expectedContainerLogPath := filepath.Join(podLogsRootDirectory, "new_bar_12345678", "foo", "0.log")
-	expectedContainerLogPathRotated := filepath.Join(podLogsRootDirectory, "new_bar_12345678", "foo", "0.log.20060102-150405")
+	podLogsDirectory := "/var/log/pods"
+	expectedContainerLogPath := filepath.Join(podLogsDirectory, "new_bar_12345678", "foo", "0.log")
+	expectedContainerLogPathRotated := filepath.Join(podLogsDirectory, "new_bar_12345678", "foo", "0.log.20060102-150405")
 	expectedContainerLogSymlink := legacyLogSymlink(containerID, "foo", "bar", "new")
 
 	fakeOS.Create(expectedContainerLogPath)
@@ -128,7 +130,7 @@ func TestKillContainer(t *testing.T) {
 
 	for _, test := range tests {
 		ctx := context.Background()
-		err := m.killContainer(ctx, test.pod, test.containerID, test.containerName, test.reason, "", &test.gracePeriodOverride)
+		err := m.killContainer(ctx, test.pod, test.containerID, test.containerName, test.reason, "", &test.gracePeriodOverride, nil)
 		if test.succeed != (err == nil) {
 			t.Errorf("%s: expected %v, got %v (%v)", test.caseName, test.succeed, (err == nil), err)
 		}
@@ -235,11 +237,7 @@ func TestToKubeContainerStatus(t *testing.T) {
 // TestToKubeContainerStatusWithResources tests the converting the CRI container status to
 // the internal type (i.e., toKubeContainerStatus()) for containers that returns Resources.
 func TestToKubeContainerStatusWithResources(t *testing.T) {
-	// TODO: remove this check on this PR merges: https://github.com/kubernetes/kubernetes/pull/112599
-	if goruntime.GOOS == "windows" {
-		t.Skip("Updating Pod Container Resources is not supported on Windows.")
-	}
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)()
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)
 	cid := &kubecontainer.ContainerID{Type: "testRuntime", ID: "dummyid"}
 	meta := &runtimeapi.ContainerMetadata{Name: "cname", Attempt: 3}
 	imageSpec := &runtimeapi.ImageSpec{Image: "fimage"}
@@ -249,8 +247,9 @@ func TestToKubeContainerStatusWithResources(t *testing.T) {
 	)
 
 	for desc, test := range map[string]struct {
-		input    *runtimeapi.ContainerStatus
-		expected *kubecontainer.Status
+		input         *runtimeapi.ContainerStatus
+		expected      *kubecontainer.Status
+		skipOnWindows bool
 	}{
 		"container reporting cpu and memory": {
 			input: &runtimeapi.ContainerStatus{
@@ -260,14 +259,25 @@ func TestToKubeContainerStatusWithResources(t *testing.T) {
 				State:     runtimeapi.ContainerState_CONTAINER_RUNNING,
 				CreatedAt: createdAt,
 				StartedAt: startedAt,
-				Resources: &runtimeapi.ContainerResources{
-					Linux: &runtimeapi.LinuxContainerResources{
-						CpuQuota:           25000,
-						CpuPeriod:          100000,
-						MemoryLimitInBytes: 524288000,
-						OomScoreAdj:        -998,
-					},
-				},
+				Resources: func() *runtimeapi.ContainerResources {
+					if goruntime.GOOS == "windows" {
+						return &runtimeapi.ContainerResources{
+							Windows: &runtimeapi.WindowsContainerResources{
+								CpuMaximum:         2500,
+								CpuCount:           1,
+								MemoryLimitInBytes: 524288000,
+							},
+						}
+					}
+					return &runtimeapi.ContainerResources{
+						Linux: &runtimeapi.LinuxContainerResources{
+							CpuQuota:           25000,
+							CpuPeriod:          100000,
+							MemoryLimitInBytes: 524288000,
+							OomScoreAdj:        -998,
+						},
+					}
+				}(),
 			},
 			expected: &kubecontainer.Status{
 				ID:        *cid,
@@ -280,6 +290,7 @@ func TestToKubeContainerStatusWithResources(t *testing.T) {
 					MemoryLimit: resource.NewQuantity(524288000, resource.BinarySI),
 				},
 			},
+			skipOnWindows: true,
 		},
 		"container reporting cpu only": {
 			input: &runtimeapi.ContainerStatus{
@@ -289,12 +300,22 @@ func TestToKubeContainerStatusWithResources(t *testing.T) {
 				State:     runtimeapi.ContainerState_CONTAINER_RUNNING,
 				CreatedAt: createdAt,
 				StartedAt: startedAt,
-				Resources: &runtimeapi.ContainerResources{
-					Linux: &runtimeapi.LinuxContainerResources{
-						CpuQuota:  50000,
-						CpuPeriod: 100000,
-					},
-				},
+				Resources: func() *runtimeapi.ContainerResources {
+					if goruntime.GOOS == "windows" {
+						return &runtimeapi.ContainerResources{
+							Windows: &runtimeapi.WindowsContainerResources{
+								CpuMaximum: 2500,
+								CpuCount:   2,
+							},
+						}
+					}
+					return &runtimeapi.ContainerResources{
+						Linux: &runtimeapi.LinuxContainerResources{
+							CpuQuota:  50000,
+							CpuPeriod: 100000,
+						},
+					}
+				}(),
 			},
 			expected: &kubecontainer.Status{
 				ID:        *cid,
@@ -320,6 +341,9 @@ func TestToKubeContainerStatusWithResources(t *testing.T) {
 						MemoryLimitInBytes: 524288000,
 						OomScoreAdj:        -998,
 					},
+					Windows: &runtimeapi.WindowsContainerResources{
+						MemoryLimitInBytes: 524288000,
+					},
 				},
 			},
 			expected: &kubecontainer.Status{
@@ -335,8 +359,96 @@ func TestToKubeContainerStatusWithResources(t *testing.T) {
 		},
 	} {
 		t.Run(desc, func(t *testing.T) {
+			if test.skipOnWindows && goruntime.GOOS == "windows" {
+				// TODO: remove skip once the failing test has been fixed.
+				t.Skip("Skip failing test on Windows.")
+			}
 			actual := toKubeContainerStatus(test.input, cid.Type)
 			assert.Equal(t, test.expected, actual, desc)
+		})
+	}
+}
+
+func TestToKubeContainerStatusWithUser(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("Updating Pod Container User is not supported on Windows.")
+	}
+
+	cid := &kubecontainer.ContainerID{Type: "testRuntime", ID: "dummyid"}
+	meta := &runtimeapi.ContainerMetadata{Name: "cname", Attempt: 3}
+	imageSpec := &runtimeapi.ImageSpec{Image: "fimage"}
+	var (
+		createdAt int64 = 327
+		startedAt int64 = 999
+	)
+
+	for desc, test := range map[string]struct {
+		input          *runtimeapi.ContainerUser
+		expected       *kubecontainer.ContainerUser
+		featureEnabled bool
+	}{
+		"non nil user, SupplementalGroupsPolicy is disabled": {
+			input: &runtimeapi.ContainerUser{
+				Linux: &runtimeapi.LinuxContainerUser{
+					Uid:                0,
+					Gid:                0,
+					SupplementalGroups: []int64{10},
+				},
+			},
+			expected:       nil,
+			featureEnabled: false,
+		},
+		"empty user, SupplementalGroupsPolicy is disabled": {
+			input:          &runtimeapi.ContainerUser{},
+			expected:       nil,
+			featureEnabled: false,
+		},
+		"nil user, SupplementalGroupsPolicy is disabled": {
+			input:          nil,
+			expected:       nil,
+			featureEnabled: false,
+		},
+		"non nil user, SupplementalGroupsPolicy is enabled": {
+			input: &runtimeapi.ContainerUser{
+				Linux: &runtimeapi.LinuxContainerUser{
+					Uid:                0,
+					Gid:                0,
+					SupplementalGroups: []int64{10},
+				},
+			},
+			expected: &kubecontainer.ContainerUser{
+				Linux: &kubecontainer.LinuxContainerUser{
+					UID:                0,
+					GID:                0,
+					SupplementalGroups: []int64{10},
+				},
+			},
+			featureEnabled: true,
+		},
+		"empty user, SupplementalGroupsPolicy is enabled": {
+			input:          &runtimeapi.ContainerUser{},
+			expected:       &kubecontainer.ContainerUser{},
+			featureEnabled: true,
+		},
+		"nil user, SupplementalGroupsPolicy is enabled": {
+			input:          nil,
+			expected:       nil,
+			featureEnabled: true,
+		},
+	} {
+		t.Run(desc, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.SupplementalGroupsPolicy, test.featureEnabled)
+			cStatus := &runtimeapi.ContainerStatus{
+				Id:        cid.ID,
+				Metadata:  meta,
+				Image:     imageSpec,
+				State:     runtimeapi.ContainerState_CONTAINER_RUNNING,
+				CreatedAt: createdAt,
+				StartedAt: startedAt,
+				User:      test.input,
+			}
+			actual := toKubeContainerStatus(cStatus, cid.Type)
+			assert.EqualValues(t, test.expected, actual.User, desc)
 		})
 	}
 }
@@ -402,7 +514,7 @@ func testLifeCycleHook(t *testing.T, testPod *v1.Pod, testContainer *v1.Containe
 	t.Run("PreStop-CMDExec", func(t *testing.T) {
 		ctx := context.Background()
 		testContainer.Lifecycle = cmdLifeCycle
-		m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriod)
+		_ = m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriod, nil)
 		if fakeRunner.Cmd[0] != cmdLifeCycle.PreStop.Exec.Command[0] {
 			t.Errorf("CMD Prestop hook was not invoked")
 		}
@@ -410,25 +522,12 @@ func testLifeCycleHook(t *testing.T, testPod *v1.Pod, testContainer *v1.Containe
 
 	// Configured and working HTTP hook
 	t.Run("PreStop-HTTPGet", func(t *testing.T) {
-		t.Run("inconsistent", func(t *testing.T) {
-			ctx := context.Background()
-			defer func() { fakeHTTP.req = nil }()
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ConsistentHTTPGetHandlers, false)()
-			httpLifeCycle.PreStop.HTTPGet.Port = intstr.IntOrString{}
-			testContainer.Lifecycle = httpLifeCycle
-			m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriod)
-
-			if fakeHTTP.req == nil || !strings.Contains(fakeHTTP.req.URL.String(), httpLifeCycle.PreStop.HTTPGet.Host) {
-				t.Errorf("HTTP Prestop hook was not invoked")
-			}
-		})
 		t.Run("consistent", func(t *testing.T) {
 			ctx := context.Background()
 			defer func() { fakeHTTP.req = nil }()
 			httpLifeCycle.PreStop.HTTPGet.Port = intstr.FromInt32(80)
 			testContainer.Lifecycle = httpLifeCycle
-			m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriod)
-
+			_ = m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriod, nil)
 			if fakeHTTP.req == nil || !strings.Contains(fakeHTTP.req.URL.String(), httpLifeCycle.PreStop.HTTPGet.Host) {
 				t.Errorf("HTTP Prestop hook was not invoked")
 			}
@@ -443,8 +542,7 @@ func testLifeCycleHook(t *testing.T, testPod *v1.Pod, testContainer *v1.Containe
 		testPod.DeletionGracePeriodSeconds = &gracePeriodLocal
 		testPod.Spec.TerminationGracePeriodSeconds = &gracePeriodLocal
 
-		m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriodLocal)
-
+		_ = m.killContainer(ctx, testPod, cID, "foo", "testKill", "", &gracePeriodLocal, nil)
 		if fakeHTTP.req != nil {
 			t.Errorf("HTTP Prestop hook Should not execute when gracePeriod is 0")
 		}
@@ -472,7 +570,7 @@ func testLifeCycleHook(t *testing.T, testPod *v1.Pod, testContainer *v1.Containe
 		}
 
 		// Now try to create a container, which should in turn invoke PostStart Hook
-		_, err := m.startContainer(ctx, fakeSandBox.Id, fakeSandBoxConfig, containerStartSpec(testContainer), testPod, fakePodStatus, nil, "", []string{})
+		_, err := m.startContainer(ctx, fakeSandBox.Id, fakeSandBoxConfig, containerStartSpec(testContainer), testPod, fakePodStatus, nil, "", []string{}, nil)
 		if err != nil {
 			t.Errorf("startContainer error =%v", err)
 		}
@@ -837,10 +935,6 @@ func TestKillContainerGracePeriod(t *testing.T) {
 
 // TestUpdateContainerResources tests updating a container in a Pod.
 func TestUpdateContainerResources(t *testing.T) {
-	// TODO: remove this check on this PR merges: https://github.com/kubernetes/kubernetes/pull/112599
-	if goruntime.GOOS == "windows" {
-		t.Skip("Updating Pod Container Resources is not supported on Windows.")
-	}
 	fakeRuntime, _, m, errCreate := createTestRuntimeManager()
 	require.NoError(t, errCreate)
 	pod := &v1.Pod{
@@ -862,7 +956,7 @@ func TestUpdateContainerResources(t *testing.T) {
 
 	// Create fake sandbox and container
 	_, fakeContainers := makeAndSetFakePod(t, m, fakeRuntime, pod)
-	assert.Equal(t, len(fakeContainers), 1)
+	assert.Len(t, fakeContainers, 1)
 
 	ctx := context.Background()
 	cStatus, err := m.getPodContainerStatuses(ctx, pod.UID, pod.Name, pod.Namespace)

@@ -22,14 +22,15 @@ limitations under the License.
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 
 	// Enable pprof HTTP handlers.
 	_ "net/http/pprof"
 
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/kubernetes/pkg/proxy"
 	proxyconfigapi "k8s.io/kubernetes/pkg/proxy/apis/config"
 	"k8s.io/kubernetes/pkg/proxy/winkernel"
@@ -41,19 +42,27 @@ func (o *Options) platformApplyDefaults(config *proxyconfigapi.KubeProxyConfigur
 	if config.Mode == "" {
 		config.Mode = proxyconfigapi.ProxyModeKernelspace
 	}
+	if config.Winkernel.RootHnsEndpointName == "" {
+		config.Winkernel.RootHnsEndpointName = "cbr0"
+	}
 }
 
 // platformSetup is called after setting up the ProxyServer, but before creating the
 // Proxier. It should fill in any platform-specific fields and perform other
 // platform-specific setup.
-func (s *ProxyServer) platformSetup() error {
-	winkernel.RegisterMetrics()
+func (s *ProxyServer) platformSetup(ctx context.Context) error {
+	// Preserve backward-compatibility with the old secondary IP behavior
+	if s.PrimaryIPFamily == v1.IPv4Protocol {
+		s.NodeIPs[v1.IPv6Protocol] = net.IPv6zero
+	} else {
+		s.NodeIPs[v1.IPv4Protocol] = net.IPv4zero
+	}
 	return nil
 }
 
 // platformCheckSupported is called immediately before creating the Proxier, to check
 // what IP families are supported (and whether the configuration is usable at all).
-func (s *ProxyServer) platformCheckSupported() (ipv4Supported, ipv6Supported, dualStackSupported bool, err error) {
+func (s *ProxyServer) platformCheckSupported(ctx context.Context) (ipv4Supported, ipv6Supported, dualStackSupported bool, err error) {
 	// Check if Kernel proxier can be used at all
 	_, err = winkernel.CanUseWinKernelProxier(winkernel.WindowsKernelCompatTester{})
 	if err != nil {
@@ -72,11 +81,9 @@ func (s *ProxyServer) platformCheckSupported() (ipv4Supported, ipv6Supported, du
 }
 
 // createProxier creates the proxy.Provider
-func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguration, dualStackMode bool) (proxy.Provider, error) {
-	var healthzPort int
-	if len(config.HealthzBindAddress) > 0 {
-		_, port, _ := net.SplitHostPort(config.HealthzBindAddress)
-		healthzPort, _ = strconv.Atoi(port)
+func (s *ProxyServer) createProxier(ctx context.Context, config *proxyconfigapi.KubeProxyConfiguration, dualStackMode, initOnly bool) (proxy.Provider, error) {
+	if initOnly {
+		return nil, fmt.Errorf("--init-only is not implemented on Windows")
 	}
 
 	var proxier proxy.Provider
@@ -84,27 +91,26 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 
 	if dualStackMode {
 		proxier, err = winkernel.NewDualStackProxier(
-			config.IPTables.SyncPeriod.Duration,
-			config.IPTables.MinSyncPeriod.Duration,
-			config.ClusterCIDR,
+			config.SyncPeriod.Duration,
+			config.MinSyncPeriod.Duration,
 			s.Hostname,
 			s.NodeIPs,
 			s.Recorder,
 			s.HealthzServer,
+			config.HealthzBindAddress,
 			config.Winkernel,
-			healthzPort,
 		)
 	} else {
 		proxier, err = winkernel.NewProxier(
-			config.IPTables.SyncPeriod.Duration,
-			config.IPTables.MinSyncPeriod.Duration,
-			config.ClusterCIDR,
+			s.PrimaryIPFamily,
+			config.SyncPeriod.Duration,
+			config.MinSyncPeriod.Duration,
 			s.Hostname,
 			s.NodeIPs[s.PrimaryIPFamily],
 			s.Recorder,
 			s.HealthzServer,
+			config.HealthzBindAddress,
 			config.Winkernel,
-			healthzPort,
 		)
 	}
 	if err != nil {
@@ -114,7 +120,10 @@ func (s *ProxyServer) createProxier(config *proxyconfigapi.KubeProxyConfiguratio
 	return proxier, nil
 }
 
-// cleanupAndExit cleans up after a previous proxy run
-func cleanupAndExit() error {
-	return errors.New("--cleanup-and-exit is not implemented on Windows")
+// platformCleanup removes stale kube-proxy rules that can be safely removed.
+func platformCleanup(ctx context.Context, mode proxyconfigapi.ProxyMode, cleanupAndExit bool) error {
+	if cleanupAndExit {
+		return errors.New("--cleanup-and-exit is not implemented on Windows")
+	}
+	return nil
 }

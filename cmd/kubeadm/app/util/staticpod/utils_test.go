@@ -21,8 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
@@ -575,54 +575,6 @@ func TestVolumeMountMapToSlice(t *testing.T) {
 	}
 }
 
-func TestGetExtraParameters(t *testing.T) {
-	var tests = []struct {
-		name      string
-		overrides map[string]string
-		defaults  map[string]string
-		expected  []string
-	}{
-		{
-			name: "with admission-control default NamespaceLifecycle",
-			overrides: map[string]string{
-				"admission-control": "NamespaceLifecycle,LimitRanger",
-			},
-			defaults: map[string]string{
-				"admission-control": "NamespaceLifecycle",
-				"allow-privileged":  "true",
-			},
-			expected: []string{
-				"--admission-control=NamespaceLifecycle,LimitRanger",
-				"--allow-privileged=true",
-			},
-		},
-		{
-			name: "without admission-control default",
-			overrides: map[string]string{
-				"admission-control": "NamespaceLifecycle,LimitRanger",
-			},
-			defaults: map[string]string{
-				"allow-privileged": "true",
-			},
-			expected: []string{
-				"--admission-control=NamespaceLifecycle,LimitRanger",
-				"--allow-privileged=true",
-			},
-		},
-	}
-
-	for _, rt := range tests {
-		t.Run(rt.name, func(t *testing.T) {
-			actual := GetExtraParameters(rt.overrides, rt.defaults)
-			sort.Strings(actual)
-			sort.Strings(rt.expected)
-			if !reflect.DeepEqual(actual, rt.expected) {
-				t.Errorf("failed getExtraParameters:\nexpected:\n%v\nsaw:\n%v", rt.expected, actual)
-			}
-		})
-	}
-}
-
 const (
 	validPod = `
 apiVersion: v1
@@ -652,6 +604,22 @@ spec:
   - image: gcr.io/google_containers/etcd-amd64:3.1.11
 status: {}
 `
+	invalidWithDefaultFields = `
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    tier: control-plane
+    component: etcd
+  name: etcd
+  namespace: kube-system
+spec:
+  containers:
+  - image: gcr.io/google_containers/etcd-amd64:3.1.11
+  restartPolicy: "Always"
+status: {}
+`
+
 	validPod2 = `
 apiVersion: v1
 kind: Pod
@@ -729,6 +697,7 @@ func TestManifestFilesAreEqual(t *testing.T) {
 		description    string
 		podYamls       []string
 		expectedResult bool
+		expectedDiff   string
 		expectErr      bool
 	}{
 		{
@@ -748,6 +717,19 @@ func TestManifestFilesAreEqual(t *testing.T) {
 			podYamls:       []string{validPod, validPod2},
 			expectedResult: false,
 			expectErr:      false,
+			expectedDiff: `@@ -12 +12 @@
+-  - image: gcr.io/google_containers/etcd-amd64:3.1.11
++  - image: gcr.io/google_containers/etcd-amd64:3.1.12
+`,
+		},
+		{
+			description:    "manifests are not equal for adding new defaults",
+			podYamls:       []string{validPod, invalidWithDefaultFields},
+			expectedResult: false,
+			expectErr:      false,
+			expectedDiff: `@@ -14,0 +15 @@
++  restartPolicy: Always
+`,
 		},
 		{
 			description:    "first manifest doesn't exist",
@@ -780,7 +762,7 @@ func TestManifestFilesAreEqual(t *testing.T) {
 			}
 
 			// compare them
-			result, actualErr := ManifestFilesAreEqual(filepath.Join(tmpdir, "0.yaml"), filepath.Join(tmpdir, "1.yaml"))
+			result, diff, actualErr := ManifestFilesAreEqual(filepath.Join(tmpdir, "0.yaml"), filepath.Join(tmpdir, "1.yaml"))
 			if result != rt.expectedResult {
 				t.Errorf(
 					"ManifestFilesAreEqual failed\n%s\nexpected result: %t\nactual result: %t",
@@ -796,6 +778,14 @@ func TestManifestFilesAreEqual(t *testing.T) {
 					rt.expectErr,
 					(actualErr != nil),
 					actualErr,
+				)
+			}
+			if !strings.Contains(diff, rt.expectedDiff) {
+				t.Errorf(
+					"ManifestFilesAreEqual diff doesn't expected\n%s\n\texpected diff: %s\n\tactual diff: %s",
+					rt.description,
+					rt.expectedDiff,
+					diff,
 				)
 			}
 		})

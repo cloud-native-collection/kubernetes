@@ -29,15 +29,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
+	"github.com/pmezard/go-difflib/difflib"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/dump"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/klog/v2"
 
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
@@ -152,22 +151,6 @@ func VolumeMountMapToSlice(volumeMounts map[string]v1.VolumeMount) []v1.VolumeMo
 	return v
 }
 
-// GetExtraParameters builds a list of flag arguments two string-string maps, one with default, base commands and one with overrides
-func GetExtraParameters(overrides map[string]string, defaults map[string]string) []string {
-	var command []string
-	for k, v := range overrides {
-		if len(v) > 0 {
-			command = append(command, fmt.Sprintf("--%s=%s", k, v))
-		}
-	}
-	for k, v := range defaults {
-		if _, overrideExists := overrides[k]; !overrideExists {
-			command = append(command, fmt.Sprintf("--%s=%s", k, v))
-		}
-	}
-	return command
-}
-
 // PatchStaticPod applies patches stored in patchesDir to a static Pod.
 func PatchStaticPod(pod *v1.Pod, patchesDir string, output io.Writer) (*v1.Pod, error) {
 	// Marshal the Pod manifest into YAML.
@@ -190,9 +173,9 @@ func PatchStaticPod(pod *v1.Pod, patchesDir string, output io.Writer) (*v1.Pod, 
 		return pod, err
 	}
 
-	obj, err := kubeadmutil.UnmarshalFromYaml(patchTarget.Data, v1.SchemeGroupVersion)
+	obj, err := kubeadmutil.UniversalUnmarshal(patchTarget.Data)
 	if err != nil {
-		return pod, errors.Wrap(err, "failed to unmarshal patched manifest from YAML")
+		return pod, errors.Wrap(err, "failed to unmarshal patched manifest")
 	}
 
 	pod2, ok := obj.(*v1.Pod)
@@ -233,12 +216,15 @@ func ReadStaticPodFromDisk(manifestPath string) (*v1.Pod, error) {
 		return &v1.Pod{}, errors.Wrapf(err, "failed to read manifest for %q", manifestPath)
 	}
 
-	obj, err := kubeadmutil.UnmarshalFromYaml(buf, v1.SchemeGroupVersion)
+	obj, err := kubeadmutil.UniversalUnmarshal(buf)
 	if err != nil {
-		return &v1.Pod{}, errors.Errorf("failed to unmarshal manifest for %q from YAML: %v", manifestPath, err)
+		return &v1.Pod{}, errors.Errorf("failed to unmarshal manifest for %q: %v", manifestPath, err)
 	}
 
-	pod := obj.(*v1.Pod)
+	pod, ok := obj.(*v1.Pod)
+	if !ok {
+		return &v1.Pod{}, errors.Errorf("failed to parse Pod object defined in %q", manifestPath)
+	}
 
 	return pod, nil
 }
@@ -258,7 +244,7 @@ func ReadinessProbe(host, path string, port int32, scheme v1.URIScheme) *v1.Prob
 
 // StartupProbe creates a Probe object with a HTTPGet handler
 func StartupProbe(host, path string, port int32, scheme v1.URIScheme, timeoutForControlPlane *metav1.Duration) *v1.Probe {
-	periodSeconds, timeoutForControlPlaneSeconds := int32(10), kubeadmconstants.DefaultControlPlaneTimeout.Seconds()
+	periodSeconds, timeoutForControlPlaneSeconds := int32(10), kubeadmconstants.ControlPlaneComponentHealthCheckTimeout.Seconds()
 	if timeoutForControlPlane != nil {
 		timeoutForControlPlaneSeconds = timeoutForControlPlane.Seconds()
 	}
@@ -354,14 +340,14 @@ func GetEtcdProbeEndpoint(cfg *kubeadmapi.Etcd, isIPv6 bool) (string, int32, v1.
 }
 
 // ManifestFilesAreEqual compares 2 files. It returns true if their contents are equal, false otherwise
-func ManifestFilesAreEqual(path1, path2 string) (bool, error) {
+func ManifestFilesAreEqual(path1, path2 string) (bool, string, error) {
 	pod1, err := ReadStaticPodFromDisk(path1)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	pod2, err := ReadStaticPodFromDisk(path2)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	hasher := md5.New()
@@ -370,10 +356,30 @@ func ManifestFilesAreEqual(path1, path2 string) (bool, error) {
 	DeepHashObject(hasher, pod2)
 	hash2 := hasher.Sum(nil)[0:]
 	if bytes.Equal(hash1, hash2) {
-		return true, nil
+		return true, "", nil
 	}
-	klog.V(4).Infof("Pod manifest files diff:\n%s\n", cmp.Diff(pod1, pod2))
-	return false, nil
+
+	manifest1, err := kubeadmutil.MarshalToYaml(pod1, v1.SchemeGroupVersion)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to marshal Pod manifest for %q to YAML", path1)
+	}
+
+	manifest2, err := kubeadmutil.MarshalToYaml(pod2, v1.SchemeGroupVersion)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to marshal Pod manifest for %q to YAML", path2)
+	}
+
+	diff := difflib.UnifiedDiff{
+		A: difflib.SplitLines(string(manifest1)),
+		B: difflib.SplitLines(string(manifest2)),
+	}
+
+	diffStr, err := difflib.GetUnifiedDiffString(diff)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to generate the differences between manifest %q and manifest %q", path1, path2)
+	}
+
+	return false, diffStr, nil
 }
 
 // getProbeAddress returns a valid probe address.
@@ -389,6 +395,8 @@ func getProbeAddress(addr string) string {
 	return addr
 }
 
+// GetUsersAndGroups returns the local usersAndGroups, but first creates it
+// in a thread safe way once.
 func GetUsersAndGroups() (*users.UsersAndGroups, error) {
 	var err error
 	usersAndGroupsOnce.Do(func() {

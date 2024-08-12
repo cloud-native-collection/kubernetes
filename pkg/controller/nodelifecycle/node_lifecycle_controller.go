@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	appsv1informers "k8s.io/client-go/informers/apps/v1"
 	coordinformers "k8s.io/client-go/informers/coordination/v1"
 	coreinformers "k8s.io/client-go/informers/core/v1"
@@ -54,7 +55,9 @@ import (
 	kubeletapis "k8s.io/kubelet/pkg/apis"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/nodelifecycle/scheduler"
+	"k8s.io/kubernetes/pkg/controller/tainteviction"
 	controllerutil "k8s.io/kubernetes/pkg/controller/util/node"
+	"k8s.io/kubernetes/pkg/features"
 	taintutils "k8s.io/kubernetes/pkg/util/taints"
 )
 
@@ -127,6 +130,13 @@ const (
 	// podUpdateWorkerSizes assumes that in most cases pod will be handled by monitorNodeHealth pass.
 	// Pod update workers will only handle lagging cache pods. 4 workers should be enough.
 	podUpdateWorkerSize = 4
+	// nodeUpdateWorkerSize defines the size of workers for node update or/and pod update.
+	nodeUpdateWorkerSize = 8
+
+	// taintEvictionController is defined here in order to prevent imports of
+	// k8s.io/kubernetes/cmd/kube-controller-manager/names which would result in validation errors.
+	// This constant will be removed upon graduation of the SeparateTaintEvictionController feature.
+	taintEvictionController = "taint-eviction-controller"
 )
 
 // labelReconcileInfo lists Node labels to reconcile, and how to reconcile them.
@@ -207,7 +217,7 @@ type podUpdateItem struct {
 
 // Controller is the controller that manages node's life cycle.
 type Controller struct {
-	taintManager *scheduler.NoExecuteTaintManager
+	taintManager *tainteviction.Controller
 
 	podLister         corelisters.PodLister
 	podInformerSynced cache.InformerSynced
@@ -287,8 +297,8 @@ type Controller struct {
 	largeClusterThreshold       int32
 	unhealthyZoneThreshold      float32
 
-	nodeUpdateQueue workqueue.Interface
-	podUpdateQueue  workqueue.RateLimitingInterface
+	nodeUpdateQueue workqueue.TypedInterface[string]
+	podUpdateQueue  workqueue.TypedRateLimitingInterface[podUpdateItem]
 }
 
 // NewNodeLifecycleController returns a new taint controller.
@@ -313,7 +323,7 @@ func NewNodeLifecycleController(
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster := record.NewBroadcaster(record.WithContext(ctx))
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "node-controller"})
 
 	nc := &Controller{
@@ -326,7 +336,7 @@ func NewNodeLifecycleController(
 		nodeMonitorPeriod:           nodeMonitorPeriod,
 		nodeStartupGracePeriod:      nodeStartupGracePeriod,
 		nodeMonitorGracePeriod:      nodeMonitorGracePeriod,
-		nodeUpdateWorkerSize:        scheduler.UpdateWorkerSize,
+		nodeUpdateWorkerSize:        nodeUpdateWorkerSize,
 		zoneNoExecuteTainter:        make(map[string]*scheduler.RateLimitedTimedQueue),
 		nodesToRetry:                sync.Map{},
 		zoneStates:                  make(map[string]ZoneState),
@@ -334,8 +344,13 @@ func NewNodeLifecycleController(
 		secondaryEvictionLimiterQPS: secondaryEvictionLimiterQPS,
 		largeClusterThreshold:       largeClusterThreshold,
 		unhealthyZoneThreshold:      unhealthyZoneThreshold,
-		nodeUpdateQueue:             workqueue.NewNamed("node_lifecycle_controller"),
-		podUpdateQueue:              workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "node_lifecycle_controller_pods"),
+		nodeUpdateQueue:             workqueue.NewTypedWithConfig(workqueue.TypedQueueConfig[string]{Name: "node_lifecycle_controller"}),
+		podUpdateQueue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[podUpdateItem](),
+			workqueue.TypedRateLimitingQueueConfig[podUpdateItem]{
+				Name: "node_lifecycle_controller_pods",
+			},
+		),
 	}
 
 	nc.enterPartialDisruptionFunc = nc.ReducedQPSFunc
@@ -346,17 +361,11 @@ func NewNodeLifecycleController(
 		AddFunc: func(obj interface{}) {
 			pod := obj.(*v1.Pod)
 			nc.podUpdated(nil, pod)
-			if nc.taintManager != nil {
-				nc.taintManager.PodUpdated(nil, pod)
-			}
 		},
 		UpdateFunc: func(prev, obj interface{}) {
 			prevPod := prev.(*v1.Pod)
 			newPod := obj.(*v1.Pod)
 			nc.podUpdated(prevPod, newPod)
-			if nc.taintManager != nil {
-				nc.taintManager.PodUpdated(prevPod, newPod)
-			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			pod, isPod := obj.(*v1.Pod)
@@ -374,9 +383,6 @@ func NewNodeLifecycleController(
 				}
 			}
 			nc.podUpdated(pod, nil)
-			if nc.taintManager != nil {
-				nc.taintManager.PodUpdated(pod, nil)
-			}
 		},
 	})
 	nc.podInformerSynced = podInformer.Informer().HasSynced
@@ -412,21 +418,14 @@ func NewNodeLifecycleController(
 	nc.podLister = podInformer.Lister()
 	nc.nodeLister = nodeInformer.Lister()
 
-	nc.taintManager = scheduler.NewNoExecuteTaintManager(ctx, kubeClient, nc.podLister, nc.nodeLister, nc.getPodsAssignedToNode)
-	nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: controllerutil.CreateAddNodeHandler(func(node *v1.Node) error {
-			nc.taintManager.NodeUpdated(nil, node)
-			return nil
-		}),
-		UpdateFunc: controllerutil.CreateUpdateNodeHandler(func(oldNode, newNode *v1.Node) error {
-			nc.taintManager.NodeUpdated(oldNode, newNode)
-			return nil
-		}),
-		DeleteFunc: controllerutil.CreateDeleteNodeHandler(logger, func(node *v1.Node) error {
-			nc.taintManager.NodeUpdated(node, nil)
-			return nil
-		}),
-	})
+	if !utilfeature.DefaultFeatureGate.Enabled(features.SeparateTaintEvictionController) {
+		logger.Info("Running TaintEvictionController as part of NodeLifecyleController")
+		tm, err := tainteviction.New(ctx, kubeClient, podInformer, nodeInformer, taintEvictionController)
+		if err != nil {
+			return nil, err
+		}
+		nc.taintManager = tm
+	}
 
 	logger.Info("Controller will reconcile labels")
 	nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -460,7 +459,7 @@ func (nc *Controller) Run(ctx context.Context) {
 	defer utilruntime.HandleCrash()
 
 	// Start events processing pipeline.
-	nc.broadcaster.StartStructuredLogging(0)
+	nc.broadcaster.StartStructuredLogging(3)
 	logger := klog.FromContext(ctx)
 	logger.Info("Sending events to api server")
 	nc.broadcaster.StartRecordingToSink(
@@ -480,10 +479,13 @@ func (nc *Controller) Run(ctx context.Context) {
 		return
 	}
 
-	go nc.taintManager.Run(ctx)
+	if !utilfeature.DefaultFeatureGate.Enabled(features.SeparateTaintEvictionController) {
+		logger.Info("Starting", "controller", taintEvictionController)
+		go nc.taintManager.Run(ctx)
+	}
 
 	// Start workers to reconcile labels and/or update NoSchedule taint for nodes.
-	for i := 0; i < scheduler.UpdateWorkerSize; i++ {
+	for i := 0; i < nodeUpdateWorkerSize; i++ {
 		// Thanks to "workqueue", each worker just need to get item from queue, because
 		// the item is flagged when got from queue: if new event come, the new item will
 		// be re-queued until "Done", so no more than one worker handle the same item and
@@ -518,7 +520,7 @@ func (nc *Controller) doNodeProcessingPassWorker(ctx context.Context) {
 		if shutdown {
 			return
 		}
-		nodeName := obj.(string)
+		nodeName := obj
 		if err := nc.doNoScheduleTaintingPass(ctx, nodeName); err != nil {
 			logger.Error(err, "Failed to taint NoSchedule on node, requeue it", "node", klog.KRef("", nodeName))
 			// TODO(k82cn): Add nodeName back to the queue
@@ -626,6 +628,11 @@ func (nc *Controller) doNoExecuteTaintingPass(ctx context.Context) {
 				return false, 50 * time.Millisecond
 			}
 			_, condition := controllerutil.GetNodeCondition(&node.Status, v1.NodeReady)
+			if condition == nil {
+				logger.Info("Failed to get NodeCondition from the node status", "node", klog.KRef("", value.Value))
+				// retry in 50 millisecond
+				return false, 50 * time.Millisecond
+			}
 			// Because we want to mimic NodeStatus.Condition["Ready"] we make "unreachable" and "not ready" taints mutually exclusive.
 			taintToAdd := v1.Taint{}
 			oppositeTaint := v1.Taint{}
@@ -1094,7 +1101,7 @@ func (nc *Controller) doPodProcessingWorker(ctx context.Context) {
 			return
 		}
 
-		podItem := obj.(podUpdateItem)
+		podItem := obj
 		nc.processPod(ctx, podItem)
 	}
 }
@@ -1202,7 +1209,7 @@ func (nc *Controller) HealthyQPSFunc(nodeNum int) float32 {
 	return nc.evictionLimiterQPS
 }
 
-// ReducedQPSFunc returns the QPS for when a the cluster is large make
+// ReducedQPSFunc returns the QPS for when the cluster is large make
 // evictions slower, if they're small stop evictions altogether.
 func (nc *Controller) ReducedQPSFunc(nodeNum int) float32 {
 	if int32(nodeNum) > nc.largeClusterThreshold {

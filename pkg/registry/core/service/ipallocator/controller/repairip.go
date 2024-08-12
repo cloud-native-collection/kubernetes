@@ -23,24 +23,26 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	networkingv1alpha1 "k8s.io/api/networking/v1alpha1"
+	networkingv1beta1 "k8s.io/api/networking/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	coreinformers "k8s.io/client-go/informers/core/v1"
-	networkinginformers "k8s.io/client-go/informers/networking/v1alpha1"
+	networkinginformers "k8s.io/client-go/informers/networking/v1beta1"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
-	networkinglisters "k8s.io/client-go/listers/networking/v1alpha1"
+	networkinglisters "k8s.io/client-go/listers/networking/v1beta1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
+	"k8s.io/kubernetes/pkg/api/servicecidr"
 	"k8s.io/kubernetes/pkg/apis/core/v1/helper"
+	"k8s.io/kubernetes/pkg/controlplane/controller/defaultservicecidr"
 	"k8s.io/kubernetes/pkg/registry/core/service/ipallocator"
 	"k8s.io/utils/clock"
 	netutils "k8s.io/utils/net"
@@ -88,16 +90,17 @@ type RepairIPAddress struct {
 	client   kubernetes.Interface
 	interval time.Duration
 
-	networkByFamily map[netutils.IPFamily]*net.IPNet // networks we operate on, by their family
-
 	serviceLister  corelisters.ServiceLister
 	servicesSynced cache.InformerSynced
+
+	serviceCIDRLister networkinglisters.ServiceCIDRLister
+	serviceCIDRSynced cache.InformerSynced
 
 	ipAddressLister networkinglisters.IPAddressLister
 	ipAddressSynced cache.InformerSynced
 
-	svcQueue         workqueue.RateLimitingInterface
-	ipQueue          workqueue.RateLimitingInterface
+	svcQueue         workqueue.TypedRateLimitingInterface[string]
+	ipQueue          workqueue.TypedRateLimitingInterface[string]
 	workerLoopPeriod time.Duration
 
 	broadcaster events.EventBroadcaster
@@ -109,38 +112,36 @@ type RepairIPAddress struct {
 // and generates informational warnings for a cluster that is not in sync.
 func NewRepairIPAddress(interval time.Duration,
 	client kubernetes.Interface,
-	network *net.IPNet,
-	secondaryNetwork *net.IPNet,
 	serviceInformer coreinformers.ServiceInformer,
+	serviceCIDRInformer networkinginformers.ServiceCIDRInformer,
 	ipAddressInformer networkinginformers.IPAddressInformer) *RepairIPAddress {
 	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1()})
 	recorder := eventBroadcaster.NewRecorder(legacyscheme.Scheme, "ipallocator-repair-controller")
 
-	networkByFamily := make(map[netutils.IPFamily]*net.IPNet)
-	primary := netutils.IPFamilyOfCIDR(network)
-	networkByFamily[primary] = network
-	if secondaryNetwork != nil {
-		secondary := netutils.IPFamilyOfCIDR(secondaryNetwork)
-		networkByFamily[secondary] = secondaryNetwork
-	}
-
 	r := &RepairIPAddress{
-		interval:         interval,
-		client:           client,
-		networkByFamily:  networkByFamily,
-		serviceLister:    serviceInformer.Lister(),
-		servicesSynced:   serviceInformer.Informer().HasSynced,
-		ipAddressLister:  ipAddressInformer.Lister(),
-		ipAddressSynced:  ipAddressInformer.Informer().HasSynced,
-		svcQueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "services"),
-		ipQueue:          workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "ipaddresses"),
+		interval:          interval,
+		client:            client,
+		serviceLister:     serviceInformer.Lister(),
+		servicesSynced:    serviceInformer.Informer().HasSynced,
+		serviceCIDRLister: serviceCIDRInformer.Lister(),
+		serviceCIDRSynced: serviceCIDRInformer.Informer().HasSynced,
+		ipAddressLister:   ipAddressInformer.Lister(),
+		ipAddressSynced:   ipAddressInformer.Informer().HasSynced,
+		svcQueue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[string](),
+			workqueue.TypedRateLimitingQueueConfig[string]{Name: "services"},
+		),
+		ipQueue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[string](),
+			workqueue.TypedRateLimitingQueueConfig[string]{Name: "ipaddresses"},
+		),
 		workerLoopPeriod: time.Second,
 		broadcaster:      eventBroadcaster,
 		recorder:         recorder,
 		clock:            clock.RealClock{},
 	}
 
-	serviceInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
+	_, _ = serviceInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(obj)
 			if err == nil {
@@ -199,7 +200,21 @@ func (r *RepairIPAddress) RunUntil(onFirstSuccess func(), stopCh chan struct{}) 
 	klog.Info("Starting ipallocator-repair-controller")
 	defer klog.Info("Shutting down ipallocator-repair-controller")
 
-	if !cache.WaitForNamedCacheSync("ipallocator-repair-controller", stopCh, r.ipAddressSynced, r.servicesSynced) {
+	if !cache.WaitForNamedCacheSync("ipallocator-repair-controller", stopCh, r.ipAddressSynced, r.servicesSynced, r.serviceCIDRSynced) {
+		return
+	}
+
+	// wait for the default ServiceCIDR
+	ctx := wait.ContextForChannel(stopCh)
+	err := wait.PollUntilContextCancel(ctx, 100*time.Millisecond, true, func(context.Context) (bool, error) {
+		_, err := r.serviceCIDRLister.Get(defaultservicecidr.DefaultServiceCIDRName)
+		if err != nil {
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		runtime.HandleError(err)
 		return
 	}
 
@@ -248,7 +263,7 @@ func (r *RepairIPAddress) doRunOnce() error {
 	// Check that there is no IP created by the allocator without
 	// a Service associated.
 	ipLabelSelector := labels.Set(map[string]string{
-		networkingv1alpha1.LabelManagedBy: ipallocator.ControllerName,
+		networkingv1beta1.LabelManagedBy: ipallocator.ControllerName,
 	}).AsSelectorPreValidated()
 	ipAddresses, err := r.ipAddressLister.List(ipLabelSelector)
 	if err != nil {
@@ -281,13 +296,13 @@ func (r *RepairIPAddress) processNextWorkSvc() bool {
 	}
 	defer r.svcQueue.Done(eKey)
 
-	err := r.syncService(eKey.(string))
+	err := r.syncService(eKey)
 	r.handleSvcErr(err, eKey)
 
 	return true
 }
 
-func (r *RepairIPAddress) handleSvcErr(err error, key interface{}) {
+func (r *RepairIPAddress) handleSvcErr(err error, key string) {
 	if err == nil {
 		r.svcQueue.Forget(key)
 		return
@@ -330,20 +345,12 @@ func (r *RepairIPAddress) syncService(key string) error {
 			runtime.HandleError(fmt.Errorf("the ClusterIP %s for Service %s/%s is not a valid IP; please recreate Service", ip, svc.Namespace, svc.Name))
 			continue
 		}
-
-		family := netutils.IPFamilyOf(ip)
-		v1Family := getFamilyByIP(ip)
-		network, ok := r.networkByFamily[family]
-		if !ok {
-			// this service is using an IPFamily no longer configured on cluster
-			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotValid", "ClusterIPValidation", "Cluster IP %s(%s) is of ip family that is no longer configured on cluster; please recreate Service", ip, v1Family)
-			runtime.HandleError(fmt.Errorf("the ClusterIP [%v]: %s for Service %s/%s is of ip family that is no longer configured on cluster; please recreate Service", v1Family, ip, svc.Namespace, svc.Name))
-			continue
-		}
-		if !network.Contains(ip) {
+		// TODO(aojea) Refactor to abstract the IPs checks
+		family := getFamilyByIP(ip)
+		if r.isIPOutOfRange(ip) {
 			// ClusterIP is out of range
-			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPOutOfRange", "ClusterIPAllocation", "Cluster IP [%v]: %s is not within the configured Service CIDR %s; please recreate service", v1Family, ip, network.String())
-			runtime.HandleError(fmt.Errorf("the ClusterIP [%v]: %s for Service %s/%s is not within the service CIDR %s; please recreate", v1Family, ip, svc.Namespace, svc.Name, network.String()))
+			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPOutOfRange", "ClusterIPAllocation", "Cluster IP [%v]: %s is not within any configured Service CIDR; please recreate service", family, ip)
+			runtime.HandleError(fmt.Errorf("the ClusterIP [%v]: %s for Service %s/%s is not within any service CIDR; please recreate", family, ip, svc.Namespace, svc.Name))
 			continue
 		}
 
@@ -351,23 +358,23 @@ func (r *RepairIPAddress) syncService(key string) error {
 		ipAddress, err := r.ipAddressLister.Get(ip.String())
 		if apierrors.IsNotFound(err) {
 			// ClusterIP doesn't seem to be allocated, create it.
-			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotAllocated", "ClusterIPAllocation", "Cluster IP [%v]: %s is not allocated; repairing", v1Family, ip)
-			runtime.HandleError(fmt.Errorf("the ClusterIP [%v]: %s for Service %s/%s is not allocated; repairing", v1Family, ip, svc.Namespace, svc.Name))
-			_, err := r.client.NetworkingV1alpha1().IPAddresses().Create(context.Background(), newIPAddress(ip.String(), svc), metav1.CreateOptions{})
+			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotAllocated", "ClusterIPAllocation", "Cluster IP [%v]: %s is not allocated; repairing", family, ip)
+			runtime.HandleError(fmt.Errorf("the ClusterIP [%v]: %s for Service %s/%s is not allocated; repairing", family, ip, svc.Namespace, svc.Name))
+			_, err := r.client.NetworkingV1beta1().IPAddresses().Create(context.Background(), newIPAddress(ip.String(), svc), metav1.CreateOptions{})
 			if err != nil {
 				return err
 			}
 			continue
 		}
 		if err != nil {
-			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "UnknownError", "ClusterIPAllocation", "Unable to allocate ClusterIP [%v]: %s due to an unknown error", v1Family, ip)
-			return fmt.Errorf("unable to allocate ClusterIP [%v]: %s for Service %s/%s due to an unknown error, will retry later: %v", v1Family, ip, svc.Namespace, svc.Name, err)
+			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "UnknownError", "ClusterIPAllocation", "Unable to allocate ClusterIP [%v]: %s due to an unknown error", family, ip)
+			return fmt.Errorf("unable to allocate ClusterIP [%v]: %s for Service %s/%s due to an unknown error, will retry later: %v", family, ip, svc.Namespace, svc.Name, err)
 		}
 
 		// IPAddress that belongs to a Service must reference a Service
 		if ipAddress.Spec.ParentRef.Group != "" ||
 			ipAddress.Spec.ParentRef.Resource != "services" {
-			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotAllocated", "ClusterIPAllocation", "the ClusterIP [%v]: %s for Service %s/%s has a wrong reference; repairing", v1Family, ip, svc.Namespace, svc.Name)
+			r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotAllocated", "ClusterIPAllocation", "the ClusterIP [%v]: %s for Service %s/%s has a wrong reference; repairing", family, ip, svc.Namespace, svc.Name)
 			if err := r.recreateIPAddress(ipAddress.Name, svc); err != nil {
 				return err
 			}
@@ -381,7 +388,7 @@ func (r *RepairIPAddress) syncService(key string) error {
 			// it will keep deleting and recreating the same IPAddress changing the reference
 			refService, err := r.serviceLister.Services(ipAddress.Spec.ParentRef.Namespace).Get(ipAddress.Spec.ParentRef.Name)
 			if err != nil {
-				r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotAllocated", "ClusterIPAllocation", "the ClusterIP [%v]: %s for Service %s/%s has a wrong reference; repairing", v1Family, ip, svc.Namespace, svc.Name)
+				r.recorder.Eventf(svc, nil, v1.EventTypeWarning, "ClusterIPNotAllocated", "ClusterIPAllocation", "the ClusterIP [%v]: %s for Service %s/%s has a wrong reference; repairing", family, ip, svc.Namespace, svc.Name)
 				if err := r.recreateIPAddress(ipAddress.Name, svc); err != nil {
 					return err
 				}
@@ -410,11 +417,11 @@ func (r *RepairIPAddress) syncService(key string) error {
 }
 
 func (r *RepairIPAddress) recreateIPAddress(name string, svc *v1.Service) error {
-	err := r.client.NetworkingV1alpha1().IPAddresses().Delete(context.Background(), name, metav1.DeleteOptions{})
+	err := r.client.NetworkingV1beta1().IPAddresses().Delete(context.Background(), name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
-	_, err = r.client.NetworkingV1alpha1().IPAddresses().Create(context.Background(), newIPAddress(name, svc), metav1.CreateOptions{})
+	_, err = r.client.NetworkingV1beta1().IPAddresses().Create(context.Background(), newIPAddress(name, svc), metav1.CreateOptions{})
 	if err != nil {
 		return err
 	}
@@ -433,13 +440,13 @@ func (r *RepairIPAddress) processNextWorkIp() bool {
 	}
 	defer r.ipQueue.Done(eKey)
 
-	err := r.syncIPAddress(eKey.(string))
-	r.handleIpErr(err, eKey)
+	err := r.syncIPAddress(eKey)
+	r.handleIPErr(err, eKey)
 
 	return true
 }
 
-func (r *RepairIPAddress) handleIpErr(err error, key interface{}) {
+func (r *RepairIPAddress) handleIPErr(err error, key string) {
 	if err == nil {
 		r.ipQueue.Forget(key)
 		return
@@ -472,11 +479,10 @@ func (r *RepairIPAddress) syncIPAddress(key string) error {
 	}
 
 	// does not reference a Service but created by the service allocator, something else have changed it, delete it
-	if ipAddress.Spec.ParentRef.Group != "" ||
-		ipAddress.Spec.ParentRef.Resource != "services" {
+	if ipAddress.Spec.ParentRef.Group != "" || ipAddress.Spec.ParentRef.Resource != "services" {
 		runtime.HandleError(fmt.Errorf("IPAddress %s appears to have been modified, not referencing a Service %v: cleaning up", ipAddress.Name, ipAddress.Spec.ParentRef))
 		r.recorder.Eventf(ipAddress, nil, v1.EventTypeWarning, "IPAddressNotAllocated", "IPAddressAllocation", "IPAddress %s appears to have been modified, not referencing a Service %v: cleaning up", ipAddress.Name, ipAddress.Spec.ParentRef)
-		err := r.client.NetworkingV1alpha1().IPAddresses().Delete(context.Background(), ipAddress.Name, metav1.DeleteOptions{})
+		err := r.client.NetworkingV1beta1().IPAddresses().Delete(context.Background(), ipAddress.Name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -493,7 +499,7 @@ func (r *RepairIPAddress) syncIPAddress(key string) error {
 		if ipLifetime > gracePeriod {
 			runtime.HandleError(fmt.Errorf("IPAddress %s appears to have leaked: cleaning up", ipAddress.Name))
 			r.recorder.Eventf(ipAddress, nil, v1.EventTypeWarning, "IPAddressNotAllocated", "IPAddressAllocation", "IPAddress: %s for Service %s/%s appears to have leaked: cleaning up", ipAddress.Name, ipAddress.Spec.ParentRef.Namespace, ipAddress.Spec.ParentRef.Name)
-			err := r.client.NetworkingV1alpha1().IPAddresses().Delete(context.Background(), ipAddress.Name, metav1.DeleteOptions{})
+			err := r.client.NetworkingV1beta1().IPAddresses().Delete(context.Background(), ipAddress.Name, metav1.DeleteOptions{})
 			if err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
@@ -516,43 +522,48 @@ func (r *RepairIPAddress) syncIPAddress(key string) error {
 	}
 	runtime.HandleError(fmt.Errorf("the IPAddress: %s for Service %s/%s has a wrong reference %#v; cleaning up", ipAddress.Name, svc.Name, svc.Namespace, ipAddress.Spec.ParentRef))
 	r.recorder.Eventf(ipAddress, nil, v1.EventTypeWarning, "IPAddressWrongReference", "IPAddressAllocation", "IPAddress: %s for Service %s/%s has a wrong reference; cleaning up", ipAddress.Name, svc.Namespace, svc.Name)
-	err = r.client.NetworkingV1alpha1().IPAddresses().Delete(context.Background(), ipAddress.Name, metav1.DeleteOptions{})
+	err = r.client.NetworkingV1beta1().IPAddresses().Delete(context.Background(), ipAddress.Name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil
 
 }
-func newIPAddress(name string, svc *v1.Service) *networkingv1alpha1.IPAddress {
+
+// isIPOutOfRange returns true if the IP is not contained in any of the ServiceCIDRs
+func (r *RepairIPAddress) isIPOutOfRange(ip net.IP) bool {
+	return len(servicecidr.ContainsIP(r.serviceCIDRLister, ip)) == 0
+}
+
+func newIPAddress(name string, svc *v1.Service) *networkingv1beta1.IPAddress {
 	family := string(v1.IPv4Protocol)
 	if netutils.IsIPv6String(name) {
 		family = string(v1.IPv6Protocol)
 	}
-	return &networkingv1alpha1.IPAddress{
+	return &networkingv1beta1.IPAddress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				networkingv1alpha1.LabelIPAddressFamily: family,
-				networkingv1alpha1.LabelManagedBy:       ipallocator.ControllerName,
+				networkingv1beta1.LabelIPAddressFamily: family,
+				networkingv1beta1.LabelManagedBy:       ipallocator.ControllerName,
 			},
 		},
-		Spec: networkingv1alpha1.IPAddressSpec{
+		Spec: networkingv1beta1.IPAddressSpec{
 			ParentRef: serviceToRef(svc),
 		},
 	}
 }
 
-func serviceToRef(svc *v1.Service) *networkingv1alpha1.ParentReference {
+func serviceToRef(svc *v1.Service) *networkingv1beta1.ParentReference {
 	if svc == nil {
 		return nil
 	}
 
-	return &networkingv1alpha1.ParentReference{
+	return &networkingv1beta1.ParentReference{
 		Group:     "",
 		Resource:  "services",
 		Namespace: svc.Namespace,
 		Name:      svc.Name,
-		UID:       svc.UID,
 	}
 }
 
@@ -565,16 +576,16 @@ func getFamilyByIP(ip net.IP) v1.IPFamily {
 
 // managedByController returns true if the controller of the provided
 // EndpointSlices is the EndpointSlice controller.
-func managedByController(ip *networkingv1alpha1.IPAddress) bool {
-	managedBy, ok := ip.Labels[networkingv1alpha1.LabelManagedBy]
+func managedByController(ip *networkingv1beta1.IPAddress) bool {
+	managedBy, ok := ip.Labels[networkingv1beta1.LabelManagedBy]
 	if !ok {
 		return false
 	}
 	return managedBy == ipallocator.ControllerName
 }
 
-func verifyIPAddressLabels(ip *networkingv1alpha1.IPAddress) bool {
-	labelFamily, ok := ip.Labels[networkingv1alpha1.LabelIPAddressFamily]
+func verifyIPAddressLabels(ip *networkingv1beta1.IPAddress) bool {
+	labelFamily, ok := ip.Labels[networkingv1beta1.LabelIPAddressFamily]
 	if !ok {
 		return false
 	}

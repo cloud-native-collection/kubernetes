@@ -31,6 +31,7 @@ import (
 )
 
 // MirrorClient knows how to create/delete a mirror pod in the API server.
+// 向api server发送创建 mirror pod
 type MirrorClient interface {
 	// CreateMirrorPod creates a mirror pod in the API server for the given
 	// pod or returns an error.  The mirror pod will have the same annotations
@@ -51,6 +52,8 @@ type nodeGetter interface {
 // basicMirrorClient is a functional MirrorClient.  Mirror pods are stored in
 // the kubelet directly because they need to be in sync with the internal
 // pods.
+// basicMirrorClient是MirrorClient的一个实现,
+// Mirror pods直接存储在 kubelet 中因为需要与kubelet 中static pods同步
 type basicMirrorClient struct {
 	apiserverClient clientset.Interface
 	nodeGetter      nodeGetter

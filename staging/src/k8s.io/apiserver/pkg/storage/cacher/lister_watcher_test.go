@@ -28,7 +28,7 @@ import (
 func TestCacherListerWatcher(t *testing.T) {
 	prefix := "pods"
 	fn := func() runtime.Object { return &example.PodList{} }
-	server, store := newEtcdTestStorage(t, prefix, true)
+	server, store := newEtcdTestStorage(t, prefix)
 	defer server.Terminate(t)
 
 	objects := []*example.Pod{
@@ -44,7 +44,7 @@ func TestCacherListerWatcher(t *testing.T) {
 		}
 	}
 
-	lw := NewListerWatcher(store, prefix, fn)
+	lw := NewListerWatcher(store, prefix, fn, nil)
 
 	obj, err := lw.List(metav1.ListOptions{})
 	if err != nil {
@@ -62,7 +62,7 @@ func TestCacherListerWatcher(t *testing.T) {
 func TestCacherListerWatcherPagination(t *testing.T) {
 	prefix := "pods"
 	fn := func() runtime.Object { return &example.PodList{} }
-	server, store := newEtcdTestStorage(t, prefix, true)
+	server, store := newEtcdTestStorage(t, prefix)
 	defer server.Terminate(t)
 
 	// We need the list to be sorted by name to later check the alphabetical order of
@@ -80,7 +80,7 @@ func TestCacherListerWatcherPagination(t *testing.T) {
 		}
 	}
 
-	lw := NewListerWatcher(store, prefix, fn)
+	lw := NewListerWatcher(store, prefix, fn, nil)
 
 	obj1, err := lw.List(metav1.ListOptions{Limit: 2})
 	if err != nil {

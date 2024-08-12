@@ -159,7 +159,7 @@ func initContainersInvariants(pod *v1.Pod) error {
 	return nil
 }
 
-var _ = SIGDescribe("InitContainer [NodeConformance]", func() {
+var _ = SIGDescribe("InitContainer", framework.WithNodeConformance(), func() {
 	f := framework.NewDefaultFramework("init-container")
 	f.NamespacePodSecurityLevel = admissionapi.LevelBaseline
 	var podClient *e2epod.PodClient
@@ -536,7 +536,7 @@ var _ = SIGDescribe("InitContainer [NodeConformance]", func() {
 							return false, nil
 						}
 						if status.State.Terminated != nil && status.State.Terminated.ExitCode != 0 {
-							return false, fmt.Errorf("first init container should have exitCode != 0: %s", toDebugJSON(status))
+							return false, fmt.Errorf("first init container should have exitCode == 0: %s", toDebugJSON(status))
 						}
 						status = t.Status.InitContainerStatuses[1]
 						if status.State.Terminated == nil {

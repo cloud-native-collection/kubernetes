@@ -27,11 +27,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/controller/history"
 	"k8s.io/kubernetes/pkg/features"
-	"k8s.io/utils/integer"
 )
 
 // Realistic value for maximum in-flight requests when processing in parallel mode.
@@ -62,16 +60,14 @@ type StatefulSetControlInterface interface {
 func NewDefaultStatefulSetControl(
 	podControl *StatefulPodControl,
 	statusUpdater StatefulSetStatusUpdaterInterface,
-	controllerHistory history.Interface,
-	recorder record.EventRecorder) StatefulSetControlInterface {
-	return &defaultStatefulSetControl{podControl, statusUpdater, controllerHistory, recorder}
+	controllerHistory history.Interface) StatefulSetControlInterface {
+	return &defaultStatefulSetControl{podControl, statusUpdater, controllerHistory}
 }
 
 type defaultStatefulSetControl struct {
 	podControl        *StatefulPodControl
 	statusUpdater     StatefulSetStatusUpdaterInterface
 	controllerHistory history.Interface
-	recorder          record.EventRecorder
 }
 
 // UpdateStatefulSet executes the core logic loop for a stateful set, applying the predictable and
@@ -281,7 +277,7 @@ func (ssc *defaultStatefulSetControl) getStatefulSetRevisions(
 func slowStartBatch(initialBatchSize int, remaining int, fn func(int) (bool, error)) (int, error) {
 	successes := 0
 	j := 0
-	for batchSize := integer.IntMin(remaining, initialBatchSize); batchSize > 0; batchSize = integer.IntMin(integer.IntMin(2*batchSize, remaining), MaxBatchSize) {
+	for batchSize := min(remaining, initialBatchSize); batchSize > 0; batchSize = min(min(2*batchSize, remaining), MaxBatchSize) {
 		errCh := make(chan error, batchSize)
 		var wg sync.WaitGroup
 		wg.Add(batchSize)
@@ -337,10 +333,11 @@ func computeReplicaStatus(pods []*v1.Pod, minReadySeconds int32, currentRevision
 
 		// count the number of current and update replicas
 		if isCreated(pod) && !isTerminating(pod) {
-			if getPodRevision(pod) == currentRevision.Name {
+			revision := getPodRevision(pod)
+			if revision == currentRevision.Name {
 				status.currentReplicas++
 			}
-			if getPodRevision(pod) == updateRevision.Name {
+			if revision == updateRevision.Name {
 				status.updatedReplicas++
 			}
 		}
@@ -367,31 +364,25 @@ func updateStatus(status *apps.StatefulSetStatus, minReadySeconds int32, current
 func (ssc *defaultStatefulSetControl) processReplica(
 	ctx context.Context,
 	set *apps.StatefulSet,
-	currentRevision *apps.ControllerRevision,
-	updateRevision *apps.ControllerRevision,
-	currentSet *apps.StatefulSet,
 	updateSet *apps.StatefulSet,
 	monotonic bool,
 	replicas []*v1.Pod,
 	i int) (bool, error) {
 	logger := klog.FromContext(ctx)
-	// delete and recreate failed pods
-	if isFailed(replicas[i]) {
-		ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedPod",
-			"StatefulSet %s/%s is recreating failed Pod %s",
-			set.Namespace,
-			set.Name,
-			replicas[i].Name)
-		if err := ssc.podControl.DeleteStatefulPod(set, replicas[i]); err != nil {
-			return true, err
+
+	// Note that pods with phase Succeeded will also trigger this event. This is
+	// because final pod phase of evicted or otherwise forcibly stopped pods
+	// (e.g. terminated on node reboot) is determined by the exit code of the
+	// container, not by the reason for pod termination. We should restart the pod
+	// regardless of the exit code.
+	if isFailed(replicas[i]) || isSucceeded(replicas[i]) {
+		if replicas[i].DeletionTimestamp == nil {
+			if err := ssc.podControl.DeleteStatefulPod(set, replicas[i]); err != nil {
+				return true, err
+			}
 		}
-		replicaOrd := i + getStartOrdinal(set)
-		replicas[i] = newVersionedStatefulSetPod(
-			currentSet,
-			updateSet,
-			currentRevision.Name,
-			updateRevision.Name,
-			replicaOrd)
+		// New pod should be generated on the next sync after the current pod is removed from etcd.
+		return true, nil
 	}
 	// If we find a Pod that has not been created we create the Pod
 	if !isCreated(replicas[i]) {
@@ -623,7 +614,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 	// First, process each living replica. Exit if we run into an error or something blocking in monotonic mode.
 	processReplicaFn := func(i int) (bool, error) {
-		return ssc.processReplica(ctx, set, currentRevision, updateRevision, currentSet, updateSet, monotonic, replicas, i)
+		return ssc.processReplica(ctx, set, updateSet, monotonic, replicas, i)
 	}
 	if shouldExit, err := runForAll(replicas, processReplicaFn, monotonic); shouldExit || err != nil {
 		updateStatus(&status, set.Spec.MinReadySeconds, currentRevision, updateRevision, replicas, condemned)

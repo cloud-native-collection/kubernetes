@@ -48,14 +48,15 @@ func (t *testVariable) GetName() string {
 
 func TestCompositedPolicies(t *testing.T) {
 	cases := []struct {
-		name                 string
-		variables            []NamedExpressionAccessor
-		expression           string
-		attributes           admission.Attributes
-		expectedResult       any
-		expectErr            bool
-		expectedErrorMessage string
-		runtimeCostBudget    int64
+		name                  string
+		variables             []NamedExpressionAccessor
+		expression            string
+		attributes            admission.Attributes
+		expectedResult        any
+		expectErr             bool
+		expectedErrorMessage  string
+		runtimeCostBudget     int64
+		strictCostEnforcement bool
 	}{
 		{
 			name: "simple",
@@ -70,7 +71,7 @@ func TestCompositedPolicies(t *testing.T) {
 			expectedResult: true,
 		},
 		{
-			name: "delayed compile error",
+			name: "early compile error",
 			variables: []NamedExpressionAccessor{
 				&testVariable{
 					name:       "name",
@@ -80,20 +81,20 @@ func TestCompositedPolicies(t *testing.T) {
 			attributes:           endpointCreateAttributes(),
 			expression:           "variables.name == 'endpoints1'",
 			expectErr:            true,
-			expectedErrorMessage: `composited variable "name" fails to compile:`,
+			expectedErrorMessage: `found no matching overload for '_==_' applied to '(int, string)'`,
 		},
 		{
 			name: "delayed eval error",
 			variables: []NamedExpressionAccessor{
 				&testVariable{
-					name:       "name",
-					expression: "object.spec.subsets[114514].addresses.size()", // array index out of bound
+					name:       "count",
+					expression: "object.subsets[114514].addresses.size()", // array index out of bound
 				},
 			},
 			attributes:           endpointCreateAttributes(),
-			expression:           "variables.name == 'endpoints1'",
+			expression:           "variables.count == 810",
 			expectErr:            true,
-			expectedErrorMessage: `composited variable "name" fails to evaluate:`,
+			expectedErrorMessage: `composited variable "count" fails to evaluate: index out of bounds: 114514`,
 		},
 		{
 			name: "out of budget during lazy evaluation",
@@ -123,16 +124,107 @@ func TestCompositedPolicies(t *testing.T) {
 			expectedResult:    true,
 			runtimeCostBudget: 10, // enough for one lazy evaluation but not two, should pass
 		},
+		{
+			name: "single boolean variable in expression",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "fortuneTelling",
+					expression: "true",
+				},
+			},
+			attributes:     endpointCreateAttributes(),
+			expression:     "variables.fortuneTelling",
+			expectedResult: true,
+		},
+		{
+			name: "variable of a list",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "list",
+					expression: "[1, 2, 3, 4]",
+				},
+			},
+			attributes:     endpointCreateAttributes(),
+			expression:     "variables.list.sum() == 10",
+			expectedResult: true,
+		},
+		{
+			name: "variable of a map",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "dict",
+					expression: `{"foo": "bar"}`,
+				},
+			},
+			attributes:     endpointCreateAttributes(),
+			expression:     "variables.dict['foo'].contains('bar')",
+			expectedResult: true,
+		},
+		{
+			name: "variable of a list but confused as a map",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "list",
+					expression: "[1, 2, 3, 4]",
+				},
+			},
+			attributes:           endpointCreateAttributes(),
+			expression:           "variables.list['invalid'] == 'invalid'",
+			expectErr:            true,
+			expectedErrorMessage: "found no matching overload for '_[_]' applied to '(list(int), string)'",
+		},
+		{
+			name: "list of strings, but element is confused as an integer",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "list",
+					expression: "['1', '2', '3', '4']",
+				},
+			},
+			attributes:           endpointCreateAttributes(),
+			expression:           "variables.list[0] == 1",
+			expectErr:            true,
+			expectedErrorMessage: "found no matching overload for '_==_' applied to '(string, int)'",
+		},
+		{
+			name: "with strictCostEnforcement on: exceeds cost budget",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "dict",
+					expression: "'abc 123 def 123'.split(' ')",
+				},
+			},
+			attributes:            endpointCreateAttributes(),
+			expression:            "size(variables.dict) > 0",
+			expectErr:             true,
+			expectedErrorMessage:  "validation failed due to running out of cost budget, no further validation rules will be run",
+			runtimeCostBudget:     5,
+			strictCostEnforcement: true,
+		},
+		{
+			name: "with strictCostEnforcement off: not exceed cost budget",
+			variables: []NamedExpressionAccessor{
+				&testVariable{
+					name:       "dict",
+					expression: "'abc 123 def 123'.split(' ')",
+				},
+			},
+			attributes:            endpointCreateAttributes(),
+			expression:            "size(variables.dict) > 0",
+			expectedResult:        true,
+			runtimeCostBudget:     5,
+			strictCostEnforcement: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			compiler, err := NewCompositedCompiler(environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion()))
+			compiler, err := NewCompositedCompiler(environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion(), tc.strictCostEnforcement))
 			if err != nil {
 				t.Fatal(err)
 			}
-			compiler.CompileAndStoreVariables(tc.variables, OptionalVariableDeclarations{HasParams: false, HasAuthorizer: false}, environment.NewExpressions)
+			compiler.CompileAndStoreVariables(tc.variables, OptionalVariableDeclarations{HasParams: false, HasAuthorizer: false, StrictCost: tc.strictCostEnforcement}, environment.NewExpressions)
 			validations := []ExpressionAccessor{&condition{Expression: tc.expression}}
-			f := compiler.Compile(validations, OptionalVariableDeclarations{HasParams: false, HasAuthorizer: false}, environment.NewExpressions)
+			f := compiler.Compile(validations, OptionalVariableDeclarations{HasParams: false, HasAuthorizer: false, StrictCost: tc.strictCostEnforcement}, environment.NewExpressions)
 			versionedAttr, err := admission.NewVersionedAttributes(tc.attributes, tc.attributes.GetKind(), newObjectInterfacesForTest())
 			if err != nil {
 				t.Fatal(err)

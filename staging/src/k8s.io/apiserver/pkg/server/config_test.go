@@ -17,6 +17,8 @@ limitations under the License.
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -37,10 +40,13 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/server/healthz"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	utilversion "k8s.io/apiserver/pkg/util/version"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/component-base/tracing"
+	"k8s.io/klog/v2/ktesting"
 	netutils "k8s.io/utils/net"
 )
 
@@ -78,11 +84,15 @@ func TestAuthorizeClientBearerTokenNoops(t *testing.T) {
 }
 
 func TestNewWithDelegate(t *testing.T) {
+	_, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(errors.New("test is done"))
 	delegateConfig := NewConfig(codecs)
 	delegateConfig.ExternalAddress = "192.168.10.4:443"
 	delegateConfig.PublicAddress = netutils.ParseIPSloppy("192.168.10.4")
 	delegateConfig.LegacyAPIGroupPrefixes = sets.NewString("/api")
 	delegateConfig.LoopbackClientConfig = &rest.Config{}
+	delegateConfig.EffectiveVersion = utilversion.NewEffectiveVersion("")
 	clientset := fake.NewSimpleClientset()
 	if clientset == nil {
 		t.Fatal("unable to create fake client set")
@@ -115,6 +125,7 @@ func TestNewWithDelegate(t *testing.T) {
 	wrappingConfig.PublicAddress = netutils.ParseIPSloppy("192.168.10.4")
 	wrappingConfig.LegacyAPIGroupPrefixes = sets.NewString("/api")
 	wrappingConfig.LoopbackClientConfig = &rest.Config{}
+	wrappingConfig.EffectiveVersion = utilversion.NewEffectiveVersion("")
 
 	wrappingConfig.HealthzChecks = append(wrappingConfig.HealthzChecks, healthz.NamedCheck("wrapping-health", func(r *http.Request) error {
 		return fmt.Errorf("wrapping failed healthcheck")
@@ -135,10 +146,8 @@ func TestNewWithDelegate(t *testing.T) {
 		return nil
 	})
 
-	stopCh := make(chan struct{})
-	defer close(stopCh)
 	wrappingServer.PrepareRun()
-	wrappingServer.RunPostStartHooks(stopCh)
+	wrappingServer.RunPostStartHooks(ctx)
 
 	server := httptest.NewServer(wrappingServer.Handler)
 	defer server.Close()
@@ -300,6 +309,7 @@ func TestAuthenticationAuditAnnotationsDefaultChain(t *testing.T) {
 		LongRunningFunc:                func(_ *http.Request, _ *request.RequestInfo) bool { return false },
 		lifecycleSignals:               newLifecycleSignals(),
 		TracerProvider:                 tracing.NewNoopTracerProvider(),
+		FeatureGate:                    utilfeature.DefaultFeatureGate,
 	}
 
 	h := DefaultBuildHandlerChain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -361,4 +371,22 @@ type testBackend struct {
 func (b *testBackend) ProcessEvents(events ...*auditinternal.Event) bool {
 	b.events = append(b.events, events...)
 	return true
+}
+
+func TestNewErrorForbiddenSerializer(t *testing.T) {
+	config := CompletedConfig{
+		&completedConfig{
+			Config: &Config{
+				Serializer: runtime.NewSimpleNegotiatedSerializer(runtime.SerializerInfo{
+					MediaType: "application/cbor",
+				}),
+			},
+		},
+	}
+	_, err := config.New("test", NewEmptyDelegate())
+	if err == nil {
+		t.Error("successfully created a new server configured with cbor support")
+	} else if err.Error() != `refusing to create new apiserver "test" with support for media type "application/cbor" (allowed media types are: application/json, application/yaml, application/vnd.kubernetes.protobuf)` {
+		t.Errorf("unexpected error: %v", err)
+	}
 }

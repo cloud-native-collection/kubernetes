@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -44,6 +43,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	"k8s.io/kubernetes/test/e2e/nodefeature"
 
 	"github.com/godbus/dbus/v5"
 	v1 "k8s.io/api/core/v1"
@@ -57,7 +57,7 @@ import (
 	testutils "k8s.io/kubernetes/test/utils"
 )
 
-var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShutdown] [NodeFeature:GracefulNodeShutdownBasedOnPodPriority]", func() {
+var _ = SIGDescribe("GracefulNodeShutdown", framework.WithSerial(), nodefeature.GracefulNodeShutdown, nodefeature.GracefulNodeShutdownBasedOnPodPriority, func() {
 	f := framework.NewDefaultFramework("graceful-node-shutdown")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
@@ -83,7 +83,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 		}
 	})
 
-	ginkgo.Context("graceful node shutdown when PodDisruptionConditions are enabled [NodeFeature:PodDisruptionConditions]", func() {
+	f.Context("graceful node shutdown; baseline scenario to verify DisruptionTarget is added", func() {
 
 		const (
 			pollInterval            = 1 * time.Second
@@ -95,7 +95,6 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 		tempSetCurrentKubeletConfig(f, func(ctx context.Context, initialConfig *kubeletconfig.KubeletConfiguration) {
 			initialConfig.FeatureGates = map[string]bool{
 				string(features.GracefulNodeShutdown):                   true,
-				string(features.PodDisruptionConditions):                true,
 				string(features.GracefulNodeShutdownBasedOnPodPriority): false,
 			}
 			initialConfig.ShutdownGracePeriod = metav1.Duration{Duration: nodeShutdownGracePeriod}
@@ -134,7 +133,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 			})
 
 			framework.ExpectNoError(err)
-			framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+			gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 			list, err = e2epod.NewPodClient(f).List(ctx, metav1.ListOptions{
 				FieldSelector: nodeSelector,
@@ -142,7 +141,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 			if err != nil {
 				framework.Failf("Failed to start batch pod: %q", err)
 			}
-			framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+			gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 			for _, pod := range list.Items {
 				framework.Logf("Pod (%v/%v) status conditions: %q", pod.Namespace, pod.Name, &pod.Status.Conditions)
@@ -168,7 +167,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				if err != nil {
 					return err
 				}
-				framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+				gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 				for _, pod := range list.Items {
 					if !isPodShutdown(&pod) {
@@ -199,6 +198,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 			initialConfig.FeatureGates = map[string]bool{
 				string(features.GracefulNodeShutdown):                   true,
 				string(features.GracefulNodeShutdownBasedOnPodPriority): false,
+				string(features.PodReadyToStartContainersCondition):     true,
 			}
 			initialConfig.ShutdownGracePeriod = metav1.Duration{Duration: nodeShutdownGracePeriod}
 			initialConfig.ShutdownGracePeriodCriticalPods = metav1.Duration{Duration: nodeShutdownGracePeriodCriticalPods}
@@ -236,7 +236,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				FieldSelector: nodeSelector,
 			})
 			framework.ExpectNoError(err)
-			framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+			gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
@@ -286,7 +286,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				if err != nil {
 					return err
 				}
-				framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+				gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 				for _, pod := range list.Items {
 					if kubelettypes.IsCriticalPod(&pod) {
@@ -296,7 +296,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 						}
 					} else {
 						if !isPodShutdown(&pod) {
-							framework.Logf("Expecting non-critical pod (%v/%v) to be shutdown, but it's not currently. Pod Status %+v", pod.Name, pod.Status)
+							framework.Logf("Expecting non-critical pod (%v/%v) to be shutdown, but it's not currently. Pod Status %+v", pod.Namespace, pod.Name, pod.Status)
 							return fmt.Errorf("pod (%v/%v) should be shutdown, phase: %s", pod.Namespace, pod.Name, pod.Status.Phase)
 						}
 					}
@@ -313,7 +313,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				if err != nil {
 					return err
 				}
-				framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+				gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 				for _, pod := range list.Items {
 					if !isPodShutdown(&pod) {
@@ -327,6 +327,27 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				podStatusUpdateTimeout+(nodeShutdownGracePeriod-nodeShutdownGracePeriodCriticalPods),
 				pollInterval).Should(gomega.Succeed())
 
+			ginkgo.By("Verify that all pod ready to start condition are set to false after terminating")
+			// All pod ready to start condition should set to false
+			gomega.Eventually(ctx, func(ctx context.Context) error {
+				list, err = e2epod.NewPodClient(f).List(ctx, metav1.ListOptions{
+					FieldSelector: nodeSelector,
+				})
+				if err != nil {
+					return err
+				}
+				gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)))
+				for _, pod := range list.Items {
+					if !isPodReadyToStartConditionSetToFalse(&pod) {
+						framework.Logf("Expecting pod (%v/%v) 's ready to start condition set to false, "+
+							"but it's not currently: Pod Condition %+v", pod.Namespace, pod.Name, pod.Status.Conditions)
+						return fmt.Errorf("pod (%v/%v) 's ready to start condition should be false, condition: %s, phase: %s",
+							pod.Namespace, pod.Name, pod.Status.Conditions, pod.Status.Phase)
+					}
+				}
+				return nil
+			},
+			).Should(gomega.Succeed())
 		})
 
 		ginkgo.It("should be able to handle a cancelled shutdown", func(ctx context.Context) {
@@ -352,38 +373,9 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				return nil
 			}, nodeStatusUpdateTimeout, pollInterval).Should(gomega.Succeed())
 		})
-
-		ginkgo.It("after restart dbus, should be able to gracefully shutdown", func(ctx context.Context) {
-			// allows manual restart of dbus to work in Ubuntu.
-			err := overlayDbusConfig()
-			framework.ExpectNoError(err)
-			defer func() {
-				err := restoreDbusConfig()
-				framework.ExpectNoError(err)
-			}()
-
-			ginkgo.By("Restart Dbus")
-			err = restartDbus()
-			framework.ExpectNoError(err)
-
-			gomega.Eventually(ctx, func(ctx context.Context) error {
-				// re-send the shutdown signal in case the dbus restart is not done
-				ginkgo.By("Emitting Shutdown signal")
-				err = emitSignalPrepareForShutdown(true)
-				if err != nil {
-					return err
-				}
-
-				isReady := getNodeReadyStatus(ctx, f)
-				if isReady {
-					return fmt.Errorf("node did not become shutdown as expected")
-				}
-				return nil
-			}, nodeStatusUpdateTimeout, pollInterval).Should(gomega.Succeed())
-		})
 	})
 
-	ginkgo.Context("when gracefully shutting down with Pod priority", func() {
+	framework.Context("when gracefully shutting down with Pod priority", framework.WithFlaky(), func() {
 
 		const (
 			pollInterval                 = 1 * time.Second
@@ -514,7 +506,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 				FieldSelector: nodeSelector,
 			})
 			framework.ExpectNoError(err)
-			framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+			gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 
 			ginkgo.By("Verifying batch pods are running")
 			for _, pod := range list.Items {
@@ -537,7 +529,7 @@ var _ = SIGDescribe("GracefulNodeShutdown [Serial] [NodeFeature:GracefulNodeShut
 					if err != nil {
 						return err
 					}
-					framework.ExpectEqual(len(list.Items), len(pods), "the number of pods is not as expected")
+					gomega.Expect(list.Items).To(gomega.HaveLen(len(pods)), "the number of pods is not as expected")
 					for _, pod := range list.Items {
 						shouldShutdown := false
 						for _, podName := range step {
@@ -628,10 +620,14 @@ func getGracePeriodOverrideTestPod(name string, node string, gracePeriod int64, 
 			kubelettypes.ConfigSourceAnnotationKey: kubelettypes.FileSource,
 		}
 		pod.Spec.PriorityClassName = priorityClassName
-		framework.ExpectEqual(kubelettypes.IsCriticalPod(pod), true, "pod should be a critical pod")
+		if !kubelettypes.IsCriticalPod(pod) {
+			framework.Failf("pod %q should be a critical pod", pod.Name)
+		}
 	} else {
 		pod.Spec.PriorityClassName = priorityClassName
-		framework.ExpectEqual(kubelettypes.IsCriticalPod(pod), false, "pod should not be a critical pod")
+		if kubelettypes.IsCriticalPod(pod) {
+			framework.Failf("pod %q should not be a critical pod", pod.Name)
+		}
 	}
 	return pod
 }
@@ -650,52 +646,8 @@ func getNodeReadyStatus(ctx context.Context, f *framework.Framework) bool {
 	nodeList, err := f.ClientSet.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	framework.ExpectNoError(err)
 	// Assuming that there is only one node, because this is a node e2e test.
-	framework.ExpectEqual(len(nodeList.Items), 1)
+	gomega.Expect(nodeList.Items).To(gomega.HaveLen(1), "the number of nodes is not as expected")
 	return isNodeReady(&nodeList.Items[0])
-}
-
-func restartDbus() error {
-	cmd := "systemctl restart dbus"
-	_, err := runCommand("sh", "-c", cmd)
-	return err
-}
-
-func systemctlDaemonReload() error {
-	cmd := "systemctl daemon-reload"
-	_, err := runCommand("sh", "-c", cmd)
-	return err
-}
-
-var (
-	dbusConfPath = "/etc/systemd/system/dbus.service.d/k8s-graceful-node-shutdown-e2e.conf"
-	dbusConf     = `
-[Unit]
-RefuseManualStart=no
-RefuseManualStop=no
-[Service]
-KillMode=control-group
-ExecStop=
-`
-)
-
-func overlayDbusConfig() error {
-	err := os.MkdirAll(filepath.Dir(dbusConfPath), 0755)
-	if err != nil {
-		return err
-	}
-	err = os.WriteFile(dbusConfPath, []byte(dbusConf), 0644)
-	if err != nil {
-		return err
-	}
-	return systemctlDaemonReload()
-}
-
-func restoreDbusConfig() error {
-	err := os.Remove(dbusConfPath)
-	if err != nil {
-		return err
-	}
-	return systemctlDaemonReload()
 }
 
 const (
@@ -722,4 +674,18 @@ func isPodShutdown(pod *v1.Pod) bool {
 // Pods should never report failed phase and have ready condition = true (https://github.com/kubernetes/kubernetes/issues/108594)
 func isPodStatusAffectedByIssue108594(pod *v1.Pod) bool {
 	return pod.Status.Phase == v1.PodFailed && podutils.IsPodReady(pod)
+}
+
+func isPodReadyToStartConditionSetToFalse(pod *v1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	readyToStartConditionSetToFalse := false
+	for _, cond := range pod.Status.Conditions {
+		if cond.Status == v1.ConditionFalse {
+			readyToStartConditionSetToFalse = true
+		}
+	}
+
+	return readyToStartConditionSetToFalse
 }

@@ -177,8 +177,12 @@ type AttachDetachControllerConfiguration struct {
 	// This flag enables or disables reconcile.  Is false by default, and thus enabled.
 	DisableAttachDetachReconcilerSync bool
 	// ReconcilerSyncLoopPeriod is the amount of time the reconciler sync states loop
-	// wait between successive executions. Is set to 5 sec by default.
+	// wait between successive executions. Is set to 60 sec by default.
 	ReconcilerSyncLoopPeriod metav1.Duration
+	// DisableForceDetachOnTimeout disables force detach when the maximum unmount
+	// time is exceeded. Is false by default, and thus force detach on unmount is
+	// enabled.
+	DisableForceDetachOnTimeout bool `json:"disableForceDetachOnTimeout"`
 }
 
 // CSRSigningControllerConfiguration contains elements describing CSRSigningController.
@@ -324,13 +328,9 @@ type HPAControllerConfiguration struct {
 	// HorizontalPodAutoscalerSyncPeriod is the period for syncing the number of
 	// pods in horizontal pod autoscaler.
 	HorizontalPodAutoscalerSyncPeriod metav1.Duration
-	// HorizontalPodAutoscalerUpscaleForbiddenWindow is a period after which next upscale allowed.
-	HorizontalPodAutoscalerUpscaleForbiddenWindow metav1.Duration
 	// HorizontalPodAutoscalerDowncaleStabilizationWindow is a period for which autoscaler will look
 	// backwards and not scale down below any recommendation it made during that period.
 	HorizontalPodAutoscalerDownscaleStabilizationWindow metav1.Duration
-	// HorizontalPodAutoscalerDownscaleForbiddenWindow is a period after which next downscale allowed.
-	HorizontalPodAutoscalerDownscaleForbiddenWindow metav1.Duration
 	// HorizontalPodAutoscalerTolerance is the tolerance for when
 	// resource usage suggests upscaling/downscaling
 	HorizontalPodAutoscalerTolerance float64
@@ -422,12 +422,6 @@ type PersistentVolumeBinderControllerConfiguration struct {
 	PVClaimBinderSyncPeriod metav1.Duration
 	// volumeConfiguration holds configuration for volume related features.
 	VolumeConfiguration VolumeConfiguration
-	// DEPRECATED: VolumeHostCIDRDenylist is a list of CIDRs that should not be reachable by the
-	// controller from plugins.
-	VolumeHostCIDRDenylist []string
-	// DEPRECATED: VolumeHostAllowLocalLoopback indicates if local loopback hosts (127.0.0.1, etc)
-	// should be allowed from plugins.
-	VolumeHostAllowLocalLoopback *bool
 }
 
 // PodGCControllerConfiguration contains elements describing PodGCController.

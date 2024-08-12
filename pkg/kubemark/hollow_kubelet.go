@@ -17,10 +17,11 @@ limitations under the License.
 package kubemark
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
+	noopoteltrace "go.opentelemetry.io/otel/trace/noop"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/mount-utils"
@@ -41,7 +42,6 @@ import (
 	kubeletutil "k8s.io/kubernetes/pkg/kubelet/util"
 	"k8s.io/kubernetes/pkg/util/oom"
 	"k8s.io/kubernetes/pkg/volume"
-	"k8s.io/kubernetes/pkg/volume/cephfs"
 	"k8s.io/kubernetes/pkg/volume/configmap"
 	"k8s.io/kubernetes/pkg/volume/csi"
 	"k8s.io/kubernetes/pkg/volume/downwardapi"
@@ -54,7 +54,6 @@ import (
 	"k8s.io/kubernetes/pkg/volume/nfs"
 	"k8s.io/kubernetes/pkg/volume/portworx"
 	"k8s.io/kubernetes/pkg/volume/projected"
-	"k8s.io/kubernetes/pkg/volume/rbd"
 	"k8s.io/kubernetes/pkg/volume/secret"
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	"k8s.io/kubernetes/pkg/volume/util/subpath"
@@ -75,8 +74,6 @@ func volumePlugins() []volume.VolumePlugin {
 	allPlugins = append(allPlugins, nfs.ProbeVolumePlugins(volume.VolumeConfig{})...)
 	allPlugins = append(allPlugins, secret.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, iscsi.ProbeVolumePlugins()...)
-	allPlugins = append(allPlugins, rbd.ProbeVolumePlugins()...)
-	allPlugins = append(allPlugins, cephfs.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, downwardapi.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, fc.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, configmap.ProbeVolumePlugins()...)
@@ -97,24 +94,25 @@ func NewHollowKubelet(
 	runtimeService internalapi.RuntimeService,
 	containerManager cm.ContainerManager) *HollowKubelet {
 	d := &kubelet.Dependencies{
-		KubeClient:               client,
-		HeartbeatClient:          heartbeatClient,
-		ProbeManager:             probetest.FakeManager{},
-		RemoteRuntimeService:     runtimeService,
-		RemoteImageService:       imageService,
-		CAdvisorInterface:        cadvisorInterface,
-		Cloud:                    nil,
-		OSInterface:              &containertest.FakeOS{},
-		ContainerManager:         containerManager,
-		VolumePlugins:            volumePlugins(),
-		TLSOptions:               nil,
-		OOMAdjuster:              oom.NewFakeOOMAdjuster(),
-		Mounter:                  &mount.FakeMounter{},
-		Subpather:                &subpath.FakeSubpath{},
-		HostUtil:                 hostutil.NewFakeHostUtil(nil),
-		PodStartupLatencyTracker: kubeletutil.NewPodStartupLatencyTracker(),
-		TracerProvider:           trace.NewNoopTracerProvider(),
-		Recorder:                 &record.FakeRecorder{}, // With real recorder we attempt to read /dev/kmsg.
+		KubeClient:                client,
+		HeartbeatClient:           heartbeatClient,
+		ProbeManager:              probetest.FakeManager{},
+		RemoteRuntimeService:      runtimeService,
+		RemoteImageService:        imageService,
+		CAdvisorInterface:         cadvisorInterface,
+		Cloud:                     nil,
+		OSInterface:               &containertest.FakeOS{},
+		ContainerManager:          containerManager,
+		VolumePlugins:             volumePlugins(),
+		TLSOptions:                nil,
+		OOMAdjuster:               oom.NewFakeOOMAdjuster(),
+		Mounter:                   &mount.FakeMounter{},
+		Subpather:                 &subpath.FakeSubpath{},
+		HostUtil:                  hostutil.NewFakeHostUtil(nil),
+		PodStartupLatencyTracker:  kubeletutil.NewPodStartupLatencyTracker(),
+		NodeStartupLatencyTracker: kubeletutil.NewNodeStartupLatencyTracker(),
+		TracerProvider:            noopoteltrace.NewTracerProvider(),
+		Recorder:                  &record.FakeRecorder{}, // With real recorder we attempt to read /dev/kmsg.
 	}
 
 	return &HollowKubelet{
@@ -125,8 +123,8 @@ func NewHollowKubelet(
 }
 
 // Starts this HollowKubelet and blocks.
-func (hk *HollowKubelet) Run() {
-	if err := kubeletapp.RunKubelet(&options.KubeletServer{
+func (hk *HollowKubelet) Run(ctx context.Context) {
+	if err := kubeletapp.RunKubelet(ctx, &options.KubeletServer{
 		KubeletFlags:         *hk.KubeletFlags,
 		KubeletConfiguration: *hk.KubeletConfiguration,
 	}, hk.KubeletDeps, false); err != nil {
@@ -151,6 +149,7 @@ type HollowKubeletOptions struct {
 func GetHollowKubeletConfig(opt *HollowKubeletOptions) (*options.KubeletFlags, *kubeletconfig.KubeletConfiguration) {
 	testRootDir := utils.MakeTempDirOrDie("hollow-kubelet.", "")
 	podFilePath := utils.MakeTempDirOrDie("static-pods", testRootDir)
+	podLogsPath := utils.MakeTempDirOrDie("pod-logs", testRootDir)
 	klog.Infof("Using %s as root dir for hollow-kubelet", testRootDir)
 
 	// Flags struct
@@ -209,6 +208,7 @@ func GetHollowKubeletConfig(opt *HollowKubeletOptions) (*options.KubeletFlags, *
 	c.RegisterWithTaints = opt.RegisterWithTaints
 	c.RegisterNode = true
 	c.LocalStorageCapacityIsolation = true
+	c.PodLogsDir = podLogsPath
 
 	return f, c
 }

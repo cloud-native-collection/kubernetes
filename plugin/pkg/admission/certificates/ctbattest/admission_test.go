@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
@@ -206,6 +207,51 @@ func TestPluginValidate(t *testing.T) {
 			},
 			allowed: false,
 		},
+		{
+			description:                      "should always allow no-op update",
+			clusterTrustBundleFeatureEnabled: true,
+			authzErr:                         errors.New("broken"),
+			attributes: &testAttributes{
+				resource: certificatesapi.Resource("clustertrustbundles"),
+				oldObj: &certificatesapi.ClusterTrustBundle{
+					Spec: certificatesapi.ClusterTrustBundleSpec{
+						SignerName: "panda.com/foo",
+					},
+				},
+				obj: &certificatesapi.ClusterTrustBundle{
+					Spec: certificatesapi.ClusterTrustBundleSpec{
+						SignerName: "panda.com/foo",
+					},
+				},
+				operation: admission.Update,
+			},
+			allowed: true,
+		},
+		{
+			description:                      "should always allow finalizer update",
+			clusterTrustBundleFeatureEnabled: true,
+			authzErr:                         errors.New("broken"),
+			attributes: &testAttributes{
+				resource: certificatesapi.Resource("clustertrustbundles"),
+				oldObj: &certificatesapi.ClusterTrustBundle{
+					Spec: certificatesapi.ClusterTrustBundleSpec{
+						SignerName: "panda.com/foo",
+					},
+				},
+				obj: &certificatesapi.ClusterTrustBundle{
+					ObjectMeta: metav1.ObjectMeta{
+						OwnerReferences: []metav1.OwnerReference{
+							{APIVersion: "something"},
+						},
+					},
+					Spec: certificatesapi.ClusterTrustBundleSpec{
+						SignerName: "panda.com/foo",
+					},
+				},
+				operation: admission.Update,
+			},
+			allowed: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -220,7 +266,7 @@ func TestPluginValidate(t *testing.T) {
 				},
 			}
 
-			defer featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.ClusterTrustBundle, tc.clusterTrustBundleFeatureEnabled)()
+			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.ClusterTrustBundle, tc.clusterTrustBundleFeatureEnabled)
 			p.InspectFeatureGates(feature.DefaultFeatureGate)
 
 			err := p.Validate(context.Background(), tc.attributes, nil)

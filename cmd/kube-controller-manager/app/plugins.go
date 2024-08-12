@@ -25,10 +25,6 @@ import (
 
 	"k8s.io/klog/v2"
 
-	// Cloud providers
-	cloudprovider "k8s.io/cloud-provider"
-	// ensure the cloud providers are installed
-	_ "k8s.io/kubernetes/pkg/cloudprovider/providers"
 	// Volume plugins
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/csi"
@@ -36,7 +32,6 @@ import (
 	"k8s.io/kubernetes/pkg/volume/flexvolume"
 	"k8s.io/kubernetes/pkg/volume/hostpath"
 	"k8s.io/kubernetes/pkg/volume/iscsi"
-	"k8s.io/kubernetes/pkg/volume/local"
 	"k8s.io/kubernetes/pkg/volume/nfs"
 	volumeutil "k8s.io/kubernetes/pkg/volume/util"
 
@@ -84,7 +79,7 @@ func ProbeExpandableVolumePlugins(logger klog.Logger, config persistentvolumecon
 // ProbeControllerVolumePlugins collects all persistent volume plugins into an
 // easy to use list. Only volume plugins that implement any of
 // provisioner/recycler/deleter interface should be returned.
-func ProbeControllerVolumePlugins(logger klog.Logger, cloud cloudprovider.Interface, config persistentvolumeconfig.VolumeConfiguration) ([]volume.VolumePlugin, error) {
+func ProbeControllerVolumePlugins(logger klog.Logger, config persistentvolumeconfig.VolumeConfiguration) ([]volume.VolumePlugin, error) {
 	allPlugins := []volume.VolumePlugin{}
 
 	// The list of plugins to probe is decided by this binary, not
@@ -124,9 +119,6 @@ func ProbeControllerVolumePlugins(logger klog.Logger, cloud cloudprovider.Interf
 	if err != nil {
 		return allPlugins, err
 	}
-
-	allPlugins = append(allPlugins, local.ProbeVolumePlugins()...)
-	allPlugins = append(allPlugins, csi.ProbeVolumePlugins()...)
 
 	return allPlugins, nil
 }

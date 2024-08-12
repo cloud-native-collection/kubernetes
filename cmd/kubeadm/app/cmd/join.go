@@ -37,7 +37,7 @@ import (
 
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmscheme "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/scheme"
-	kubeadmapiv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta3"
+	kubeadmapiv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta4"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/validation"
 	"k8s.io/kubernetes/cmd/kubeadm/app/cmd/options"
 	phases "k8s.io/kubernetes/cmd/kubeadm/app/cmd/phases/join"
@@ -135,6 +135,7 @@ type joinOptions struct {
 	externalcfg           *kubeadmapiv1.JoinConfiguration
 	patchesDir            string
 	dryRun                bool
+	skipCRIDetect         bool
 }
 
 // compile-time assert that the local data object satisfies the phases data interface.
@@ -174,7 +175,10 @@ func newCmdJoin(out io.Writer, joinOptions *joinOptions) *cobra.Command {
 				return err
 			}
 
-			data := c.(*joinData)
+			data, ok := c.(*joinData)
+			if !ok {
+				return errors.New("invalid data struct")
+			}
 
 			if err := joinRunner.Run(args); err != nil {
 				return err
@@ -215,15 +219,18 @@ func newCmdJoin(out io.Writer, joinOptions *joinOptions) *cobra.Command {
 	joinRunner.AppendPhase(phases.NewControlPlanePreparePhase())
 	joinRunner.AppendPhase(phases.NewCheckEtcdPhase())
 	joinRunner.AppendPhase(phases.NewKubeletStartPhase())
+	joinRunner.AppendPhase(phases.NewEtcdJoinPhase())
+	joinRunner.AppendPhase(phases.NewKubeletWaitBootstrapPhase())
 	joinRunner.AppendPhase(phases.NewControlPlaneJoinPhase())
+	joinRunner.AppendPhase(phases.NewWaitControlPlanePhase())
 
 	// sets the data builder function, that will be used by the runner
 	// both when running the entire workflow or single phases
 	joinRunner.SetDataInitializer(func(cmd *cobra.Command, args []string) (workflow.RunData, error) {
 		if cmd.Flags().Lookup(options.NodeCRISocket) == nil {
-			// avoid CRI detection
+			// skip CRI detection
 			// assume that the command execution does not depend on CRISocket when --cri-socket flag is not set
-			joinOptions.externalcfg.NodeRegistration.CRISocket = kubeadmconstants.UnknownCRISocket
+			joinOptions.skipCRIDetect = true
 		}
 		data, err := newJoinData(cmd, args, joinOptions, out, kubeadmconstants.GetAdminKubeConfigPath())
 		if err != nil {
@@ -251,7 +258,7 @@ func addJoinConfigFlags(flagSet *flag.FlagSet, cfg *kubeadmapiv1.JoinConfigurati
 	)
 	flagSet.StringVar(
 		&cfg.ControlPlane.CertificateKey, options.CertificateKey, cfg.ControlPlane.CertificateKey,
-		"Use this key to decrypt the certificate secrets uploaded by init.",
+		"Use this key to decrypt the certificate secrets uploaded by init. The certificate key is a hex encoded string that is an AES key of size 32 bytes.",
 	)
 	// add control plane endpoint flags to the specified flagset
 	flagSet.StringVar(
@@ -426,7 +433,9 @@ func newJoinData(cmd *cobra.Command, args []string, opt *joinOptions, out io.Wri
 		opt.externalcfg.Discovery.BootstrapToken = nil //NB. this could be removed when we get better control on args (e.g. phases without discovery should have NoArgs )
 	}
 
-	cfg, err := configutil.LoadOrDefaultJoinConfiguration(opt.cfgPath, opt.externalcfg)
+	cfg, err := configutil.LoadOrDefaultJoinConfiguration(opt.cfgPath, opt.externalcfg, configutil.LoadOrDefaultConfigurationOptions{
+		SkipCRIDetect: opt.skipCRIDetect,
+	})
 	if err != nil {
 		return nil, err
 	}

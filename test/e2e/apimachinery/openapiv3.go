@@ -42,9 +42,6 @@ import (
 	samplev1beta1 "k8s.io/sample-apiserver/pkg/apis/wardle/v1beta1"
 
 	"k8s.io/kubernetes/test/e2e/framework"
-
-	// ensure libs have a chance to initialize
-	_ "github.com/stretchr/testify/assert"
 )
 
 var _ = SIGDescribe("OpenAPIV3", func() {
@@ -134,13 +131,14 @@ var _ = SIGDescribe("OpenAPIV3", func() {
 		c := openapi3.NewRoot(f.ClientSet.Discovery().OpenAPIV3())
 		var openAPISpec *spec3.OpenAPI
 		// Poll for the OpenAPI to be updated with the new CRD
-		wait.Poll(time.Second*1, wait.ForeverTestTimeout, func() (bool, error) {
+		err = wait.PollUntilContextTimeout(context.Background(), time.Second*1, wait.ForeverTestTimeout, false, func(context.Context) (bool, error) {
 			openAPISpec, err = c.GVSpec(gv)
 			if err == nil {
 				return true, nil
 			}
 			return false, nil
 		})
+		framework.ExpectNoError(err, "timed out getting new CustomResourceDefinition")
 
 		specMarshalled, err := json.Marshal(openAPISpec)
 		framework.ExpectNoError(err)
@@ -170,8 +168,11 @@ var _ = SIGDescribe("OpenAPIV3", func() {
 		Release : v1.27
 		Testname: OpenAPI V3 Aggregated APIServer
 		Description: Create an Aggregated APIServer. The OpenAPI V3 for the aggregated apiserver MUST be aggregated by the aggregator and published. The specification MUST be round trippable.
+
+		This test case is marked as serial due to potential conflicts with other test cases that set up a sample-apiserver.
+		For more information, see: https://github.com/kubernetes/kubernetes/issues/119582#issuecomment-2215054411.
 	*/
-	ginkgo.It("should contain OpenAPI V3 for Aggregated APIServer", func(ctx context.Context) {
+	f.It("should contain OpenAPI V3 for Aggregated APIServer", f.WithSerial(), func(ctx context.Context) {
 		config, err := framework.LoadConfig()
 		framework.ExpectNoError(err)
 		aggrclient, err := aggregatorclient.NewForConfig(config)

@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/utils/ptr"
 
 	bootstraptokenv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/bootstraptoken/v1"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
@@ -41,6 +42,7 @@ func Funcs(codecs runtimeserializer.CodecFactory) []interface{} {
 		fuzzJoinConfiguration,
 		fuzzJoinControlPlane,
 		fuzzResetConfiguration,
+		fuzzUpgradeConfiguration,
 	}
 }
 
@@ -63,8 +65,10 @@ func fuzzInitConfiguration(obj *kubeadm.InitConfiguration, c fuzz.Continue) {
 	}
 	obj.SkipPhases = nil
 	obj.NodeRegistration.ImagePullPolicy = corev1.PullIfNotPresent
+	obj.NodeRegistration.ImagePullSerial = ptr.To(true)
 	obj.Patches = nil
 	obj.DryRun = false
+	kubeadm.SetDefaultTimeouts(&obj.Timeouts)
 }
 
 func fuzzNodeRegistration(obj *kubeadm.NodeRegistrationOptions, c fuzz.Continue) {
@@ -72,6 +76,7 @@ func fuzzNodeRegistration(obj *kubeadm.NodeRegistrationOptions, c fuzz.Continue)
 
 	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
 	obj.IgnorePreflightErrors = nil
+	obj.ImagePullSerial = ptr.To(true)
 }
 
 func fuzzClusterConfiguration(obj *kubeadm.ClusterConfiguration, c fuzz.Continue) {
@@ -84,17 +89,20 @@ func fuzzClusterConfiguration(obj *kubeadm.ClusterConfiguration, c fuzz.Continue
 	obj.CIImageRepository = "" // This fields doesn't exists in public API >> using default to get the roundtrip test pass
 	obj.KubernetesVersion = "qux"
 	obj.CIKubernetesVersion = "" // This fields doesn't exists in public API >> using default to get the roundtrip test pass
-	obj.APIServer.TimeoutForControlPlane = &metav1.Duration{
-		Duration: constants.DefaultControlPlaneTimeout,
-	}
-	obj.ControllerManager.ExtraEnvs = []corev1.EnvVar{}
-	obj.APIServer.ExtraEnvs = []corev1.EnvVar{}
-	obj.Scheduler.ExtraEnvs = []corev1.EnvVar{}
-	obj.Etcd.Local.ExtraEnvs = []corev1.EnvVar{}
+	obj.APIServer.TimeoutForControlPlane = &metav1.Duration{}
+	obj.ControllerManager.ExtraEnvs = nil
+	obj.APIServer.ExtraEnvs = nil
+	obj.Scheduler.ExtraEnvs = nil
+	obj.Etcd.Local.ExtraEnvs = nil
+	obj.EncryptionAlgorithm = kubeadm.EncryptionAlgorithmRSA2048
+	obj.Proxy.Disabled = false
+	obj.CertificateValidityPeriod = &metav1.Duration{Duration: constants.CertificateValidityPeriod}
+	obj.CACertificateValidityPeriod = &metav1.Duration{Duration: constants.CACertificateValidityPeriod}
 }
 
 func fuzzDNS(obj *kubeadm.DNS, c fuzz.Continue) {
 	c.FuzzNoCustom(obj)
+	obj.Disabled = false
 }
 
 func fuzzComponentConfigMap(obj *kubeadm.ComponentConfigMap, c fuzz.Continue) {
@@ -125,12 +133,14 @@ func fuzzJoinConfiguration(obj *kubeadm.JoinConfiguration, c fuzz.Continue) {
 	obj.Discovery = kubeadm.Discovery{
 		BootstrapToken:    &kubeadm.BootstrapTokenDiscovery{Token: "baz"},
 		TLSBootstrapToken: "qux",
-		Timeout:           &metav1.Duration{Duration: 1234},
+		Timeout:           &metav1.Duration{Duration: constants.DiscoveryTimeout},
 	}
 	obj.SkipPhases = nil
 	obj.NodeRegistration.ImagePullPolicy = corev1.PullIfNotPresent
+	obj.NodeRegistration.ImagePullSerial = ptr.To(true)
 	obj.Patches = nil
 	obj.DryRun = false
+	kubeadm.SetDefaultTimeouts(&obj.Timeouts)
 }
 
 func fuzzJoinControlPlane(obj *kubeadm.JoinControlPlane, c fuzz.Continue) {
@@ -142,4 +152,22 @@ func fuzzResetConfiguration(obj *kubeadm.ResetConfiguration, c fuzz.Continue) {
 
 	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
 	obj.CertificatesDir = "/tmp"
+	kubeadm.SetDefaultTimeouts(&obj.Timeouts)
+}
+
+func fuzzUpgradeConfiguration(obj *kubeadm.UpgradeConfiguration, c fuzz.Continue) {
+	c.FuzzNoCustom(obj)
+
+	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
+	obj.Node.EtcdUpgrade = ptr.To(true)
+	obj.Node.CertificateRenewal = ptr.To(false)
+	obj.Node.ImagePullPolicy = corev1.PullIfNotPresent
+	obj.Node.ImagePullSerial = ptr.To(true)
+
+	obj.Apply.EtcdUpgrade = ptr.To(true)
+	obj.Apply.CertificateRenewal = ptr.To(false)
+	obj.Apply.ImagePullPolicy = corev1.PullIfNotPresent
+	obj.Apply.ImagePullSerial = ptr.To(true)
+
+	kubeadm.SetDefaultTimeouts(&obj.Timeouts)
 }

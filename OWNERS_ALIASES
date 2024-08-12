@@ -10,7 +10,6 @@ aliases:
     - sttts
     - tallclair
   sig-auth-audit-reviewers:
-    - hzxuzhonghu
     - sttts
     - tallclair
   sig-auth-authenticators-approvers:
@@ -25,6 +24,7 @@ aliases:
     - mikedanese
     - sttts
     - wojtek-t
+    - aramase
   sig-auth-authorizers-approvers:
     - deads2k
     - liggitt
@@ -45,16 +45,11 @@ aliases:
     - mikedanese
     - smarterclayton
   sig-auth-certificates-reviewers:
-    - caesarxuchao
     - deads2k
     - dims
     - enj
     - liggitt
     - mikedanese
-    - smarterclayton
-    - sttts
-    - thockin
-    - wojtek-t
   sig-auth-encryption-at-rest-approvers:
     - smarterclayton
     - enj
@@ -82,6 +77,7 @@ aliases:
     - krmayankk
   sig-auth-serviceaccounts-approvers:
     - deads2k
+    - enj
     - liggitt
     - mikedanese
   sig-auth-serviceaccounts-reviewers:
@@ -140,6 +136,7 @@ aliases:
   # emeritus:
   # - rootfs
   sig-storage-reviewers:
+    - carlory
     - chrishenzie
     - gnufied
     - humblec
@@ -168,7 +165,6 @@ aliases:
   # - ravisantoshgudimetla
   # - wojtek-t
   sig-scheduling:
-    - chendave
     - damemi
     - denkensk
     - sanposhiho
@@ -180,30 +176,30 @@ aliases:
   # - hex108
   # - resouer
   # - wgliang
+  # - chendave
 
   sig-cli-maintainers:
     - ardaguclu
     - apelisse
     - brianpursley
-    - deads2k
     - eddiezane
-    - KnVerey
-    - pwittrock
     - seans3
     - soltysh
   # emeritus:
   # - adohe
   # - brendandburns
+  # - deads2k
   # - droot
   # - janetkuo
   # - mengqiy
   # - monopole
   # - smarterclayton
+  # - KnVerey
+  # - pwittrock
   sig-cli-reviewers:
     - ardaguclu
     - brianpursley
     - eddiezane
-    - KnVerey
     - mpuckett159
     - seans3
     - soltysh
@@ -223,6 +219,13 @@ aliases:
   # emeretus:
   # - dashpole
   # - vishh
+  sig-node-cri-approvers:
+    - msau42
+    - smarterclayton
+    - thockin
+    - saschagrunert
+    - haircommander
+    - mikebrow
   sig-node-reviewers:
     - Random-Liu
     - dchen1107
@@ -246,6 +249,9 @@ aliases:
     - saschagrunert
     - haircommander
     - tzneal
+    - rphillips
+    - kannon92
+    - ffromani
   sig-network-approvers:
     - andrewsykim
     - aojea
@@ -261,6 +267,7 @@ aliases:
   sig-network-reviewers:
     - andrewsykim
     - aojea
+    - aroradaman
     - bowei
     - caseydavenport
     - danwinship
@@ -270,11 +277,13 @@ aliases:
     - mrhohn
     - robscott
     - thockin
+    - tnqn
   sig-apps-approvers:
     - kow3ns
     - janetkuo
     - soltysh
     - smarterclayton
+    - atiratree
   sig-apps-reviewers:
     - alculquicondor
     - atiratree
@@ -288,9 +297,8 @@ aliases:
   # - tnozicka
 
   sig-autoscaling-maintainers:
-    - bskiba
+    - gjtempleton
     - MaciekPytel
-    - mwielgus
   sig-instrumentation-approvers:
     - logicalhan
     - dashpole
@@ -298,6 +306,7 @@ aliases:
     - RainbowMango
     - serathius
     - dgrisonnet
+    - rexagod
   sig-instrumentation-reviewers:
     - dashpole
     - ehashman
@@ -309,6 +318,7 @@ aliases:
     - dgrisonnet
     - pohly
     - mengjiao-liu
+    - rexagod
   # sig-instrumentation-emeritus
   # - brancz
   # - DirectXMan12
@@ -356,10 +366,6 @@ aliases:
     - andrewsykim
     - caseydavenport
     - danwinship
-    - thockin
-  sig-node-api-approvers:
-    - msau42
-    - smarterclayton
     - thockin
   sig-scheduling-api-approvers:
     - msau42
@@ -424,7 +430,7 @@ aliases:
     - pwittrock
     - soltysh
   sig-cloud-provider-api-reviewers:
-    - andrewsykim
+    - elmiko
     - cheftako
     - dims
   # sig-cluster-lifecycle-api-reviewers:
@@ -487,13 +493,17 @@ aliases:
   feature-approvers:
     - andrewsykim # Cloud Provider
     - ahg-g # Scheduling
-    - caseydavenport # Network
-    - dcbw # Network
+    - ardaguclu # CLI
+    - aojea # Network, Testing
+    - danwinship # Network
     - dchen1107 # Node
     - deads2k # API Machinery
     - derekwaynecarr # Node
     - dims # Architecture
+    - eddiezane # CLI
     - ehashman # Instrumentation
+    - enj # Auth
+    - gjtempleton # Autoscaling
     - janetkuo # Apps
     - jayunit100 # Windows
     - jpbetz # API Machinery
@@ -504,15 +514,17 @@ aliases:
     - liggitt # Auth
     - logicalhan # Instrumentation
     - luxas # Cluster Lifecycle
+    - maciekpytel # Autoscaling
     - marosset # Windows
+    - mikezappa87 # Network
     - mrunalp # Node
     - msau42 # Storage
-    - mwielgus # Autoscaling
-    - pwittrock # CLI
+    - rexagod # Instrumentation
     - saad-ali # Storage
-    - seans3 # CLI
     - sergeykanzhelev # Node
+    - shaneutt # Network
     - soltysh # Apps, CLI
+    - sttts # API Machinery
     - tallclair # Auth
     - thockin # Network
     - xing-yang # Storage

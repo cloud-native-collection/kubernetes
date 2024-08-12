@@ -18,7 +18,6 @@ package downwardapi
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -249,7 +248,7 @@ func newDownwardAPITest(t *testing.T, name string, volumeFiles, podLabels, podAn
 	}
 	podMeta.UID = testPodUID
 	pod := &v1.Pod{ObjectMeta: podMeta}
-	mounter, err := plugin.NewMounter(volume.NewSpecFromVolume(volumeSpec), pod, volume.VolumeOptions{})
+	mounter, err := plugin.NewMounter(volume.NewSpecFromVolume(volumeSpec), pod)
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
@@ -320,7 +319,7 @@ type stepName struct {
 func (step stepName) getName() string { return step.name }
 
 func doVerifyLinesInFile(t *testing.T, volumePath, filename string, expected string) {
-	data, err := ioutil.ReadFile(filepath.Join(volumePath, filename))
+	data, err := os.ReadFile(filepath.Join(volumePath, filename))
 	if err != nil {
 		t.Errorf(err.Error())
 		return

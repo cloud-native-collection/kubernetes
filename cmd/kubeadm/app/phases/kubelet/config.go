@@ -34,9 +34,12 @@ import (
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	"k8s.io/kubernetes/cmd/kubeadm/app/componentconfigs"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/apiclient"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/patches"
 )
+
+var applyKubeletConfigPatchesFunc = applyKubeletConfigPatches
 
 // WriteConfigToDisk writes the kubelet config object down to a file
 // Used at "kubeadm init" and "kubeadm upgrade" time
@@ -57,7 +60,7 @@ func WriteConfigToDisk(cfg *kubeadmapi.ClusterConfiguration, kubeletDir, patches
 
 	// Apply patches to the KubeletConfiguration
 	if len(patchesDir) != 0 {
-		kubeletBytes, err = applyKubeletConfigPatches(kubeletBytes, patchesDir, output)
+		kubeletBytes, err = applyKubeletConfigPatchesFunc(kubeletBytes, patchesDir, output)
 		if err != nil {
 			return errors.Wrap(err, "could not apply patches to the KubeletConfiguration")
 		}
@@ -66,9 +69,48 @@ func WriteConfigToDisk(cfg *kubeadmapi.ClusterConfiguration, kubeletDir, patches
 	return writeConfigBytesToDisk(kubeletBytes, kubeletDir)
 }
 
+// ApplyPatchesToConfig applies the patches located in patchesDir to the KubeletConfiguration stored
+// in the ClusterConfiguration.ComponentConfigs map.
+func ApplyPatchesToConfig(cfg *kubeadmapi.ClusterConfiguration, patchesDir string) error {
+	kubeletCfg, ok := cfg.ComponentConfigs[componentconfigs.KubeletGroup]
+	if !ok {
+		return errors.New("no kubelet component config found")
+	}
+
+	if err := kubeletCfg.Mutate(); err != nil {
+		return err
+	}
+
+	kubeletBytes, err := kubeletCfg.Marshal()
+	if err != nil {
+		return err
+	}
+
+	// Apply patches to the KubeletConfiguration. Output is discarded.
+	if len(patchesDir) != 0 {
+		kubeletBytes, err = applyKubeletConfigPatchesFunc(kubeletBytes, patchesDir, io.Discard)
+		if err != nil {
+			return errors.Wrap(err, "could not apply patches to the KubeletConfiguration")
+		}
+	}
+
+	gvkmap, err := kubeadmutil.SplitYAMLDocuments(kubeletBytes)
+	if err != nil {
+		return err
+	}
+	if err := kubeletCfg.Unmarshal(gvkmap); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // CreateConfigMap creates a ConfigMap with the generic kubelet configuration.
 // Used at "kubeadm init" and "kubeadm upgrade" time
-func CreateConfigMap(cfg *kubeadmapi.ClusterConfiguration, patchesDir string, client clientset.Interface) error {
+func CreateConfigMap(cfg *kubeadmapi.ClusterConfiguration, client clientset.Interface) error {
+	configMapName := kubeadmconstants.KubeletBaseConfigurationConfigMap
+	fmt.Printf("[kubelet] Creating a ConfigMap %q in namespace %s with the configuration for the kubelets in the cluster\n", configMapName, metav1.NamespaceSystem)
+
 	kubeletCfg, ok := cfg.ComponentConfigs[componentconfigs.KubeletGroup]
 	if !ok {
 		return errors.New("no kubelet component config found in the active component config set")
@@ -78,17 +120,6 @@ func CreateConfigMap(cfg *kubeadmapi.ClusterConfiguration, patchesDir string, cl
 	if err != nil {
 		return err
 	}
-
-	// Apply patches to the KubeletConfiguration
-	if len(patchesDir) != 0 {
-		kubeletBytes, err = applyKubeletConfigPatches(kubeletBytes, patchesDir, os.Stdout)
-		if err != nil {
-			return errors.Wrap(err, "could not apply patches to the KubeletConfiguration")
-		}
-	}
-
-	configMapName := kubeadmconstants.KubeletBaseConfigurationConfigMap
-	fmt.Printf("[kubelet] Creating a ConfigMap %q in namespace %s with the configuration for the kubelets in the cluster\n", configMapName, metav1.NamespaceSystem)
 
 	configMap := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{

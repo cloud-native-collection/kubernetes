@@ -47,7 +47,7 @@ const (
 // them if necessary.
 type AggregationController struct {
 	openAPIAggregationManager aggregator.SpecAggregator
-	queue                     workqueue.RateLimitingInterface
+	queue                     workqueue.TypedRateLimitingInterface[string]
 	downloader                *aggregator.Downloader
 
 	// To allow injection for testing.
@@ -58,9 +58,9 @@ type AggregationController struct {
 func NewAggregationController(downloader *aggregator.Downloader, openAPIAggregationManager aggregator.SpecAggregator) *AggregationController {
 	c := &AggregationController{
 		openAPIAggregationManager: openAPIAggregationManager,
-		queue: workqueue.NewNamedRateLimitingQueue(
-			workqueue.NewItemExponentialFailureRateLimiter(successfulUpdateDelay, failedUpdateMaxExpDelay),
-			"open_api_aggregation_controller",
+		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[string](successfulUpdateDelay, failedUpdateMaxExpDelay),
+			workqueue.TypedRateLimitingQueueConfig[string]{Name: "open_api_aggregation_controller"},
 		),
 		downloader: downloader,
 	}
@@ -97,7 +97,7 @@ func (c *AggregationController) processNextWorkItem() bool {
 	}
 	klog.V(4).Infof("OpenAPI AggregationController: Processing item %s", key)
 
-	action, err := c.syncHandler(key.(string))
+	action, err := c.syncHandler(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("loading OpenAPI spec for %q failed with: %v", key, err))
 	}
@@ -139,7 +139,10 @@ func (c *AggregationController) AddAPIService(handler http.Handler, apiService *
 
 // UpdateAPIService updates API Service's info and handler.
 func (c *AggregationController) UpdateAPIService(handler http.Handler, apiService *v1.APIService) {
-	if err := c.openAPIAggregationManager.AddUpdateAPIService(apiService, handler); err != nil {
+	if apiService.Spec.Service == nil {
+		return
+	}
+	if err := c.openAPIAggregationManager.UpdateAPIServiceSpec(apiService.Name); err != nil {
 		utilruntime.HandleError(fmt.Errorf("Error updating APIService %q with err: %v", apiService.Name, err))
 	}
 	key := apiService.Name

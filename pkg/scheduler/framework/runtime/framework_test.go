@@ -37,7 +37,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	internalqueue "k8s.io/kubernetes/pkg/scheduler/internal/queue"
 	"k8s.io/kubernetes/pkg/scheduler/metrics"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -46,6 +46,7 @@ const (
 	scoreWithNormalizePlugin1         = "score-with-normalize-plugin-1"
 	scoreWithNormalizePlugin2         = "score-with-normalize-plugin-2"
 	scorePlugin1                      = "score-plugin-1"
+	scorePlugin2                      = "score-plugin-2"
 	pluginNotImplementingScore        = "plugin-not-implementing-score"
 	preFilterPluginName               = "prefilter-plugin"
 	preFilterWithExtensionsPluginName = "prefilter-with-extensions-plugin"
@@ -53,6 +54,7 @@ const (
 	testPlugin                        = "test-plugin"
 	permitPlugin                      = "permit-plugin"
 	bindPlugin                        = "bind-plugin"
+	testCloseErrorPlugin              = "test-close-error-plugin"
 
 	testProfileName              = "test-profile"
 	testPercentageOfNodesToScore = 35
@@ -72,11 +74,11 @@ var cmpOpts = []cmp.Option{
 		if s1 == nil || s2 == nil {
 			return s1.IsSuccess() && s2.IsSuccess()
 		}
-		return s1.Code() == s2.Code() && s1.FailedPlugin() == s2.FailedPlugin() && s1.Message() == s2.Message()
+		return s1.Code() == s2.Code() && s1.Plugin() == s2.Plugin() && s1.Message() == s2.Message()
 	}),
 }
 
-func newScoreWithNormalizePlugin1(injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
+func newScoreWithNormalizePlugin1(_ context.Context, injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
 	var inj injectedResult
 	if err := DecodeInto(injArgs, &inj); err != nil {
 		return nil, err
@@ -84,7 +86,7 @@ func newScoreWithNormalizePlugin1(injArgs runtime.Object, f framework.Handle) (f
 	return &TestScoreWithNormalizePlugin{scoreWithNormalizePlugin1, inj}, nil
 }
 
-func newScoreWithNormalizePlugin2(injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
+func newScoreWithNormalizePlugin2(_ context.Context, injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
 	var inj injectedResult
 	if err := DecodeInto(injArgs, &inj); err != nil {
 		return nil, err
@@ -92,7 +94,7 @@ func newScoreWithNormalizePlugin2(injArgs runtime.Object, f framework.Handle) (f
 	return &TestScoreWithNormalizePlugin{scoreWithNormalizePlugin2, inj}, nil
 }
 
-func newScorePlugin1(injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
+func newScorePlugin1(_ context.Context, injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
 	var inj injectedResult
 	if err := DecodeInto(injArgs, &inj); err != nil {
 		return nil, err
@@ -100,7 +102,15 @@ func newScorePlugin1(injArgs runtime.Object, f framework.Handle) (framework.Plug
 	return &TestScorePlugin{scorePlugin1, inj}, nil
 }
 
-func newPluginNotImplementingScore(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func newScorePlugin2(_ context.Context, injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
+	var inj injectedResult
+	if err := DecodeInto(injArgs, &inj); err != nil {
+		return nil, err
+	}
+	return &TestScorePlugin{scorePlugin2, inj}, nil
+}
+
+func newPluginNotImplementingScore(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &PluginNotImplementingScore{}, nil
 }
 
@@ -135,7 +145,7 @@ func (pl *TestScorePlugin) Name() string {
 	return pl.name
 }
 
-func (pl *TestScorePlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*v1.Node) *framework.Status {
+func (pl *TestScorePlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
 	return framework.NewStatus(framework.Code(pl.inj.PreScoreStatus), injectReason)
 }
 
@@ -154,7 +164,7 @@ func (pl *PluginNotImplementingScore) Name() string {
 	return pluginNotImplementingScore
 }
 
-func newTestPlugin(injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
+func newTestPlugin(_ context.Context, injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
 	return &TestPlugin{name: testPlugin}, nil
 }
 
@@ -188,7 +198,7 @@ func (pl *TestPlugin) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (pl *TestPlugin) PreFilter(ctx context.Context, state *framework.CycleState, p *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
-	return nil, framework.NewStatus(framework.Code(pl.inj.PreFilterStatus), injectReason)
+	return pl.inj.PreFilterResult, framework.NewStatus(framework.Code(pl.inj.PreFilterStatus), injectReason)
 }
 
 func (pl *TestPlugin) PreFilterExtensions() framework.PreFilterExtensions {
@@ -203,7 +213,7 @@ func (pl *TestPlugin) PostFilter(_ context.Context, _ *framework.CycleState, _ *
 	return nil, framework.NewStatus(framework.Code(pl.inj.PostFilterStatus), injectReason)
 }
 
-func (pl *TestPlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*v1.Node) *framework.Status {
+func (pl *TestPlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
 	return framework.NewStatus(framework.Code(pl.inj.PreScoreStatus), injectReason)
 }
 
@@ -227,6 +237,25 @@ func (pl *TestPlugin) Permit(ctx context.Context, state *framework.CycleState, p
 
 func (pl *TestPlugin) Bind(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
 	return framework.NewStatus(framework.Code(pl.inj.BindStatus), injectReason)
+}
+
+func newTestCloseErrorPlugin(_ context.Context, injArgs runtime.Object, f framework.Handle) (framework.Plugin, error) {
+	return &TestCloseErrorPlugin{name: testCloseErrorPlugin}, nil
+}
+
+// TestCloseErrorPlugin implements for Close test.
+type TestCloseErrorPlugin struct {
+	name string
+}
+
+func (pl *TestCloseErrorPlugin) Name() string {
+	return pl.name
+}
+
+var errClose = errors.New("close err")
+
+func (pl *TestCloseErrorPlugin) Close() error {
+	return errClose
 }
 
 // TestPreFilterPlugin only implements PreFilterPlugin interface.
@@ -296,7 +325,7 @@ func (dp *TestDuplicatePlugin) PreFilterExtensions() framework.PreFilterExtensio
 
 var _ framework.PreFilterPlugin = &TestDuplicatePlugin{}
 
-func newDuplicatePlugin(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func newDuplicatePlugin(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &TestDuplicatePlugin{}, nil
 }
 
@@ -326,7 +355,7 @@ func (pl *TestPreEnqueuePlugin) PreEnqueue(ctx context.Context, p *v1.Pod) *fram
 
 var _ framework.QueueSortPlugin = &TestQueueSortPlugin{}
 
-func newQueueSortPlugin(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func newQueueSortPlugin(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &TestQueueSortPlugin{}, nil
 }
 
@@ -343,7 +372,7 @@ func (pl *TestQueueSortPlugin) Less(_, _ *framework.QueuedPodInfo) bool {
 
 var _ framework.BindPlugin = &TestBindPlugin{}
 
-func newBindPlugin(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func newBindPlugin(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &TestBindPlugin{}, nil
 }
 
@@ -358,16 +387,19 @@ func (t TestBindPlugin) Bind(ctx context.Context, state *framework.CycleState, p
 	return nil
 }
 
+// nolint:errcheck   // Ignore the error returned by Register as before
 var registry = func() Registry {
 	r := make(Registry)
 	r.Register(scoreWithNormalizePlugin1, newScoreWithNormalizePlugin1)
 	r.Register(scoreWithNormalizePlugin2, newScoreWithNormalizePlugin2)
 	r.Register(scorePlugin1, newScorePlugin1)
+	r.Register(scorePlugin2, newScorePlugin2)
 	r.Register(pluginNotImplementingScore, newPluginNotImplementingScore)
 	r.Register(duplicatePluginName, newDuplicatePlugin)
 	r.Register(testPlugin, newTestPlugin)
 	r.Register(queueSortPlugin, newQueueSortPlugin)
 	r.Register(bindPlugin, newBindPlugin)
+	r.Register(testCloseErrorPlugin, newTestCloseErrorPlugin)
 	return r
 }()
 
@@ -826,6 +858,44 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 			},
 			wantErr: "already registered",
 		},
+		{
+			name: "Override MultiPoint plugins weights and avoid a plugin being loaded multiple times",
+			plugins: &config.Plugins{
+				MultiPoint: config.PluginSet{
+					Enabled: []config.Plugin{
+						{Name: testPlugin},
+						{Name: scorePlugin1},
+					},
+				},
+				Score: config.PluginSet{
+					Enabled: []config.Plugin{
+						{Name: scorePlugin1, Weight: 5},
+						{Name: scorePlugin2, Weight: 5},
+						{Name: testPlugin, Weight: 3},
+					},
+				},
+			},
+			wantPlugins: &config.Plugins{
+				QueueSort:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreFilter:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Filter:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreScore: config.PluginSet{Enabled: []config.Plugin{
+					{Name: testPlugin},
+					{Name: scorePlugin1},
+				}},
+				Score: config.PluginSet{Enabled: []config.Plugin{
+					{Name: scorePlugin1, Weight: 5},
+					{Name: testPlugin, Weight: 3},
+					{Name: scorePlugin2, Weight: 5},
+				}},
+				Reserve:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:   config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -834,6 +904,11 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			fw, err := NewFramework(ctx, registry, &config.KubeSchedulerProfile{Plugins: tc.plugins})
+			defer func() {
+				if fw != nil {
+					_ = fw.Close()
+				}
+			}()
 			if err != nil {
 				if tc.wantErr == "" || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("Unexpected error, got %v, expect: %s", err, tc.wantErr)
@@ -843,7 +918,6 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					t.Fatalf("Unexpected error, got %v, expect: %s", err, tc.wantErr)
 				}
 			}
-
 			if tc.wantErr == "" {
 				if diff := cmp.Diff(tc.wantPlugins, fw.ListPlugins()); diff != "" {
 					t.Fatalf("Unexpected eventToPlugin map (-want,+got):%s", diff)
@@ -881,7 +955,7 @@ func TestPreEnqueuePlugins(t *testing.T) {
 				// register all plugins
 				tmpPl := pl
 				if err := registry.Register(pl.Name(),
-					func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+					func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 						return tmpPl, nil
 					}); err != nil {
 					t.Fatalf("fail to register preEnqueue plugin (%s)", pl.Name())
@@ -899,7 +973,9 @@ func TestPreEnqueuePlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
-
+			defer func() {
+				_ = f.Close()
+			}()
 			got := f.PreEnqueuePlugins()
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("PreEnqueuePlugins(): want %v, but got %v", tt.want, got)
@@ -1004,9 +1080,11 @@ func TestRunPreScorePlugins(t *testing.T) {
 			for i, p := range tt.plugins {
 				p := p
 				enabled[i].Name = p.name
-				r.Register(p.name, func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				if err := r.Register(p.name, func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return p, nil
-				})
+				}); err != nil {
+					t.Fatalf("fail to register PreScorePlugins plugin (%s)", p.Name())
+				}
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -1020,7 +1098,9 @@ func TestRunPreScorePlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
-
+			defer func() {
+				_ = f.Close()
+			}()
 			state := framework.NewCycleState()
 			status := f.RunPreScorePlugins(ctx, state, nil, nil)
 			if status.Code() != tt.wantStatusCode {
@@ -1383,6 +1463,22 @@ func TestRunScorePlugins(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:           "skipped prescore plugin number greater than the number of score plugins",
+			plugins:        buildScoreConfigDefaultWeights(scorePlugin1),
+			pluginConfigs:  nil,
+			skippedPlugins: sets.New(scorePlugin1, "score-plugin-unknown"),
+			want: []framework.NodePluginScores{
+				{
+					Name:   "node1",
+					Scores: []framework.PluginScore{},
+				},
+				{
+					Name:   "node2",
+					Scores: []framework.PluginScore{},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1398,10 +1494,13 @@ func TestRunScorePlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			state := framework.NewCycleState()
 			state.SkipScorePlugins = tt.skippedPlugins
-			res, status := f.RunScorePlugins(ctx, state, pod, nodes)
+			res, status := f.RunScorePlugins(ctx, state, pod, BuildNodeInfos(nodes))
 
 			if tt.err {
 				if status.IsSuccess() {
@@ -1425,11 +1524,11 @@ func TestPreFilterPlugins(t *testing.T) {
 	preFilter2 := &TestPreFilterWithExtensionsPlugin{}
 	r := make(Registry)
 	r.Register(preFilterPluginName,
-		func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+		func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 			return preFilter1, nil
 		})
 	r.Register(preFilterWithExtensionsPluginName,
-		func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+		func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 			return preFilter2, nil
 		})
 	plugins := &config.Plugins{PreFilter: config.PluginSet{Enabled: []config.Plugin{{Name: preFilterWithExtensionsPluginName}, {Name: preFilterPluginName}}}}
@@ -1442,8 +1541,10 @@ func TestPreFilterPlugins(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create framework for testing: %v", err)
 		}
+		defer func() {
+			_ = f.Close()
+		}()
 		state := framework.NewCycleState()
-
 		f.RunPreFilterPlugins(ctx, state, nil)
 		f.RunPreFilterExtensionAddPod(ctx, state, nil, nil, nil)
 		f.RunPreFilterExtensionRemovePod(ctx, state, nil, nil, nil)
@@ -1555,6 +1656,56 @@ func TestRunPreFilterPlugins(t *testing.T) {
 			wantSkippedPlugins:  sets.New("skip1", "skip2"),
 			wantStatusCode:      framework.Success,
 		},
+		{
+			name: "one PreFilter plugin returned Unschedulable, but another PreFilter plugin should be executed",
+			plugins: []*TestPlugin{
+				{
+					name: "unschedulable",
+					inj:  injectedResult{PreFilterStatus: int(framework.Unschedulable)},
+				},
+				{
+					// to make sure this plugin is executed, this plugin return Skip and we confirm it via wantSkippedPlugins.
+					name: "skip",
+					inj:  injectedResult{PreFilterStatus: int(framework.Skip)},
+				},
+			},
+			wantPreFilterResult: nil,
+			wantSkippedPlugins:  sets.New("skip"),
+			wantStatusCode:      framework.Unschedulable,
+		},
+		{
+			name: "one PreFilter plugin returned UnschedulableAndUnresolvable, and all other plugins aren't executed",
+			plugins: []*TestPlugin{
+				{
+					name: "unresolvable",
+					inj:  injectedResult{PreFilterStatus: int(framework.UnschedulableAndUnresolvable)},
+				},
+				{
+					// to make sure this plugin is not executed, this plugin return Skip and we confirm it via wantSkippedPlugins.
+					name: "skip",
+					inj:  injectedResult{PreFilterStatus: int(framework.Skip)},
+				},
+			},
+			wantPreFilterResult: nil,
+			wantStatusCode:      framework.UnschedulableAndUnresolvable,
+		},
+		{
+			name: "all nodes are filtered out by prefilter result, but other plugins aren't executed because we consider all nodes are filtered out by UnschedulableAndUnresolvable",
+			plugins: []*TestPlugin{
+				{
+					name: "reject-all-nodes",
+					inj:  injectedResult{PreFilterResult: &framework.PreFilterResult{NodeNames: sets.New[string]()}},
+				},
+				{
+					// to make sure this plugin is not executed, this plugin return Skip and we confirm it via wantSkippedPlugins.
+					name: "skip",
+					inj:  injectedResult{PreFilterStatus: int(framework.Skip)},
+				},
+			},
+			wantPreFilterResult: &framework.PreFilterResult{NodeNames: sets.New[string]()},
+			wantSkippedPlugins:  sets.New[string](), // "skip" plugin isn't executed.
+			wantStatusCode:      framework.UnschedulableAndUnresolvable,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1563,9 +1714,11 @@ func TestRunPreFilterPlugins(t *testing.T) {
 			for i, p := range tt.plugins {
 				p := p
 				enabled[i].Name = p.name
-				r.Register(p.name, func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				if err := r.Register(p.name, func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return p, nil
-				})
+				}); err != nil {
+					t.Fatalf("fail to register PreFilter plugin (%s)", p.Name())
+				}
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -1579,9 +1732,12 @@ func TestRunPreFilterPlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			state := framework.NewCycleState()
-			result, status := f.RunPreFilterPlugins(ctx, state, nil)
+			result, status, _ := f.RunPreFilterPlugins(ctx, state, nil)
 			if d := cmp.Diff(result, tt.wantPreFilterResult); d != "" {
 				t.Errorf("wrong status. got: %v, want: %v, diff: %s", result, tt.wantPreFilterResult, d)
 			}
@@ -1651,9 +1807,11 @@ func TestRunPreFilterExtensionRemovePod(t *testing.T) {
 			for i, p := range tt.plugins {
 				p := p
 				enabled[i].Name = p.name
-				r.Register(p.name, func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				if err := r.Register(p.name, func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return p, nil
-				})
+				}); err != nil {
+					t.Fatalf("fail to register PreFilterExtension plugin (%s)", p.Name())
+				}
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -1667,6 +1825,9 @@ func TestRunPreFilterExtensionRemovePod(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			state := framework.NewCycleState()
 			state.SkipFilterPlugins = tt.skippedPluginNames
@@ -1733,9 +1894,11 @@ func TestRunPreFilterExtensionAddPod(t *testing.T) {
 			for i, p := range tt.plugins {
 				p := p
 				enabled[i].Name = p.name
-				r.Register(p.name, func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				if err := r.Register(p.name, func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return p, nil
-				})
+				}); err != nil {
+					t.Fatalf("fail to register PreFilterExtension plugin (%s)", p.Name())
+				}
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -1749,6 +1912,9 @@ func TestRunPreFilterExtensionAddPod(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			state := framework.NewCycleState()
 			state.SkipFilterPlugins = tt.skippedPluginNames
@@ -1785,7 +1951,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Error)},
 				},
 			},
-			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin" filter plugin: %w`, errInjectedFilterStatus)).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin" filter plugin: %w`, errInjectedFilterStatus)).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "UnschedulableFilter",
@@ -1795,7 +1961,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectFilterReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectFilterReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "UnschedulableAndUnresolvableFilter",
@@ -1806,7 +1972,7 @@ func TestFilterPlugins(t *testing.T) {
 						FilterStatus: int(framework.UnschedulableAndUnresolvable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectFilterReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectFilterReason).WithPlugin("TestPlugin"),
 		},
 		// following tests cover multiple-plugins scenarios
 		{
@@ -1821,7 +1987,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Error)},
 				},
 			},
-			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin1" filter plugin: %w`, errInjectedFilterStatus)).WithFailedPlugin("TestPlugin1"),
+			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin1" filter plugin: %w`, errInjectedFilterStatus)).WithPlugin("TestPlugin1"),
 		},
 		{
 			name: "UnschedulableAndUnschedulableFilters",
@@ -1835,7 +2001,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectFilterReason).WithFailedPlugin("TestPlugin1"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectFilterReason).WithPlugin("TestPlugin1"),
 		},
 		{
 			name: "UnschedulableAndUnschedulableAndUnresolvableFilters",
@@ -1849,7 +2015,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectFilterReason).WithFailedPlugin("TestPlugin1"),
+			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectFilterReason).WithPlugin("TestPlugin1"),
 		},
 		{
 			name: "SuccessAndSuccessFilters",
@@ -1893,7 +2059,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Success)},
 				},
 			},
-			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin1" filter plugin: %w`, errInjectedFilterStatus)).WithFailedPlugin("TestPlugin1"),
+			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin1" filter plugin: %w`, errInjectedFilterStatus)).WithPlugin("TestPlugin1"),
 		},
 		{
 			name: "SuccessAndErrorFilters",
@@ -1908,7 +2074,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Error)},
 				},
 			},
-			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin2" filter plugin: %w`, errInjectedFilterStatus)).WithFailedPlugin("TestPlugin2"),
+			wantStatus: framework.AsStatus(fmt.Errorf(`running "TestPlugin2" filter plugin: %w`, errInjectedFilterStatus)).WithPlugin("TestPlugin2"),
 		},
 		{
 			name: "SuccessAndUnschedulableFilters",
@@ -1922,7 +2088,7 @@ func TestFilterPlugins(t *testing.T) {
 					inj:  injectedResult{FilterStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectFilterReason).WithFailedPlugin("TestPlugin2"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectFilterReason).WithPlugin("TestPlugin2"),
 		},
 	}
 
@@ -1934,7 +2100,7 @@ func TestFilterPlugins(t *testing.T) {
 				// register all plugins
 				tmpPl := pl
 				if err := registry.Register(pl.name,
-					func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+					func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 						return tmpPl, nil
 					}); err != nil {
 					t.Fatalf("fail to register filter plugin (%s)", pl.name)
@@ -1952,6 +2118,9 @@ func TestFilterPlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 			state := framework.NewCycleState()
 			state.SkipFilterPlugins = tt.skippedPlugins
 			gotStatus := f.RunFilterPlugins(ctx, state, pod, nil)
@@ -2018,7 +2187,7 @@ func TestPostFilterPlugins(t *testing.T) {
 					inj:  injectedResult{PostFilterStatus: int(framework.Success)},
 				},
 			},
-			wantStatus: framework.AsStatus(fmt.Errorf(injectReason)).WithFailedPlugin("TestPlugin1"),
+			wantStatus: framework.AsStatus(fmt.Errorf(injectReason)).WithPlugin("TestPlugin1"),
 		},
 		{
 			name: "plugin1 failed to make a Pod schedulable, followed by plugin2 which makes the Pod unresolvable",
@@ -2032,7 +2201,7 @@ func TestPostFilterPlugins(t *testing.T) {
 					inj:  injectedResult{PostFilterStatus: int(framework.UnschedulableAndUnresolvable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithFailedPlugin("TestPlugin2"),
+			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithPlugin("TestPlugin2"),
 		},
 		{
 			name: "both plugins failed to make a Pod schedulable",
@@ -2046,7 +2215,7 @@ func TestPostFilterPlugins(t *testing.T) {
 					inj:  injectedResult{PostFilterStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, []string{injectReason, injectReason}...).WithFailedPlugin("TestPlugin1"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, []string{injectReason, injectReason}...).WithPlugin("TestPlugin1"),
 		},
 	}
 
@@ -2058,7 +2227,7 @@ func TestPostFilterPlugins(t *testing.T) {
 				// register all plugins
 				tmpPl := pl
 				if err := registry.Register(pl.name,
-					func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+					func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 						return tmpPl, nil
 					}); err != nil {
 					t.Fatalf("fail to register postFilter plugin (%s)", pl.name)
@@ -2076,6 +2245,9 @@ func TestPostFilterPlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 			_, gotStatus := f.RunPostFilterPlugins(ctx, nil, pod, nil)
 			if !reflect.DeepEqual(gotStatus, tt.wantStatus) {
 				t.Errorf("Unexpected status. got: %v, want: %v", gotStatus, tt.wantStatus)
@@ -2158,7 +2330,7 @@ func TestFilterPluginsWithNominatedPods(t *testing.T) {
 			nominatedPod: highPriorityPod,
 			node:         node,
 			nodeInfo:     framework.NewNodeInfo(pod),
-			wantStatus:   framework.AsStatus(fmt.Errorf(`running "TestPlugin2" filter plugin: %w`, errInjectedFilterStatus)).WithFailedPlugin("TestPlugin2"),
+			wantStatus:   framework.AsStatus(fmt.Errorf(`running "TestPlugin2" filter plugin: %w`, errInjectedFilterStatus)).WithPlugin("TestPlugin2"),
 		},
 		{
 			name: "node has a low-priority nominated pod and pre filters return unschedulable",
@@ -2190,7 +2362,7 @@ func TestFilterPluginsWithNominatedPods(t *testing.T) {
 
 			if tt.preFilterPlugin != nil {
 				if err := registry.Register(tt.preFilterPlugin.name,
-					func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+					func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 						return tt.preFilterPlugin, nil
 					}); err != nil {
 					t.Fatalf("fail to register preFilter plugin (%s)", tt.preFilterPlugin.name)
@@ -2202,7 +2374,7 @@ func TestFilterPluginsWithNominatedPods(t *testing.T) {
 			}
 			if tt.filterPlugin != nil {
 				if err := registry.Register(tt.filterPlugin.name,
-					func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+					func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 						return tt.filterPlugin, nil
 					}); err != nil {
 					t.Fatalf("fail to register filter plugin (%s)", tt.filterPlugin.name)
@@ -2213,7 +2385,7 @@ func TestFilterPluginsWithNominatedPods(t *testing.T) {
 				)
 			}
 
-			podNominator := internalqueue.NewPodNominator(nil)
+			podNominator := internalqueue.NewTestPodNominator(nil)
 			if tt.nominatedPod != nil {
 				podNominator.AddNominatedPod(
 					logger,
@@ -2227,6 +2399,9 @@ func TestFilterPluginsWithNominatedPods(t *testing.T) {
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 			tt.nodeInfo.SetNode(tt.node)
 			gotStatus := f.RunFilterPluginsWithNominatedPods(ctx, framework.NewCycleState(), tt.pod, tt.nodeInfo)
 			if diff := cmp.Diff(gotStatus, tt.wantStatus, cmpOpts...); diff != "" {
@@ -2265,7 +2440,7 @@ func TestPreBindPlugins(t *testing.T) {
 					inj:  injectedResult{PreBindStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "ErrorPreBindPlugin",
@@ -2285,7 +2460,7 @@ func TestPreBindPlugins(t *testing.T) {
 					inj:  injectedResult{PreBindStatus: int(framework.UnschedulableAndUnresolvable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "SuccessErrorPreBindPlugins",
@@ -2355,7 +2530,7 @@ func TestPreBindPlugins(t *testing.T) {
 					inj:  injectedResult{PreBindStatus: int(framework.Success)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithPlugin("TestPlugin"),
 		},
 	}
 
@@ -2366,7 +2541,7 @@ func TestPreBindPlugins(t *testing.T) {
 
 			for _, pl := range tt.plugins {
 				tmpPl := pl
-				if err := registry.Register(pl.name, func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+				if err := registry.Register(pl.name, func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 					return tmpPl, nil
 				}); err != nil {
 					t.Fatalf("Unable to register pre bind plugins: %s", pl.name)
@@ -2384,6 +2559,9 @@ func TestPreBindPlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			status := f.RunPreBindPlugins(ctx, nil, pod, "")
 
@@ -2423,7 +2601,7 @@ func TestReservePlugins(t *testing.T) {
 					inj:  injectedResult{ReserveStatus: int(framework.Unschedulable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "ErrorReservePlugin",
@@ -2443,7 +2621,7 @@ func TestReservePlugins(t *testing.T) {
 					inj:  injectedResult{ReserveStatus: int(framework.UnschedulableAndUnresolvable)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "SuccessSuccessReservePlugins",
@@ -2513,7 +2691,7 @@ func TestReservePlugins(t *testing.T) {
 					inj:  injectedResult{ReserveStatus: int(framework.Success)},
 				},
 			},
-			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithFailedPlugin("TestPlugin"),
+			wantStatus: framework.NewStatus(framework.Unschedulable, injectReason).WithPlugin("TestPlugin"),
 		},
 	}
 
@@ -2524,7 +2702,7 @@ func TestReservePlugins(t *testing.T) {
 
 			for _, pl := range tt.plugins {
 				tmpPl := pl
-				if err := registry.Register(pl.name, func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+				if err := registry.Register(pl.name, func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 					return tmpPl, nil
 				}); err != nil {
 					t.Fatalf("Unable to register pre bind plugins: %s", pl.name)
@@ -2539,6 +2717,9 @@ func TestReservePlugins(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			f, err := newFrameworkWithQueueSortAndBind(ctx, registry, profile)
+			defer func() {
+				_ = f.Close()
+			}()
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
@@ -2581,7 +2762,7 @@ func TestPermitPlugins(t *testing.T) {
 					inj:  injectedResult{PermitStatus: int(framework.Unschedulable)},
 				},
 			},
-			want: framework.NewStatus(framework.Unschedulable, injectReason).WithFailedPlugin("TestPlugin"),
+			want: framework.NewStatus(framework.Unschedulable, injectReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "ErrorPermitPlugin",
@@ -2591,7 +2772,7 @@ func TestPermitPlugins(t *testing.T) {
 					inj:  injectedResult{PermitStatus: int(framework.Error)},
 				},
 			},
-			want: framework.AsStatus(fmt.Errorf(`running Permit plugin "TestPlugin": %w`, errInjectedStatus)).WithFailedPlugin("TestPlugin"),
+			want: framework.AsStatus(fmt.Errorf(`running Permit plugin "TestPlugin": %w`, errInjectedStatus)).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "UnschedulableAndUnresolvablePermitPlugin",
@@ -2601,7 +2782,7 @@ func TestPermitPlugins(t *testing.T) {
 					inj:  injectedResult{PermitStatus: int(framework.UnschedulableAndUnresolvable)},
 				},
 			},
-			want: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithFailedPlugin("TestPlugin"),
+			want: framework.NewStatus(framework.UnschedulableAndUnresolvable, injectReason).WithPlugin("TestPlugin"),
 		},
 		{
 			name: "WaitPermitPlugin",
@@ -2639,7 +2820,7 @@ func TestPermitPlugins(t *testing.T) {
 					inj:  injectedResult{PermitStatus: int(framework.Error)},
 				},
 			},
-			want: framework.AsStatus(fmt.Errorf(`running Permit plugin "TestPlugin": %w`, errInjectedStatus)).WithFailedPlugin("TestPlugin"),
+			want: framework.AsStatus(fmt.Errorf(`running Permit plugin "TestPlugin": %w`, errInjectedStatus)).WithPlugin("TestPlugin"),
 		},
 	}
 
@@ -2650,7 +2831,7 @@ func TestPermitPlugins(t *testing.T) {
 
 			for _, pl := range tt.plugins {
 				tmpPl := pl
-				if err := registry.Register(pl.name, func(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+				if err := registry.Register(pl.name, func(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 					return tmpPl, nil
 				}); err != nil {
 					t.Fatalf("Unable to register Permit plugin: %s", pl.name)
@@ -2664,7 +2845,12 @@ func TestPermitPlugins(t *testing.T) {
 			profile := config.KubeSchedulerProfile{Plugins: configPlugins}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			f, err := newFrameworkWithQueueSortAndBind(ctx, registry, profile)
+			f, err := newFrameworkWithQueueSortAndBind(ctx, registry, profile,
+				WithWaitingPods(NewWaitingPodsMap()),
+			)
+			defer func() {
+				_ = f.Close()
+			}()
 			if err != nil {
 				t.Fatalf("fail to create framework: %s", err)
 			}
@@ -2708,8 +2894,10 @@ func TestRecordingMetrics(t *testing.T) {
 			wantStatus:         framework.Success,
 		},
 		{
-			name:               "Score - Success",
-			action:             func(f framework.Framework) { f.RunScorePlugins(context.Background(), state, pod, nodes) },
+			name: "Score - Success",
+			action: func(f framework.Framework) {
+				f.RunScorePlugins(context.Background(), state, pod, BuildNodeInfos(nodes))
+			},
 			wantExtensionPoint: "Score",
 			wantStatus:         framework.Success,
 		},
@@ -2765,8 +2953,10 @@ func TestRecordingMetrics(t *testing.T) {
 			wantStatus:         framework.Error,
 		},
 		{
-			name:               "Score - Error",
-			action:             func(f framework.Framework) { f.RunScorePlugins(context.Background(), state, pod, nodes) },
+			name: "Score - Error",
+			action: func(f framework.Framework) {
+				f.RunScorePlugins(context.Background(), state, pod, BuildNodeInfos(nodes))
+			},
 			inject:             injectedResult{ScoreStatus: int(framework.Error)},
 			wantExtensionPoint: "Score",
 			wantStatus:         framework.Error,
@@ -2817,7 +3007,7 @@ func TestRecordingMetrics(t *testing.T) {
 			plugin := &TestPlugin{name: testPlugin, inj: tt.inject}
 			r := make(Registry)
 			r.Register(testPlugin,
-				func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return plugin, nil
 				})
 			pluginSet := config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}}
@@ -2838,15 +3028,21 @@ func TestRecordingMetrics(t *testing.T) {
 
 			recorder := metrics.NewMetricsAsyncRecorder(100, time.Nanosecond, ctx.Done())
 			profile := config.KubeSchedulerProfile{
-				PercentageOfNodesToScore: pointer.Int32(testPercentageOfNodesToScore),
+				PercentageOfNodesToScore: ptr.To[int32](testPercentageOfNodesToScore),
 				SchedulerName:            testProfileName,
 				Plugins:                  plugins,
 			}
-			f, err := newFrameworkWithQueueSortAndBind(ctx, r, profile, withMetricsRecorder(recorder))
+			f, err := newFrameworkWithQueueSortAndBind(ctx, r, profile,
+				withMetricsRecorder(recorder),
+				WithWaitingPods(NewWaitingPodsMap()),
+			)
 			if err != nil {
 				cancel()
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			tt.action(f)
 
@@ -2941,7 +3137,7 @@ func TestRunBindPlugins(t *testing.T) {
 				name := fmt.Sprintf("bind-%d", i)
 				plugin := &TestPlugin{name: name, inj: injectedResult{BindStatus: int(inj)}}
 				r.Register(name,
-					func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+					func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 						return plugin, nil
 					})
 				pluginSet.Enabled = append(pluginSet.Enabled, config.Plugin{Name: name})
@@ -2952,7 +3148,7 @@ func TestRunBindPlugins(t *testing.T) {
 			recorder := metrics.NewMetricsAsyncRecorder(100, time.Nanosecond, ctx.Done())
 			profile := config.KubeSchedulerProfile{
 				SchedulerName:            testProfileName,
-				PercentageOfNodesToScore: pointer.Int32(testPercentageOfNodesToScore),
+				PercentageOfNodesToScore: ptr.To[int32](testPercentageOfNodesToScore),
 				Plugins:                  plugins,
 			}
 			fwk, err := newFrameworkWithQueueSortAndBind(ctx, r, profile, withMetricsRecorder(recorder))
@@ -2960,6 +3156,9 @@ func TestRunBindPlugins(t *testing.T) {
 				cancel()
 				t.Fatal(err)
 			}
+			defer func() {
+				_ = fwk.Close()
+			}()
 
 			st := fwk.RunBindPlugins(context.Background(), state, pod, "")
 			if st.Code() != tt.wantStatus {
@@ -3000,7 +3199,7 @@ func TestPermitWaitDurationMetric(t *testing.T) {
 			plugin := &TestPlugin{name: testPlugin, inj: tt.inject}
 			r := make(Registry)
 			err := r.Register(testPlugin,
-				func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return plugin, nil
 				})
 			if err != nil {
@@ -3012,10 +3211,15 @@ func TestPermitWaitDurationMetric(t *testing.T) {
 			profile := config.KubeSchedulerProfile{Plugins: plugins}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			f, err := newFrameworkWithQueueSortAndBind(ctx, r, profile)
+			f, err := newFrameworkWithQueueSortAndBind(ctx, r, profile,
+				WithWaitingPods(NewWaitingPodsMap()),
+			)
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			f.RunPermitPlugins(ctx, nil, pod, "")
 			f.WaitOnPermit(ctx, pod)
@@ -3043,7 +3247,7 @@ func TestWaitOnPermit(t *testing.T) {
 			action: func(f framework.Framework) {
 				f.GetWaitingPod(pod.UID).Reject(permitPlugin, "reject message")
 			},
-			want: framework.NewStatus(framework.Unschedulable, "reject message").WithFailedPlugin(permitPlugin),
+			want: framework.NewStatus(framework.Unschedulable, "reject message").WithPlugin(permitPlugin),
 		},
 		{
 			name: "Allow Waiting Pod",
@@ -3059,7 +3263,7 @@ func TestWaitOnPermit(t *testing.T) {
 			testPermitPlugin := &TestPermitPlugin{}
 			r := make(Registry)
 			r.Register(permitPlugin,
-				func(_ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
+				func(_ context.Context, _ runtime.Object, fh framework.Handle) (framework.Plugin, error) {
 					return testPermitPlugin, nil
 				})
 			plugins := &config.Plugins{
@@ -3068,10 +3272,15 @@ func TestWaitOnPermit(t *testing.T) {
 			profile := config.KubeSchedulerProfile{Plugins: plugins}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			f, err := newFrameworkWithQueueSortAndBind(ctx, r, profile)
+			f, err := newFrameworkWithQueueSortAndBind(ctx, r, profile,
+				WithWaitingPods(NewWaitingPodsMap()),
+			)
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 
 			runPermitPluginsStatus := f.RunPermitPlugins(ctx, nil, pod, "")
 			if runPermitPluginsStatus.Code() != framework.Wait {
@@ -3126,9 +3335,59 @@ func TestListPlugins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to create framework for testing: %v", err)
 			}
+			defer func() {
+				_ = f.Close()
+			}()
 			got := f.ListPlugins()
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("unexpected plugins (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestClose(t *testing.T) {
+	tests := []struct {
+		name    string
+		plugins *config.Plugins
+		wantErr error
+	}{
+		{
+			name: "close doesn't return error",
+			plugins: &config.Plugins{
+				MultiPoint: config.PluginSet{
+					Enabled: []config.Plugin{
+						{Name: testPlugin, Weight: 5},
+					},
+				},
+			},
+		},
+		{
+			name: "close returns error",
+			plugins: &config.Plugins{
+				MultiPoint: config.PluginSet{
+					Enabled: []config.Plugin{
+						{Name: testPlugin, Weight: 5},
+						{Name: testCloseErrorPlugin},
+					},
+				},
+			},
+			wantErr: errClose,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ctx := ktesting.NewTestContext(t)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			fw, err := NewFramework(ctx, registry, &config.KubeSchedulerProfile{Plugins: tc.plugins})
+			if err != nil {
+				t.Fatalf("Unexpected error during calling NewFramework, got %v", err)
+			}
+			err = fw.Close()
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Unexpected error from Close(), got: %v, want: %v", err, tc.wantErr)
 			}
 		})
 	}
@@ -3147,20 +3406,21 @@ func buildScoreConfigWithWeights(weights map[string]int32, ps ...string) *config
 }
 
 type injectedResult struct {
-	ScoreRes                 int64 `json:"scoreRes,omitempty"`
-	NormalizeRes             int64 `json:"normalizeRes,omitempty"`
-	ScoreStatus              int   `json:"scoreStatus,omitempty"`
-	NormalizeStatus          int   `json:"normalizeStatus,omitempty"`
-	PreFilterStatus          int   `json:"preFilterStatus,omitempty"`
-	PreFilterAddPodStatus    int   `json:"preFilterAddPodStatus,omitempty"`
-	PreFilterRemovePodStatus int   `json:"preFilterRemovePodStatus,omitempty"`
-	FilterStatus             int   `json:"filterStatus,omitempty"`
-	PostFilterStatus         int   `json:"postFilterStatus,omitempty"`
-	PreScoreStatus           int   `json:"preScoreStatus,omitempty"`
-	ReserveStatus            int   `json:"reserveStatus,omitempty"`
-	PreBindStatus            int   `json:"preBindStatus,omitempty"`
-	BindStatus               int   `json:"bindStatus,omitempty"`
-	PermitStatus             int   `json:"permitStatus,omitempty"`
+	ScoreRes                 int64                      `json:"scoreRes,omitempty"`
+	NormalizeRes             int64                      `json:"normalizeRes,omitempty"`
+	ScoreStatus              int                        `json:"scoreStatus,omitempty"`
+	NormalizeStatus          int                        `json:"normalizeStatus,omitempty"`
+	PreFilterResult          *framework.PreFilterResult `json:"preFilterResult,omitempty"`
+	PreFilterStatus          int                        `json:"preFilterStatus,omitempty"`
+	PreFilterAddPodStatus    int                        `json:"preFilterAddPodStatus,omitempty"`
+	PreFilterRemovePodStatus int                        `json:"preFilterRemovePodStatus,omitempty"`
+	FilterStatus             int                        `json:"filterStatus,omitempty"`
+	PostFilterStatus         int                        `json:"postFilterStatus,omitempty"`
+	PreScoreStatus           int                        `json:"preScoreStatus,omitempty"`
+	ReserveStatus            int                        `json:"reserveStatus,omitempty"`
+	PreBindStatus            int                        `json:"preBindStatus,omitempty"`
+	BindStatus               int                        `json:"bindStatus,omitempty"`
+	PermitStatus             int                        `json:"permitStatus,omitempty"`
 }
 
 func setScoreRes(inj injectedResult) (int64, *framework.Status) {
@@ -3244,4 +3504,14 @@ func mustNewPodInfo(t *testing.T, pod *v1.Pod) *framework.PodInfo {
 		t.Fatal(err)
 	}
 	return podInfo
+}
+
+// BuildNodeInfos build NodeInfo slice from a v1.Node slice
+func BuildNodeInfos(nodes []*v1.Node) []*framework.NodeInfo {
+	res := make([]*framework.NodeInfo, len(nodes))
+	for i := 0; i < len(nodes); i++ {
+		res[i] = framework.NewNodeInfo()
+		res[i].SetNode(nodes[i])
+	}
+	return res
 }

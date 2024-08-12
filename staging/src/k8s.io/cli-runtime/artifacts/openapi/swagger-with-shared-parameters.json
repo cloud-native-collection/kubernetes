@@ -8304,7 +8304,7 @@
           "description": "SecurityContext holds pod-level security attributes and common container settings. Optional: Defaults to empty.  See type description for default values of each field."
         },
         "serviceAccount": {
-          "description": "DeprecatedServiceAccount is a depreciated alias for ServiceAccountName. Deprecated: Use serviceAccountName instead.",
+          "description": "DeprecatedServiceAccount is a deprecated alias for ServiceAccountName. Deprecated: Use serviceAccountName instead.",
           "type": "string"
         },
         "serviceAccountName": {
@@ -10558,7 +10558,7 @@
           "type": "string"
         },
         "name": {
-          "description": "name represents the name of this port. All ports in an EndpointSlice must have a unique name. If the EndpointSlice is dervied from a Kubernetes service, this corresponds to the Service.ports[].name. Name must either be an empty string or pass DNS_LABEL validation: * must be no more than 63 characters long. * must consist of lower case alphanumeric characters or '-'. * must start and end with an alphanumeric character. Default is empty string.",
+          "description": "name represents the name of this port. All ports in an EndpointSlice must have a unique name. If the EndpointSlice is derived from a Kubernetes service, this corresponds to the Service.ports[].name. Name must either be an empty string or pass DNS_LABEL validation: * must be no more than 63 characters long. * must consist of lower case alphanumeric characters or '-'. * must start and end with an alphanumeric character. Default is empty string.",
           "type": "string"
         },
         "port": {
@@ -11022,7 +11022,7 @@
       "description": "LimitedPriorityLevelConfiguration specifies how to handle requests that are subject to limits. It addresses two issues:\n  - How are requests for this priority level limited?\n  - What should be done with requests that exceed the limit?",
       "properties": {
         "assuredConcurrencyShares": {
-          "description": "`assuredConcurrencyShares` (ACS) configures the execution limit, which is a limit on the number of requests of this priority level that may be exeucting at a given time.  ACS must be a positive number. The server's concurrency limit (SCL) is divided among the concurrency-controlled priority levels in proportion to their assured concurrency shares. This produces the assured concurrency value (ACV) --- the number of requests that may be executing at a time --- for each such priority level:\n\n            ACV(l) = ceil( SCL * ACS(l) / ( sum[priority levels k] ACS(k) ) )\n\nbigger numbers of ACS mean more reserved concurrent requests (at the expense of every other PL). This field has a default value of 30.",
+          "description": "`assuredConcurrencyShares` (ACS) configures the execution limit, which is a limit on the number of requests of this priority level that may be executing at a given time.  ACS must be a positive number. The server's concurrency limit (SCL) is divided among the concurrency-controlled priority levels in proportion to their assured concurrency shares. This produces the assured concurrency value (ACV) --- the number of requests that may be executing at a time --- for each such priority level:\n\n            ACV(l) = ceil( SCL * ACS(l) / ( sum[priority levels k] ACS(k) ) )\n\nbigger numbers of ACS mean more reserved concurrent requests (at the expense of every other PL). This field has a default value of 30.",
           "format": "int32",
           "type": "integer"
         },
@@ -14104,7 +14104,7 @@
           "type": "string"
         },
         "podInfoOnMount": {
-          "description": "podInfoOnMount indicates this CSI volume driver requires additional pod information (like podName, podUID, etc.) during mount operations, if set to true. If set to false, pod information will not be passed on mount. Default is false.\n\nThe CSI driver specifies podInfoOnMount as part of driver deployment. If true, Kubelet will pass pod information as VolumeContext in the CSI NodePublishVolume() calls. The CSI driver is responsible for parsing and validating the information passed in as VolumeContext.\n\nThe following VolumeConext will be passed if podInfoOnMount is set to true. This list might grow, but the prefix will be used. \"csi.storage.k8s.io/pod.name\": pod.Name \"csi.storage.k8s.io/pod.namespace\": pod.Namespace \"csi.storage.k8s.io/pod.uid\": string(pod.UID) \"csi.storage.k8s.io/ephemeral\": \"true\" if the volume is an ephemeral inline volume\n                                defined by a CSIVolumeSource, otherwise \"false\"\n\n\"csi.storage.k8s.io/ephemeral\" is a new feature in Kubernetes 1.16. It is only required for drivers which support both the \"Persistent\" and \"Ephemeral\" VolumeLifecycleMode. Other drivers can leave pod info disabled and/or ignore this field. As Kubernetes 1.15 doesn't support this field, drivers can only support one mode when deployed on such a cluster and the deployment determines which mode that is, for example via a command line parameter of the driver.\n\nThis field is immutable.",
+          "description": "podInfoOnMount indicates this CSI volume driver requires additional pod information (like podName, podUID, etc.) during mount operations, if set to true. If set to false, pod information will not be passed on mount. Default is false.\n\nThe CSI driver specifies podInfoOnMount as part of driver deployment. If true, Kubelet will pass pod information as VolumeContext in the CSI NodePublishVolume() calls. The CSI driver is responsible for parsing and validating the information passed in as VolumeContext.\n\nThe following VolumeContext will be passed if podInfoOnMount is set to true. This list might grow, but the prefix will be used. \"csi.storage.k8s.io/pod.name\": pod.Name \"csi.storage.k8s.io/pod.namespace\": pod.Namespace \"csi.storage.k8s.io/pod.uid\": string(pod.UID) \"csi.storage.k8s.io/ephemeral\": \"true\" if the volume is an ephemeral inline volume\n                                defined by a CSIVolumeSource, otherwise \"false\"\n\n\"csi.storage.k8s.io/ephemeral\" is a new feature in Kubernetes 1.16. It is only required for drivers which support both the \"Persistent\" and \"Ephemeral\" VolumeLifecycleMode. Other drivers can leave pod info disabled and/or ignore this field. As Kubernetes 1.15 doesn't support this field, drivers can only support one mode when deployed on such a cluster and the deployment determines which mode that is, for example via a command line parameter of the driver.\n\nThis field is immutable.",
           "type": "boolean"
         },
         "requiresRepublish": {
@@ -16736,7 +16736,7 @@
           "type": "string"
         },
         "groupPriorityMinimum": {
-          "description": "GroupPriorityMininum is the priority this group should have at least. Higher priority means that the group is preferred by clients over lower priority ones. Note that other versions of this group might specify even higher GroupPriorityMininum values such that the whole group gets a higher priority. The primary sort is based on GroupPriorityMinimum, ordered highest number to lowest (20 before 10). The secondary sort is based on the alphabetical comparison of the name of the object.  (v1.bar before v1.foo) We'd recommend something like: *.k8s.io (except extensions) at 18000 and PaaSes (OpenShift, Deis) are recommended to be in the 2000s",
+          "description": "GroupPriorityMinimum is the priority this group should have at least. Higher priority means that the group is preferred by clients over lower priority ones. Note that other versions of this group might specify even higher GroupPriorityMinimum values such that the whole group gets a higher priority. The primary sort is based on GroupPriorityMinimum, ordered highest number to lowest (20 before 10). The secondary sort is based on the alphabetical comparison of the name of the object.  (v1.bar before v1.foo) We'd recommend something like: *.k8s.io (except extensions) at 18000 and PaaSes (OpenShift, Deis) are recommended to be in the 2000s",
           "format": "int32",
           "type": "integer"
         },
@@ -62716,7 +62716,7 @@
           "application/vnd.kubernetes.protobuf"
         ],
         "description": "get available resources",
-        "operationId": "getResourceV1alpha2APIResources",
+        "operationId": "getResourceV1alpha3APIResources",
         "produces": [
           "application/json",
           "application/yaml",
@@ -62747,7 +62747,7 @@
           "*/*"
         ],
         "description": "delete collection of PodSchedulingContext",
-        "operationId": "deleteResourceV1alpha2CollectionNamespacedPodSchedulingContext",
+        "operationId": "deleteResourceV1alpha3CollectionNamespacedPodSchedulingContext",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -62823,7 +62823,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind PodSchedulingContext",
-        "operationId": "listResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "listResourceV1alpha3NamespacedPodSchedulingContext",
         "parameters": [
           {
             "$ref": "#/parameters/allowWatchBookmarks-HTxmzgxC"
@@ -62900,7 +62900,7 @@
           "*/*"
         ],
         "description": "create a PodSchedulingContext",
-        "operationId": "createResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "createResourceV1alpha3NamespacedPodSchedulingContext",
         "parameters": [
           {
             "in": "body",
@@ -62968,7 +62968,7 @@
           "*/*"
         ],
         "description": "delete a PodSchedulingContext",
-        "operationId": "deleteResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "deleteResourceV1alpha3NamespacedPodSchedulingContext",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -63026,7 +63026,7 @@
           "*/*"
         ],
         "description": "read the specified PodSchedulingContext",
-        "operationId": "readResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "readResourceV1alpha3NamespacedPodSchedulingContext",
         "produces": [
           "application/json",
           "application/yaml",
@@ -63080,7 +63080,7 @@
           "application/apply-patch+yaml"
         ],
         "description": "partially update the specified PodSchedulingContext",
-        "operationId": "patchResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "patchResourceV1alpha3NamespacedPodSchedulingContext",
         "parameters": [
           {
             "$ref": "#/parameters/body-YKtvzQTo"
@@ -63138,7 +63138,7 @@
           "*/*"
         ],
         "description": "replace the specified PodSchedulingContext",
-        "operationId": "replaceResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "replaceResourceV1alpha3NamespacedPodSchedulingContext",
         "parameters": [
           {
             "in": "body",
@@ -63200,7 +63200,7 @@
           "*/*"
         ],
         "description": "read status of the specified PodSchedulingContext",
-        "operationId": "readResourceV1alpha2NamespacedPodSchedulingContextStatus",
+        "operationId": "readResourceV1alpha3NamespacedPodSchedulingContextStatus",
         "produces": [
           "application/json",
           "application/yaml",
@@ -63254,7 +63254,7 @@
           "application/apply-patch+yaml"
         ],
         "description": "partially update status of the specified PodSchedulingContext",
-        "operationId": "patchResourceV1alpha2NamespacedPodSchedulingContextStatus",
+        "operationId": "patchResourceV1alpha3NamespacedPodSchedulingContextStatus",
         "parameters": [
           {
             "$ref": "#/parameters/body-YKtvzQTo"
@@ -63312,7 +63312,7 @@
           "*/*"
         ],
         "description": "replace status of the specified PodSchedulingContext",
-        "operationId": "replaceResourceV1alpha2NamespacedPodSchedulingContextStatus",
+        "operationId": "replaceResourceV1alpha3NamespacedPodSchedulingContextStatus",
         "parameters": [
           {
             "in": "body",
@@ -63374,7 +63374,7 @@
           "*/*"
         ],
         "description": "delete collection of ResourceClaim",
-        "operationId": "deleteResourceV1alpha2CollectionNamespacedResourceClaim",
+        "operationId": "deleteResourceV1alpha3CollectionNamespacedResourceClaim",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -63450,7 +63450,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind ResourceClaim",
-        "operationId": "listResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "listResourceV1alpha3NamespacedResourceClaim",
         "parameters": [
           {
             "$ref": "#/parameters/allowWatchBookmarks-HTxmzgxC"
@@ -63527,7 +63527,7 @@
           "*/*"
         ],
         "description": "create a ResourceClaim",
-        "operationId": "createResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "createResourceV1alpha3NamespacedResourceClaim",
         "parameters": [
           {
             "in": "body",
@@ -63595,7 +63595,7 @@
           "*/*"
         ],
         "description": "delete a ResourceClaim",
-        "operationId": "deleteResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "deleteResourceV1alpha3NamespacedResourceClaim",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -63653,7 +63653,7 @@
           "*/*"
         ],
         "description": "read the specified ResourceClaim",
-        "operationId": "readResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "readResourceV1alpha3NamespacedResourceClaim",
         "produces": [
           "application/json",
           "application/yaml",
@@ -63707,7 +63707,7 @@
           "application/apply-patch+yaml"
         ],
         "description": "partially update the specified ResourceClaim",
-        "operationId": "patchResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "patchResourceV1alpha3NamespacedResourceClaim",
         "parameters": [
           {
             "$ref": "#/parameters/body-YKtvzQTo"
@@ -63765,7 +63765,7 @@
           "*/*"
         ],
         "description": "replace the specified ResourceClaim",
-        "operationId": "replaceResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "replaceResourceV1alpha3NamespacedResourceClaim",
         "parameters": [
           {
             "in": "body",
@@ -63827,7 +63827,7 @@
           "*/*"
         ],
         "description": "read status of the specified ResourceClaim",
-        "operationId": "readResourceV1alpha2NamespacedResourceClaimStatus",
+        "operationId": "readResourceV1alpha3NamespacedResourceClaimStatus",
         "produces": [
           "application/json",
           "application/yaml",
@@ -63881,7 +63881,7 @@
           "application/apply-patch+yaml"
         ],
         "description": "partially update status of the specified ResourceClaim",
-        "operationId": "patchResourceV1alpha2NamespacedResourceClaimStatus",
+        "operationId": "patchResourceV1alpha3NamespacedResourceClaimStatus",
         "parameters": [
           {
             "$ref": "#/parameters/body-YKtvzQTo"
@@ -63939,7 +63939,7 @@
           "*/*"
         ],
         "description": "replace status of the specified ResourceClaim",
-        "operationId": "replaceResourceV1alpha2NamespacedResourceClaimStatus",
+        "operationId": "replaceResourceV1alpha3NamespacedResourceClaimStatus",
         "parameters": [
           {
             "in": "body",
@@ -64001,7 +64001,7 @@
           "*/*"
         ],
         "description": "delete collection of ResourceClaimTemplate",
-        "operationId": "deleteResourceV1alpha2CollectionNamespacedResourceClaimTemplate",
+        "operationId": "deleteResourceV1alpha3CollectionNamespacedResourceClaimTemplate",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -64077,7 +64077,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind ResourceClaimTemplate",
-        "operationId": "listResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "listResourceV1alpha3NamespacedResourceClaimTemplate",
         "parameters": [
           {
             "$ref": "#/parameters/allowWatchBookmarks-HTxmzgxC"
@@ -64154,7 +64154,7 @@
           "*/*"
         ],
         "description": "create a ResourceClaimTemplate",
-        "operationId": "createResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "createResourceV1alpha3NamespacedResourceClaimTemplate",
         "parameters": [
           {
             "in": "body",
@@ -64222,7 +64222,7 @@
           "*/*"
         ],
         "description": "delete a ResourceClaimTemplate",
-        "operationId": "deleteResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "deleteResourceV1alpha3NamespacedResourceClaimTemplate",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -64280,7 +64280,7 @@
           "*/*"
         ],
         "description": "read the specified ResourceClaimTemplate",
-        "operationId": "readResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "readResourceV1alpha3NamespacedResourceClaimTemplate",
         "produces": [
           "application/json",
           "application/yaml",
@@ -64334,7 +64334,7 @@
           "application/apply-patch+yaml"
         ],
         "description": "partially update the specified ResourceClaimTemplate",
-        "operationId": "patchResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "patchResourceV1alpha3NamespacedResourceClaimTemplate",
         "parameters": [
           {
             "$ref": "#/parameters/body-YKtvzQTo"
@@ -64392,7 +64392,7 @@
           "*/*"
         ],
         "description": "replace the specified ResourceClaimTemplate",
-        "operationId": "replaceResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "replaceResourceV1alpha3NamespacedResourceClaimTemplate",
         "parameters": [
           {
             "in": "body",
@@ -64454,7 +64454,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind PodSchedulingContext",
-        "operationId": "listResourceV1alpha2PodSchedulingContextForAllNamespaces",
+        "operationId": "listResourceV1alpha3PodSchedulingContextForAllNamespaces",
         "produces": [
           "application/json",
           "application/yaml",
@@ -64528,7 +64528,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind ResourceClaim",
-        "operationId": "listResourceV1alpha2ResourceClaimForAllNamespaces",
+        "operationId": "listResourceV1alpha3ResourceClaimForAllNamespaces",
         "produces": [
           "application/json",
           "application/yaml",
@@ -64602,7 +64602,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind ResourceClaimTemplate",
-        "operationId": "listResourceV1alpha2ResourceClaimTemplateForAllNamespaces",
+        "operationId": "listResourceV1alpha3ResourceClaimTemplateForAllNamespaces",
         "produces": [
           "application/json",
           "application/yaml",
@@ -64676,7 +64676,7 @@
           "*/*"
         ],
         "description": "delete collection of ResourceClass",
-        "operationId": "deleteResourceV1alpha2CollectionResourceClass",
+        "operationId": "deleteResourceV1alpha3CollectionResourceClass",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -64752,7 +64752,7 @@
           "*/*"
         ],
         "description": "list or watch objects of kind ResourceClass",
-        "operationId": "listResourceV1alpha2ResourceClass",
+        "operationId": "listResourceV1alpha3ResourceClass",
         "parameters": [
           {
             "$ref": "#/parameters/allowWatchBookmarks-HTxmzgxC"
@@ -64826,7 +64826,7 @@
           "*/*"
         ],
         "description": "create a ResourceClass",
-        "operationId": "createResourceV1alpha2ResourceClass",
+        "operationId": "createResourceV1alpha3ResourceClass",
         "parameters": [
           {
             "in": "body",
@@ -64894,7 +64894,7 @@
           "*/*"
         ],
         "description": "delete a ResourceClass",
-        "operationId": "deleteResourceV1alpha2ResourceClass",
+        "operationId": "deleteResourceV1alpha3ResourceClass",
         "parameters": [
           {
             "$ref": "#/parameters/body-jLCaEqdf"
@@ -64952,7 +64952,7 @@
           "*/*"
         ],
         "description": "read the specified ResourceClass",
-        "operationId": "readResourceV1alpha2ResourceClass",
+        "operationId": "readResourceV1alpha3ResourceClass",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65003,7 +65003,7 @@
           "application/apply-patch+yaml"
         ],
         "description": "partially update the specified ResourceClass",
-        "operationId": "patchResourceV1alpha2ResourceClass",
+        "operationId": "patchResourceV1alpha3ResourceClass",
         "parameters": [
           {
             "$ref": "#/parameters/body-YKtvzQTo"
@@ -65061,7 +65061,7 @@
           "*/*"
         ],
         "description": "replace the specified ResourceClass",
-        "operationId": "replaceResourceV1alpha2ResourceClass",
+        "operationId": "replaceResourceV1alpha3ResourceClass",
         "parameters": [
           {
             "in": "body",
@@ -65123,7 +65123,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of PodSchedulingContext. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2NamespacedPodSchedulingContextList",
+        "operationId": "watchResourceV1alpha3NamespacedPodSchedulingContextList",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65200,7 +65200,7 @@
           "*/*"
         ],
         "description": "watch changes to an object of kind PodSchedulingContext. deprecated: use the 'watch' parameter with a list operation instead, filtered to a single item with the 'fieldSelector' parameter.",
-        "operationId": "watchResourceV1alpha2NamespacedPodSchedulingContext",
+        "operationId": "watchResourceV1alpha3NamespacedPodSchedulingContext",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65285,7 +65285,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of ResourceClaim. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2NamespacedResourceClaimList",
+        "operationId": "watchResourceV1alpha3NamespacedResourceClaimList",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65362,7 +65362,7 @@
           "*/*"
         ],
         "description": "watch changes to an object of kind ResourceClaim. deprecated: use the 'watch' parameter with a list operation instead, filtered to a single item with the 'fieldSelector' parameter.",
-        "operationId": "watchResourceV1alpha2NamespacedResourceClaim",
+        "operationId": "watchResourceV1alpha3NamespacedResourceClaim",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65447,7 +65447,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of ResourceClaimTemplate. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2NamespacedResourceClaimTemplateList",
+        "operationId": "watchResourceV1alpha3NamespacedResourceClaimTemplateList",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65524,7 +65524,7 @@
           "*/*"
         ],
         "description": "watch changes to an object of kind ResourceClaimTemplate. deprecated: use the 'watch' parameter with a list operation instead, filtered to a single item with the 'fieldSelector' parameter.",
-        "operationId": "watchResourceV1alpha2NamespacedResourceClaimTemplate",
+        "operationId": "watchResourceV1alpha3NamespacedResourceClaimTemplate",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65609,7 +65609,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of PodSchedulingContext. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2PodSchedulingContextListForAllNamespaces",
+        "operationId": "watchResourceV1alpha3PodSchedulingContextListForAllNamespaces",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65683,7 +65683,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of ResourceClaim. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2ResourceClaimListForAllNamespaces",
+        "operationId": "watchResourceV1alpha3ResourceClaimListForAllNamespaces",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65757,7 +65757,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of ResourceClaimTemplate. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2ResourceClaimTemplateListForAllNamespaces",
+        "operationId": "watchResourceV1alpha3ResourceClaimTemplateListForAllNamespaces",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65831,7 +65831,7 @@
           "*/*"
         ],
         "description": "watch individual changes to a list of ResourceClass. deprecated: use the 'watch' parameter with a list operation instead.",
-        "operationId": "watchResourceV1alpha2ResourceClassList",
+        "operationId": "watchResourceV1alpha3ResourceClassList",
         "produces": [
           "application/json",
           "application/yaml",
@@ -65905,7 +65905,7 @@
           "*/*"
         ],
         "description": "watch changes to an object of kind ResourceClass. deprecated: use the 'watch' parameter with a list operation instead, filtered to a single item with the 'fieldSelector' parameter.",
-        "operationId": "watchResourceV1alpha2ResourceClass",
+        "operationId": "watchResourceV1alpha3ResourceClass",
         "produces": [
           "application/json",
           "application/yaml",

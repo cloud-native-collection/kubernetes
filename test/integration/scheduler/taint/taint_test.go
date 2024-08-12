@@ -19,7 +19,6 @@ package taint
 // This file tests the Taint feature.
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -34,11 +33,6 @@ import (
 	"k8s.io/kubernetes/plugin/pkg/admission/podtolerationrestriction"
 	pluginapi "k8s.io/kubernetes/plugin/pkg/admission/podtolerationrestriction/apis/podtolerationrestriction"
 	testutils "k8s.io/kubernetes/test/integration/util"
-)
-
-// imported from testutils
-var (
-	waitForPodUnschedulable = testutils.WaitForPodUnschedulable
 )
 
 func newPod(nsName, name string, req, limit v1.ResourceList) *v1.Pod {
@@ -85,7 +79,7 @@ func TestTaintNodeByCondition(t *testing.T) {
 
 	// Start NodeLifecycleController for taint.
 	nc, err := nodelifecycle.NewNodeLifecycleController(
-		context.TODO(),
+		testCtx.Ctx,
 		externalInformers.Coordination().V1().Leases(),
 		externalInformers.Core().V1().Pods(),
 		externalInformers.Core().V1().Nodes(),
@@ -527,7 +521,7 @@ func TestTaintNodeByCondition(t *testing.T) {
 			if _, err := cs.CoreV1().Nodes().Create(testCtx.Ctx, node, metav1.CreateOptions{}); err != nil {
 				t.Errorf("Failed to create node, err: %v", err)
 			}
-			if err := testutils.WaitForNodeTaints(cs, node, test.expectedTaints); err != nil {
+			if err := testutils.WaitForNodeTaints(testCtx.Ctx, cs, node, test.expectedTaints); err != nil {
 				node, err = cs.CoreV1().Nodes().Get(testCtx.Ctx, node.Name, metav1.GetOptions{})
 				if err != nil {
 					t.Errorf("Failed to get node <%s>", node.Name)
@@ -556,7 +550,7 @@ func TestTaintNodeByCondition(t *testing.T) {
 							pod.Namespace, pod.Name, err)
 					}
 				} else {
-					if err := waitForPodUnschedulable(cs, createdPod); err != nil {
+					if err := testutils.WaitForPodUnschedulable(testCtx.Ctx, cs, createdPod); err != nil {
 						t.Errorf("Unschedulable pod %s/%s gets scheduled on the node, err: %v",
 							pod.Namespace, pod.Name, err)
 					}
@@ -565,7 +559,7 @@ func TestTaintNodeByCondition(t *testing.T) {
 
 			testutils.CleanupPods(testCtx.Ctx, cs, t, pods)
 			testutils.CleanupNodes(cs, t)
-			testutils.WaitForSchedulerCacheCleanup(testCtx.Scheduler, t)
+			testutils.WaitForSchedulerCacheCleanup(testCtx.Ctx, testCtx.Scheduler, t)
 		})
 	}
 }

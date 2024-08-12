@@ -36,6 +36,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
 	admissionapi "k8s.io/pod-security-admission/api"
 
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
@@ -86,6 +87,16 @@ func detectCoresPerSocket() int {
 	framework.ExpectNoError(err)
 
 	return coreCount
+}
+
+func detectThreadPerCore() int {
+	outData, err := exec.Command("/bin/sh", "-c", "lscpu | grep \"Thread(s) per core:\" | cut -d \":\" -f 2").Output()
+	framework.ExpectNoError(err)
+
+	threadCount, err := strconv.Atoi(strings.TrimSpace(string(outData)))
+	framework.ExpectNoError(err)
+
+	return threadCount
 }
 
 func makeContainers(ctnCmd string, ctnAttributes []tmCtnAttribute) (ctns []v1.Container) {
@@ -192,11 +203,15 @@ func findNUMANodeWithoutSRIOVDevices(configMap *v1.ConfigMap, numaNodes int) (in
 	return findNUMANodeWithoutSRIOVDevicesFromSysfs(numaNodes)
 }
 
-func configureTopologyManagerInKubelet(oldCfg *kubeletconfig.KubeletConfiguration, policy, scope string, configMap *v1.ConfigMap, numaNodes int) (*kubeletconfig.KubeletConfiguration, string) {
+func configureTopologyManagerInKubelet(oldCfg *kubeletconfig.KubeletConfiguration, policy, scope string, topologyOptions map[string]string, configMap *v1.ConfigMap, numaNodes int) (*kubeletconfig.KubeletConfiguration, string) {
 	// Configure Topology Manager in Kubelet with policy.
 	newCfg := oldCfg.DeepCopy()
 	if newCfg.FeatureGates == nil {
 		newCfg.FeatureGates = make(map[string]bool)
+	}
+
+	if topologyOptions != nil {
+		newCfg.TopologyManagerPolicyOptions = topologyOptions
 	}
 
 	// Set the Topology Manager policy
@@ -228,7 +243,7 @@ func configureTopologyManagerInKubelet(oldCfg *kubeletconfig.KubeletConfiguratio
 		}
 	}
 	// Dump the config -- debug
-	framework.Logf("New kubelet config is %s", *newCfg)
+	framework.Logf("New kubelet config is %s", newCfg.String())
 
 	return newCfg, newCfg.ReservedSystemCPUs
 }
@@ -847,7 +862,7 @@ func runTopologyManagerNodeAlignmentSuiteTests(ctx context.Context, f *framework
 	}
 }
 
-func runTopologyManagerTests(f *framework.Framework) {
+func runTopologyManagerTests(f *framework.Framework, topologyOptions map[string]string) {
 	var oldCfg *kubeletconfig.KubeletConfiguration
 	var err error
 
@@ -868,7 +883,7 @@ func runTopologyManagerTests(f *framework.Framework) {
 			ginkgo.By(fmt.Sprintf("by configuring Topology Manager policy to %s", policy))
 			framework.Logf("Configuring topology Manager policy to %s", policy)
 
-			newCfg, _ := configureTopologyManagerInKubelet(oldCfg, policy, scope, nil, 0)
+			newCfg, _ := configureTopologyManagerInKubelet(oldCfg, policy, scope, topologyOptions, nil, 0)
 			updateKubeletConfig(ctx, f, newCfg, true)
 			// Run the tests
 			runTopologyManagerPolicySuiteTests(ctx, f)
@@ -892,7 +907,7 @@ func runTopologyManagerTests(f *framework.Framework) {
 			ginkgo.By(fmt.Sprintf("by configuring Topology Manager policy to %s", policy))
 			framework.Logf("Configuring topology Manager policy to %s", policy)
 
-			newCfg, reservedSystemCPUs := configureTopologyManagerInKubelet(oldCfg, policy, scope, configMap, numaNodes)
+			newCfg, reservedSystemCPUs := configureTopologyManagerInKubelet(oldCfg, policy, scope, topologyOptions, configMap, numaNodes)
 			updateKubeletConfig(ctx, f, newCfg, true)
 
 			runTopologyManagerNodeAlignmentSuiteTests(ctx, f, sd, reservedSystemCPUs, policy, numaNodes, coreCount)
@@ -910,7 +925,7 @@ func runTopologyManagerTests(f *framework.Framework) {
 		policy := topologymanager.PolicySingleNumaNode
 		scope := podScopeTopology
 
-		newCfg, reservedSystemCPUs := configureTopologyManagerInKubelet(oldCfg, policy, scope, configMap, numaNodes)
+		newCfg, reservedSystemCPUs := configureTopologyManagerInKubelet(oldCfg, policy, scope, topologyOptions, configMap, numaNodes)
 		updateKubeletConfig(ctx, f, newCfg, true)
 
 		runTMScopeResourceAlignmentTestSuite(ctx, f, configMap, reservedSystemCPUs, policy, numaNodes, coreCount)
@@ -944,11 +959,18 @@ func hostPrecheck() (int, int) {
 }
 
 // Serial because the test updates kubelet configuration.
-var _ = SIGDescribe("Topology Manager [Serial] [NodeFeature:TopologyManager]", func() {
+var _ = SIGDescribe("Topology Manager", framework.WithSerial(), feature.TopologyManager, func() {
 	f := framework.NewDefaultFramework("topology-manager-test")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.Context("With kubeconfig updated to static CPU Manager policy run the Topology Manager tests", func() {
-		runTopologyManagerTests(f)
+		runTopologyManagerTests(f, nil)
+	})
+	ginkgo.Context("With kubeconfig's topologyOptions updated to static CPU Manager policy run the Topology Manager tests", ginkgo.Label("MaxAllowableNUMANodes"), func() {
+		// At present, the default value of defaultMaxAllowableNUMANode is 8, we run
+		// the same tests with  2 * defaultMaxAllowableNUMANode(16). This is the
+		// most basic verification that the changed setting is not breaking stuff.
+		doubleDefaultMaxAllowableNUMANodes := strconv.Itoa(8 * 2)
+		runTopologyManagerTests(f, map[string]string{topologymanager.MaxAllowableNUMANodes: doubleDefaultMaxAllowableNUMANodes})
 	})
 })

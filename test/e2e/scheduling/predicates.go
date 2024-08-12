@@ -34,10 +34,12 @@ import (
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 	clientset "k8s.io/client-go/kubernetes"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2eruntimeclass "k8s.io/kubernetes/test/e2e/framework/node/runtimeclass"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
 	e2erc "k8s.io/kubernetes/test/e2e/framework/rc"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	testutils "k8s.io/kubernetes/test/utils"
@@ -46,9 +48,6 @@ import (
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
-
-	// ensure libs have a chance to initialize
-	_ "github.com/stretchr/testify/assert"
 )
 
 const (
@@ -79,7 +78,7 @@ type pausePodConfig struct {
 	SchedulingGates                   []v1.PodSchedulingGate
 }
 
-var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
+var _ = SIGDescribe("SchedulerPredicates", framework.WithSerial(), func() {
 	var cs clientset.Interface
 	var nodeList *v1.NodeList
 	var RCName string
@@ -126,7 +125,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 	// This test verifies we don't allow scheduling of pods in a way that sum of local ephemeral storage resource requests of pods is greater than machines capacity.
 	// It assumes that cluster add-on pods stay stable and cannot be run in parallel with any other test that touches Nodes or Pods.
 	// It is so because we need to have precise control on what's running in the cluster.
-	ginkgo.It("validates local ephemeral storage resource limits of pods that are allowed to run [Feature:LocalStorageCapacityIsolation]", func(ctx context.Context) {
+	f.It("validates local ephemeral storage resource limits of pods that are allowed to run", feature.LocalStorageCapacityIsolation, func(ctx context.Context) {
 
 		e2eskipper.SkipUnlessServerVersionGTE(localStorageVersion, f.ClientSet.Discovery())
 
@@ -330,7 +329,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		Testname: Scheduler, resource limits
 		Description: Scheduling Pods MUST fail if the resource requests exceed Machine capacity.
 	*/
-	framework.ConformanceIt("validates resource limits of pods that are allowed to run ", func(ctx context.Context) {
+	framework.ConformanceIt("validates resource limits of pods that are allowed to run", func(ctx context.Context) {
 		WaitForStableCluster(cs, workerNodes)
 		nodeMaxAllocatable := int64(0)
 		nodeToAllocatableMap := make(map[string]int64)
@@ -442,7 +441,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		Testname: Scheduler, node selector not matching
 		Description: Create a Pod with a NodeSelector set to a value that does not match a node in the cluster. Since there are no nodes matching the criteria the Pod MUST not be scheduled.
 	*/
-	framework.ConformanceIt("validates that NodeSelector is respected if not matching ", func(ctx context.Context) {
+	framework.ConformanceIt("validates that NodeSelector is respected if not matching", func(ctx context.Context) {
 		ginkgo.By("Trying to schedule Pod with nonempty NodeSelector.")
 		podName := "restricted-pod"
 
@@ -465,7 +464,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		Testname: Scheduler, node selector matching
 		Description: Create a label on the node {k: v}. Then create a Pod with a NodeSelector set to {k: v}. Check to see if the Pod is scheduled. When the NodeSelector matches then Pod MUST be scheduled on that node.
 	*/
-	framework.ConformanceIt("validates that NodeSelector is respected if matching ", func(ctx context.Context) {
+	framework.ConformanceIt("validates that NodeSelector is respected if matching", func(ctx context.Context) {
 		nodeName := GetNodeThatCanRunPod(ctx, f)
 
 		ginkgo.By("Trying to apply a random label on the found node.")
@@ -828,7 +827,7 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		ginkgo.By("Expect all pods stay in pending state")
 		podList, err := e2epod.WaitForNumberOfPods(ctx, cs, ns, replicas, time.Minute)
 		framework.ExpectNoError(err)
-		framework.ExpectNoError(e2epod.WaitForPodsSchedulingGated(cs, ns, replicas, time.Minute))
+		framework.ExpectNoError(e2epod.WaitForPodsSchedulingGated(ctx, cs, ns, replicas, time.Minute))
 
 		ginkgo.By("Remove one scheduling gate")
 		want := []v1.PodSchedulingGate{{Name: "bar"}}
@@ -842,8 +841,8 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		}
 
 		ginkgo.By("Expect all pods carry one scheduling gate and are still in pending state")
-		framework.ExpectNoError(e2epod.WaitForPodsWithSchedulingGates(cs, ns, replicas, time.Minute, want))
-		framework.ExpectNoError(e2epod.WaitForPodsSchedulingGated(cs, ns, replicas, time.Minute))
+		framework.ExpectNoError(e2epod.WaitForPodsWithSchedulingGates(ctx, cs, ns, replicas, time.Minute, want))
+		framework.ExpectNoError(e2epod.WaitForPodsSchedulingGated(ctx, cs, ns, replicas, time.Minute))
 
 		ginkgo.By("Remove the remaining scheduling gates")
 		for _, pod := range pods {
@@ -854,7 +853,79 @@ var _ = SIGDescribe("SchedulerPredicates [Serial]", func() {
 		}
 
 		ginkgo.By("Expect all pods are scheduled and running")
-		framework.ExpectNoError(e2epod.WaitForPodsRunning(cs, ns, replicas, time.Minute))
+		framework.ExpectNoError(e2epod.WaitForPodsRunning(ctx, cs, ns, replicas, time.Minute))
+	})
+
+	// Regression test for an extended scenario for https://issues.k8s.io/123465
+	ginkgo.It("when PVC has node-affinity to non-existent/illegal nodes, the pod should be scheduled normally if suitable nodes exist", func(ctx context.Context) {
+		nodeName := GetNodeThatCanRunPod(ctx, f)
+		nonExistentNodeName1 := string(uuid.NewUUID())
+		nonExistentNodeName2 := string(uuid.NewUUID())
+		hostLabel := "kubernetes.io/hostname"
+		localPath := "/tmp"
+		podName := "bind-pv-with-non-existent-nodes"
+		pvcName := "pvc-" + string(uuid.NewUUID())
+		_, pvc, err := e2epv.CreatePVPVC(ctx, cs, f.Timeouts, e2epv.PersistentVolumeConfig{
+			PVSource: v1.PersistentVolumeSource{
+				Local: &v1.LocalVolumeSource{
+					Path: localPath,
+				},
+			},
+			Prebind: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: ns},
+			},
+			NodeAffinity: &v1.VolumeNodeAffinity{
+				Required: &v1.NodeSelector{
+					NodeSelectorTerms: []v1.NodeSelectorTerm{
+						{
+							MatchExpressions: []v1.NodeSelectorRequirement{
+								{
+									Key:      hostLabel,
+									Operator: v1.NodeSelectorOpIn,
+									// add non-existent nodes to the list
+									Values: []string{nodeName, nonExistentNodeName1, nonExistentNodeName2},
+								},
+							},
+						},
+					},
+				},
+			},
+		}, e2epv.PersistentVolumeClaimConfig{
+			Name: pvcName,
+		}, ns, true)
+		framework.ExpectNoError(err)
+		bindPvPod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: podName,
+			},
+			Spec: v1.PodSpec{
+				Containers: []v1.Container{
+					{
+						Name:  "pause",
+						Image: imageutils.GetE2EImage(imageutils.Pause),
+						VolumeMounts: []v1.VolumeMount{
+							{
+								Name:      "data",
+								MountPath: "/tmp",
+							},
+						},
+					},
+				},
+				Volumes: []v1.Volume{
+					{
+						Name: "data",
+						VolumeSource: v1.VolumeSource{
+							PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
+								ClaimName: pvc.Name,
+							},
+						},
+					},
+				},
+			},
+		}
+		_, err = f.ClientSet.CoreV1().Pods(ns).Create(ctx, bindPvPod, metav1.CreateOptions{})
+		framework.ExpectNoError(err)
+		framework.ExpectNoError(e2epod.WaitForPodNotPending(ctx, f.ClientSet, ns, podName))
 	})
 })
 
@@ -1183,6 +1254,6 @@ func getNodeHostIP(ctx context.Context, f *framework.Framework, nodeName string)
 	node, err := f.ClientSet.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	framework.ExpectNoError(err)
 	ips := e2enode.GetAddressesByTypeAndFamily(node, v1.NodeInternalIP, family)
-	framework.ExpectNotEqual(len(ips), 0)
+	gomega.Expect(ips).ToNot(gomega.BeEmpty())
 	return ips[0]
 }

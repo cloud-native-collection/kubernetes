@@ -231,7 +231,7 @@ func TestTopologyTranslation(t *testing.T) {
 			}
 			// verify that either beta or GA kubernetes topology key should exist
 			if !(plugins.TopologyKeyExist(v1.LabelFailureDomainBetaZone, nodeAffinity) || plugins.TopologyKeyExist(v1.LabelTopologyZone, nodeAffinity)) {
-				t.Errorf("Expected node affinity kuberenetes topology label exist, got %v", *nodeAffinity)
+				t.Errorf("Expected node affinity kubernetes topology label exist, got %v", *nodeAffinity)
 			}
 		} else {
 			nodeAffinity := newCSIPV.Spec.NodeAffinity
@@ -445,12 +445,6 @@ func generateUniqueVolumeSource(driverName string) (v1.VolumeSource, error) {
 				VolumeID: string(uuid.NewUUID()),
 			},
 		}, nil
-	case plugins.RBDDriverName:
-		return v1.VolumeSource{
-			RBD: &v1.RBDVolumeSource{
-				RBDImage: string(uuid.NewUUID()),
-			},
-		}, nil
 	default:
 		return v1.VolumeSource{}, fmt.Errorf("couldn't find logic for driver: %v", driverName)
 	}
@@ -471,11 +465,6 @@ func TestPluginNameMappings(t *testing.T) {
 			name:             "AWS EBS plugin name",
 			inTreePluginName: "kubernetes.io/aws-ebs",
 			csiPluginName:    "ebs.csi.aws.com",
-		},
-		{
-			name:             "RBD plugin name",
-			inTreePluginName: "kubernetes.io/rbd",
-			csiPluginName:    "rbd.csi.ceph.com",
 		},
 	}
 	for _, test := range testCases {

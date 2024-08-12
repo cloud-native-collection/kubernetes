@@ -107,7 +107,7 @@ func SetDefaults_ClusterConfiguration(obj *ClusterConfiguration) {
 func SetDefaults_APIServer(obj *APIServer) {
 	if obj.TimeoutForControlPlane == nil {
 		obj.TimeoutForControlPlane = &metav1.Duration{
-			Duration: constants.DefaultControlPlaneTimeout,
+			Duration: constants.ControlPlaneComponentHealthCheckTimeout,
 		}
 	}
 }
@@ -135,6 +135,7 @@ func SetDefaults_JoinConfiguration(obj *JoinConfiguration) {
 	SetDefaults_NodeRegistration(&obj.NodeRegistration)
 }
 
+// SetDefaults_JoinControlPlane assigns default values for a joining control plane node
 func SetDefaults_JoinControlPlane(obj *JoinControlPlane) {
 	if obj != nil {
 		SetDefaults_APIEndpoint(&obj.LocalAPIEndpoint)

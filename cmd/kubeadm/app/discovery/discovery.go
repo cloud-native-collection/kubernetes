@@ -25,7 +25,7 @@ import (
 	"k8s.io/klog/v2"
 
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
-	kubeadmapiv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta3"
+	kubeadmapiv1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta4"
 	"k8s.io/kubernetes/cmd/kubeadm/app/discovery/file"
 	"k8s.io/kubernetes/cmd/kubeadm/app/discovery/https"
 	"k8s.io/kubernetes/cmd/kubeadm/app/discovery/token"
@@ -72,15 +72,16 @@ func For(cfg *kubeadmapi.JoinConfiguration) (*clientcmdapi.Config, error) {
 
 // DiscoverValidatedKubeConfig returns a validated Config object that specifies where the cluster is and the CA cert to trust
 func DiscoverValidatedKubeConfig(cfg *kubeadmapi.JoinConfiguration) (*clientcmdapi.Config, error) {
+	timeout := cfg.Timeouts.Discovery.Duration
 	switch {
 	case cfg.Discovery.File != nil:
 		kubeConfigPath := cfg.Discovery.File.KubeConfigPath
 		if isHTTPSURL(kubeConfigPath) {
-			return https.RetrieveValidatedConfigInfo(kubeConfigPath, cfg.Discovery.Timeout.Duration)
+			return https.RetrieveValidatedConfigInfo(kubeConfigPath, timeout)
 		}
-		return file.RetrieveValidatedConfigInfo(kubeConfigPath, cfg.Discovery.Timeout.Duration)
+		return file.RetrieveValidatedConfigInfo(kubeConfigPath, timeout)
 	case cfg.Discovery.BootstrapToken != nil:
-		return token.RetrieveValidatedConfigInfo(&cfg.Discovery)
+		return token.RetrieveValidatedConfigInfo(&cfg.Discovery, timeout)
 	default:
 		return nil, errors.New("couldn't find a valid discovery configuration")
 	}

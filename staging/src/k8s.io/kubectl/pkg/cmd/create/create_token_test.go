@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"k8s.io/utils/pointer"
 	kjson "sigs.k8s.io/json"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -38,6 +37,7 @@ import (
 	cmdtesting "k8s.io/kubectl/pkg/cmd/testing"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/scheme"
+	"k8s.io/utils/ptr"
 )
 
 func TestCreateToken(t *testing.T) {
@@ -115,7 +115,13 @@ status:
 			test:            "bad bound object kind",
 			name:            "mysa",
 			boundObjectKind: "Foo",
-			expectStderr:    `error: supported --bound-object-kind values are Pod, Secret`,
+			expectStderr:    `error: supported --bound-object-kind values are Node, Pod, Secret`,
+		},
+		{
+			test:            "bad bound object kind (node feature enabled)",
+			name:            "mysa",
+			boundObjectKind: "Foo",
+			expectStderr:    `error: supported --bound-object-kind values are Node, Pod, Secret`,
 		},
 		{
 			test:            "missing bound object name",
@@ -158,7 +164,29 @@ status:
 			serverResponseToken: "abc",
 			expectStdout:        "abc",
 		},
+		{
+			test: "valid bound object (Node)",
+			name: "mysa",
 
+			boundObjectKind: "Node",
+			boundObjectName: "mynode",
+			boundObjectUID:  "myuid",
+
+			expectRequestPath: "/api/v1/namespaces/test/serviceaccounts/mysa/token",
+			expectTokenRequest: &authenticationv1.TokenRequest{
+				TypeMeta: metav1.TypeMeta{APIVersion: "authentication.k8s.io/v1", Kind: "TokenRequest"},
+				Spec: authenticationv1.TokenRequestSpec{
+					BoundObjectRef: &authenticationv1.BoundObjectReference{
+						Kind:       "Node",
+						APIVersion: "v1",
+						Name:       "mynode",
+						UID:        "myuid",
+					},
+				},
+			},
+			serverResponseToken: "abc",
+			expectStdout:        "abc",
+		},
 		{
 			test:         "invalid audience",
 			name:         "mysa",
@@ -186,7 +214,7 @@ status:
 			test:         "invalid duration",
 			name:         "mysa",
 			duration:     -1,
-			expectStderr: `error: --duration must be positive`,
+			expectStderr: `error: --duration must be greater than or equal to 0`,
 		},
 		{
 			test:         "invalid duration unit",
@@ -204,13 +232,28 @@ status:
 			expectTokenRequest: &authenticationv1.TokenRequest{
 				TypeMeta: metav1.TypeMeta{APIVersion: "authentication.k8s.io/v1", Kind: "TokenRequest"},
 				Spec: authenticationv1.TokenRequestSpec{
-					ExpirationSeconds: pointer.Int64(1000),
+					ExpirationSeconds: ptr.To[int64](1000),
 				},
 			},
 			serverResponseToken: "abc",
 			expectStdout:        "abc",
 		},
+		{
+			test: "zero duration act as default",
+			name: "mysa",
 
+			duration: 0 * time.Second,
+
+			expectRequestPath: "/api/v1/namespaces/test/serviceaccounts/mysa/token",
+			expectTokenRequest: &authenticationv1.TokenRequest{
+				TypeMeta: metav1.TypeMeta{APIVersion: "authentication.k8s.io/v1", Kind: "TokenRequest"},
+				Spec: authenticationv1.TokenRequestSpec{
+					ExpirationSeconds: nil,
+				},
+			},
+			serverResponseToken: "abc",
+			expectStdout:        "abc",
+		},
 		{
 			test: "server error",
 			name: "mysa",

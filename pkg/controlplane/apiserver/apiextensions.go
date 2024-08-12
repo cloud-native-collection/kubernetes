@@ -17,7 +17,6 @@ limitations under the License.
 package apiserver
 
 import (
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	apiextensionsoptions "k8s.io/apiextensions-apiserver/pkg/cmd/server/options"
@@ -27,15 +26,16 @@ import (
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/client-go/informers"
+	v1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 
-	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver/options"
+	"k8s.io/kubernetes/pkg/controlplane/apiserver/options"
 )
 
 func CreateAPIExtensionsConfig(
 	kubeAPIServerConfig server.Config,
 	kubeInformers informers.SharedInformerFactory,
 	pluginInitializers []admission.PluginInitializer,
-	commandOptions controlplaneapiserver.CompletedOptions,
+	commandOptions options.CompletedOptions,
 	masterCount int,
 	serviceResolver webhook.ServiceResolver,
 	authResolverWrapper webhook.AuthenticationInfoResolverWrapper,
@@ -50,7 +50,6 @@ func CreateAPIExtensionsConfig(
 	// we assume that the etcd options have been completed already.  avoid messing with anything outside
 	// of changes to StorageConfig as that may lead to unexpected behavior when the options are applied.
 	etcdOptions := *commandOptions.Etcd
-	etcdOptions.StorageConfig.Paging = true
 	// this is where the true decodable levels come from.
 	etcdOptions.StorageConfig.Codec = apiextensionsapiserver.Codecs.LegacyCodec(v1beta1.SchemeGroupVersion, v1.SchemeGroupVersion)
 	// prefer the more compact serialization (v1beta1) for storage until https://issue.k8s.io/82292 is resolved for objects whose v1 serialization is too big but whose v1beta1 serialization can be stored

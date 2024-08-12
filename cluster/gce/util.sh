@@ -20,6 +20,14 @@
 # config-default.sh.
 readonly GCE_MAX_LOCAL_SSD=8
 
+BASE64_HELP=$(base64 --help)
+BASE64_INPUT_FLAG=""
+if [[ $BASE64_HELP =~ "--input" ]]; then
+  BASE64_INPUT_FLAG="--input"
+else
+    BASE64_INPUT_FLAG=""
+fi
+
 KUBE_ROOT=$(dirname "${BASH_SOURCE[0]}")/../..
 source "${KUBE_ROOT}/cluster/gce/${KUBE_CONFIG_FILE-"config-default.sh"}"
 source "${KUBE_ROOT}/cluster/common.sh"
@@ -412,7 +420,7 @@ function detect-node-names() {
     for group in "${INSTANCE_GROUPS[@]}"; do
       kube::util::read-array NODE_NAMES < <(gcloud compute instance-groups managed list-instances \
         "${group}" --zone "${ZONE}" --project "${PROJECT}" \
-        --format='value(instance)')
+        --format='value(name)')
     done
   fi
   # Add heapster node name to the list too (if it exists).
@@ -425,7 +433,7 @@ function detect-node-names() {
     for group in "${WINDOWS_INSTANCE_GROUPS[@]}"; do
       kube::util::read-array WINDOWS_NODE_NAMES < <(gcloud compute instance-groups managed \
         list-instances "${group}" --zone "${ZONE}" --project "${PROJECT}" \
-        --format='value(instance)')
+        --format='value(name)')
     done
   fi
   export WINDOWS_NODE_NAMES
@@ -767,7 +775,7 @@ function construct-linux-kubelet-flags {
   # Keep in sync with the mkdir command in configure-helper.sh (until the TODO is resolved)
   flags+=" --cert-dir=/var/lib/kubelet/pki/"
 
-  # If ENABLE_AUTH_PROVIDER_GCP is set to true, kubelet is enabled to use out-of-tree auth 
+  # If ENABLE_AUTH_PROVIDER_GCP is set to true, kubelet is enabled to use out-of-tree auth
   # credential provider instead of in-tree auth credential provider.
   # https://kubernetes.io/docs/tasks/kubelet-credential-provider/kubelet-credential-provider
   if [[ "${ENABLE_AUTH_PROVIDER_GCP:-true}" == "true" ]]; then
@@ -1029,6 +1037,18 @@ authentication:
   x509:
     clientCAFile: /etc/srv/kubernetes/pki/ca-certificates.crt
 EOF
+
+  if [[ -n "${SHUTDOWN_GRACE_PERIOD:-}" ]]; then
+  cat <<EOF
+shutdownGracePeriod: ${SHUTDOWN_GRACE_PERIOD}
+EOF
+  fi
+
+  if [[ -n "${SHUTDOWN_GRACE_PERIOD_CRITICAL_PODS:-}" ]]; then
+  cat <<EOF
+shutdownGracePeriodCriticalPods: ${SHUTDOWN_GRACE_PERIOD_CRITICAL_PODS}
+EOF
+  fi
 }
 
 # cat the Kubelet config yaml for windows nodes
@@ -1072,6 +1092,10 @@ ETCD_APISERVER_SERVER_KEY: $(yaml-quote "${ETCD_APISERVER_SERVER_KEY_BASE64:-}")
 ETCD_APISERVER_SERVER_CERT: $(yaml-quote "${ETCD_APISERVER_SERVER_CERT_BASE64:-}")
 ETCD_APISERVER_CLIENT_KEY: $(yaml-quote "${ETCD_APISERVER_CLIENT_KEY_BASE64:-}")
 ETCD_APISERVER_CLIENT_CERT: $(yaml-quote "${ETCD_APISERVER_CLIENT_CERT_BASE64:-}")
+CLOUD_PVL_ADMISSION_CA_KEY: $(yaml-quote "${CLOUD_PVL_ADMISSION_CA_KEY_BASE64:-}")
+CLOUD_PVL_ADMISSION_CA_CERT: $(yaml-quote "${CLOUD_PVL_ADMISSION_CA_CERT_BASE64:-}")
+CLOUD_PVL_ADMISSION_CERT: $(yaml-quote "${CLOUD_PVL_ADMISSION_CERT_BASE64:-}")
+CLOUD_PVL_ADMISSION_KEY: $(yaml-quote "${CLOUD_PVL_ADMISSION_KEY_BASE64:-}")
 KONNECTIVITY_SERVER_CA_KEY: $(yaml-quote "${KONNECTIVITY_SERVER_CA_KEY_BASE64:-}")
 KONNECTIVITY_SERVER_CA_CERT: $(yaml-quote "${KONNECTIVITY_SERVER_CA_CERT_BASE64:-}")
 KONNECTIVITY_SERVER_CERT: $(yaml-quote "${KONNECTIVITY_SERVER_CERT_BASE64:-}")
@@ -1173,6 +1197,8 @@ ENABLE_VOLUME_SNAPSHOTS: $(yaml-quote "${ENABLE_VOLUME_SNAPSHOTS:-}")
 ENABLE_APISERVER_ADVANCED_AUDIT: $(yaml-quote "${ENABLE_APISERVER_ADVANCED_AUDIT:-}")
 ENABLE_APISERVER_DYNAMIC_AUDIT: $(yaml-quote "${ENABLE_APISERVER_DYNAMIC_AUDIT:-}")
 ENABLE_CACHE_MUTATION_DETECTOR: $(yaml-quote "${ENABLE_CACHE_MUTATION_DETECTOR:-false}")
+ENABLE_KUBE_WATCHLIST_INCONSISTENCY_DETECTOR: $(yaml-quote "${ENABLE_KUBE_WATCHLIST_INCONSISTENCY_DETECTOR:-false}")
+ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR: $(yaml-quote "${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR:-false}")
 ENABLE_PATCH_CONVERSION_DETECTOR: $(yaml-quote "${ENABLE_PATCH_CONVERSION_DETECTOR:-false}")
 ADVANCED_AUDIT_POLICY: $(yaml-quote "${ADVANCED_AUDIT_POLICY:-}")
 ADVANCED_AUDIT_BACKEND: $(yaml-quote "${ADVANCED_AUDIT_BACKEND:-log}")
@@ -1206,6 +1232,8 @@ CONTAINER_RUNTIME_TEST_HANDLER: $(yaml-quote "${CONTAINER_RUNTIME_TEST_HANDLER:-
 CONTAINERD_INFRA_CONTAINER: $(yaml-quote "${CONTAINER_INFRA_CONTAINER:-}")
 UBUNTU_INSTALL_CONTAINERD_VERSION: $(yaml-quote "${UBUNTU_INSTALL_CONTAINERD_VERSION:-}")
 UBUNTU_INSTALL_RUNC_VERSION: $(yaml-quote "${UBUNTU_INSTALL_RUNC_VERSION:-}")
+COS_INSTALL_CONTAINERD_VERSION: $(yaml-quote "${COS_INSTALL_CONTAINERD_VERSION:-}")
+COS_INSTALL_RUNC_VERSION: $(yaml-quote "${COS_INSTALL_RUNC_VERSION:-}")
 NODE_LOCAL_SSDS_EXT: $(yaml-quote "${NODE_LOCAL_SSDS_EXT:-}")
 NODE_LOCAL_SSDS_EPHEMERAL: $(yaml-quote "${NODE_LOCAL_SSDS_EPHEMERAL:-}")
 LOAD_IMAGE_COMMAND: $(yaml-quote "${LOAD_IMAGE_COMMAND:-}")
@@ -1226,7 +1254,13 @@ AUTH_PROVIDER_GCP_STORAGE_PATH: $(yaml-quote "${AUTH_PROVIDER_GCP_STORAGE_PATH}"
 AUTH_PROVIDER_GCP_VERSION: $(yaml-quote "${AUTH_PROVIDER_GCP_VERSION}")
 AUTH_PROVIDER_GCP_LINUX_BIN_DIR: $(yaml-quote "${AUTH_PROVIDER_GCP_LINUX_BIN_DIR}")
 AUTH_PROVIDER_GCP_LINUX_CONF_FILE: $(yaml-quote "${AUTH_PROVIDER_GCP_LINUX_CONF_FILE}")
+KUBERNETES_REGISTRY_PULL_THROUGH_HOST: $(yaml-quote "${KUBERNETES_REGISTRY_PULL_THROUGH_HOST:-}")
 EOF
+  if [[ -n "${KUBERNETES_REGISTRY_PULL_THROUGH_BASIC_AUTH_TOKEN_PATH:-}" ]]; then
+    cat >>"$file" <<EOF
+KUBERNETES_REGISTRY_PULL_THROUGH_BASIC_AUTH_TOKEN: $(yaml-quote "$(cat "${KUBERNETES_REGISTRY_PULL_THROUGH_BASIC_AUTH_TOKEN_PATH}")")
+EOF
+  fi
   if [[ "${master}" == "true" && "${MASTER_OS_DISTRIBUTION}" == "gci" ]] || \
      [[ "${master}" == "false" && "${NODE_OS_DISTRIBUTION}" == "gci" ]]  || \
      [[ "${master}" == "true" && "${MASTER_OS_DISTRIBUTION}" == "cos" ]] || \
@@ -1356,6 +1390,11 @@ KUBE_POD_LOG_READERS_GROUP: 2007
 KONNECTIVITY_SERVER_RUNASUSER: 2008
 KONNECTIVITY_SERVER_RUNASGROUP: 2008
 KONNECTIVITY_SERVER_SOCKET_WRITER_GROUP: 2008
+CLOUD_CONTROLLER_MANAGER_RUNASUSER: 2009
+CLOUD_CONTROLLER_MANAGER_RUNASGROUP: 2009
+CLUSTER_AUTOSCALER_RUNASUSER: 2010
+CLUSTER_AUTOSCALER_RUNASGROUP: 2010
+
 EOF
     # KUBE_APISERVER_REQUEST_TIMEOUT_SEC (if set) controls the --request-timeout
     # flag
@@ -1684,43 +1723,49 @@ function create-certs {
   PRIMARY_CN="${primary_cn}" SANS="${sans}" generate-certs
   AGGREGATOR_PRIMARY_CN="${primary_cn}" AGGREGATOR_SANS="${sans}" generate-aggregator-certs
   KONNECTIVITY_SERVER_PRIMARY_CN="${primary_cn}" KONNECTIVITY_SERVER_SANS="${sans}" generate-konnectivity-server-certs
+  CLOUD_PVL_ADMISSION_PRIMARY_CN="${primary_cn}" CLOUD_PVL_ADMISSION_SANS="${sans}" generate-cloud-pvl-admission-certs
 
   # By default, linux wraps base64 output every 76 cols, so we use 'tr -d' to remove whitespaces.
   # Note 'base64 -w0' doesn't work on Mac OS X, which has different flags.
-  CA_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
-  CA_CERT_BASE64=$(base64 "${CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
-  MASTER_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/${MASTER_NAME}.crt" | tr -d '\r\n')
-  MASTER_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/${MASTER_NAME}.key" | tr -d '\r\n')
-  KUBELET_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/kubelet.crt" | tr -d '\r\n')
-  KUBELET_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/kubelet.key" | tr -d '\r\n')
-  KUBECFG_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/kubecfg.crt" | tr -d '\r\n')
-  KUBECFG_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/kubecfg.key" | tr -d '\r\n')
-  KUBEAPISERVER_CERT_BASE64=$(base64 "${CERT_DIR}/pki/issued/kube-apiserver.crt" | tr -d '\r\n')
-  KUBEAPISERVER_KEY_BASE64=$(base64 "${CERT_DIR}/pki/private/kube-apiserver.key" | tr -d '\r\n')
+  CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  CA_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  MASTER_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/issued/${MASTER_NAME}.crt" | tr -d '\r\n')
+  MASTER_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/private/${MASTER_NAME}.key" | tr -d '\r\n')
+  KUBELET_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/issued/kubelet.crt" | tr -d '\r\n')
+  KUBELET_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/private/kubelet.key" | tr -d '\r\n')
+  KUBECFG_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/issued/kubecfg.crt" | tr -d '\r\n')
+  KUBECFG_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/private/kubecfg.key" | tr -d '\r\n')
+  KUBEAPISERVER_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/issued/kube-apiserver.crt" | tr -d '\r\n')
+  KUBEAPISERVER_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CERT_DIR}/pki/private/kube-apiserver.key" | tr -d '\r\n')
 
   # Setting up an addition directory (beyond pki) as it is the simplest way to
   # ensure we get a different CA pair to sign the proxy-client certs and which
   # we can send CA public key to the user-apiserver to validate communication.
-  AGGREGATOR_CA_KEY_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
-  REQUESTHEADER_CA_CERT_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
-  PROXY_CLIENT_CERT_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/issued/proxy-client.crt" | tr -d '\r\n')
-  PROXY_CLIENT_KEY_BASE64=$(base64 "${AGGREGATOR_CERT_DIR}/pki/private/proxy-client.key" | tr -d '\r\n')
+  AGGREGATOR_CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${AGGREGATOR_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  REQUESTHEADER_CA_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${AGGREGATOR_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  PROXY_CLIENT_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${AGGREGATOR_CERT_DIR}/pki/issued/proxy-client.crt" | tr -d '\r\n')
+  PROXY_CLIENT_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${AGGREGATOR_CERT_DIR}/pki/private/proxy-client.key" | tr -d '\r\n')
 
   # Setting up the Kubernetes API Server Konnectivity Server auth.
   # This includes certs for both API Server to Konnectivity Server and
   # Konnectivity Agent to Konnectivity Server.
-  KONNECTIVITY_SERVER_CA_KEY_BASE64=$(base64 "${KONNECTIVITY_SERVER_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
-  KONNECTIVITY_SERVER_CA_CERT_BASE64=$(base64 "${KONNECTIVITY_SERVER_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
-  KONNECTIVITY_SERVER_CERT_BASE64=$(base64 "${KONNECTIVITY_SERVER_CERT_DIR}/pki/issued/server.crt" | tr -d '\r\n')
-  KONNECTIVITY_SERVER_KEY_BASE64=$(base64 "${KONNECTIVITY_SERVER_CERT_DIR}/pki/private/server.key" | tr -d '\r\n')
-  KONNECTIVITY_SERVER_CLIENT_CERT_BASE64=$(base64 "${KONNECTIVITY_SERVER_CERT_DIR}/pki/issued/client.crt" | tr -d '\r\n')
-  KONNECTIVITY_SERVER_CLIENT_KEY_BASE64=$(base64 "${KONNECTIVITY_SERVER_CERT_DIR}/pki/private/client.key" | tr -d '\r\n')
-  KONNECTIVITY_AGENT_CA_KEY_BASE64=$(base64 "${KONNECTIVITY_AGENT_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
-  KONNECTIVITY_AGENT_CA_CERT_BASE64=$(base64 "${KONNECTIVITY_AGENT_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
-  KONNECTIVITY_AGENT_CERT_BASE64=$(base64 "${KONNECTIVITY_AGENT_CERT_DIR}/pki/issued/server.crt" | tr -d '\r\n')
-  KONNECTIVITY_AGENT_KEY_BASE64=$(base64 "${KONNECTIVITY_AGENT_CERT_DIR}/pki/private/server.key" | tr -d '\r\n')
-  KONNECTIVITY_AGENT_CLIENT_CERT_BASE64=$(base64 "${KONNECTIVITY_AGENT_CERT_DIR}/pki/issued/client.crt" | tr -d '\r\n')
-  KONNECTIVITY_AGENT_CLIENT_KEY_BASE64=$(base64 "${KONNECTIVITY_AGENT_CERT_DIR}/pki/private/client.key" | tr -d '\r\n')
+  KONNECTIVITY_SERVER_CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_SERVER_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  KONNECTIVITY_SERVER_CA_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_SERVER_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  KONNECTIVITY_SERVER_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_SERVER_CERT_DIR}/pki/issued/server.crt" | tr -d '\r\n')
+  KONNECTIVITY_SERVER_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_SERVER_CERT_DIR}/pki/private/server.key" | tr -d '\r\n')
+  KONNECTIVITY_SERVER_CLIENT_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_SERVER_CERT_DIR}/pki/issued/client.crt" | tr -d '\r\n')
+  KONNECTIVITY_SERVER_CLIENT_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_SERVER_CERT_DIR}/pki/private/client.key" | tr -d '\r\n')
+  KONNECTIVITY_AGENT_CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_AGENT_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  KONNECTIVITY_AGENT_CA_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_AGENT_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  KONNECTIVITY_AGENT_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_AGENT_CERT_DIR}/pki/issued/server.crt" | tr -d '\r\n')
+  KONNECTIVITY_AGENT_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_AGENT_CERT_DIR}/pki/private/server.key" | tr -d '\r\n')
+  KONNECTIVITY_AGENT_CLIENT_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_AGENT_CERT_DIR}/pki/issued/client.crt" | tr -d '\r\n')
+  KONNECTIVITY_AGENT_CLIENT_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${KONNECTIVITY_AGENT_CERT_DIR}/pki/private/client.key" | tr -d '\r\n')
+
+  CLOUD_PVL_ADMISSION_CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/private/ca.key" | tr -d '\r\n')
+  CLOUD_PVL_ADMISSION_CA_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/ca.crt" | tr -d '\r\n')
+  CLOUD_PVL_ADMISSION_CERT_BASE64=$(base64 $BASE64_INPUT_FLAG "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/issued/server.crt" | tr -d '\r\n')
+  CLOUD_PVL_ADMISSION_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/private/server.key" | tr -d '\r\n')
 }
 
 # Set up easy-rsa directory structure.
@@ -1742,12 +1787,15 @@ function setup-easyrsa {
     cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/kubelet
     mkdir easy-rsa-master/aggregator
     cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/aggregator
+    mkdir easy-rsa-master/cloud-pvl-admission
+    cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/cloud-pvl-admission
     mkdir easy-rsa-master/konnectivity-server
     cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/konnectivity-server
     mkdir easy-rsa-master/konnectivity-agent
     cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/konnectivity-agent) &>"${cert_create_debug_output}" || true
   CERT_DIR="${KUBE_TEMP}/easy-rsa-master/easyrsa3"
   AGGREGATOR_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/aggregator"
+  CLOUD_PVL_ADMISSION_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/cloud-pvl-admission"
   KONNECTIVITY_SERVER_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/konnectivity-server"
   KONNECTIVITY_AGENT_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/konnectivity-agent"
   if [ ! -x "${CERT_DIR}/easyrsa" ] || [ ! -x "${AGGREGATOR_CERT_DIR}/easyrsa" ]; then
@@ -1967,6 +2015,78 @@ function generate-konnectivity-server-certs {
   fi
 }
 
+# Runs the easy RSA commands to generate server side certificate files
+# for the cloud-pvl-admission webhook.
+# The generated files are in ${CLOUD_PVL_ADMISSION_CERT_DIR}
+#
+# Assumed vars
+#   KUBE_TEMP
+#   CLOUD_PVL_ADMISSION_CERT_DIR
+#   CLOUD_PVL_ADMISSION_PRIMARY_CN: Primary canonical name
+#   CLOUD_PVL_ADMISSION_SANS: Subject alternate names
+#
+function generate-cloud-pvl-admission-certs {
+  local -r cert_create_debug_output=$(mktemp "${KUBE_TEMP}/cert_create_debug_output.XXX")
+  # Note: This was heavily cribbed from make-ca-cert.sh
+  (set -x
+    # Make the client <-> cloud-pvl-admission server side certificates.
+    cd "${KUBE_TEMP}/easy-rsa-master/cloud-pvl-admission"
+    ./easyrsa init-pki
+    # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
+    ./easyrsa --batch "--req-cn=${CLOUD_PVL_ADMISSION_PRIMARY_CN}@$(date +%s)" build-ca nopass
+    ./easyrsa --subject-alt-name="IP:127.0.0.1,${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
+    ./easyrsa build-client-full client nopass
+
+    kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
+
+    # make the config for the signer
+    echo '{"signing":{"default":{"expiry":"43800h","usages":["signing","key encipherment","client auth"]}}}' > "ca-config.json"
+    # create the cloud-pvl-admission cert with the correct groups
+    echo '{"CN":"cloud-pvl-admission","hosts":[""],"key":{"algo":"rsa","size":2048}}' | "${CFSSL_BIN}" gencert -ca=pki/ca.crt -ca-key=pki/private/ca.key -config=ca-config.json - | "${CFSSLJSON_BIN}" -bare cloud-pvl-admission
+    rm -f "cloud-pvl-admission.csr"
+
+    # Make the cloud-pvl-admission server side certificates.
+    cd "${KUBE_TEMP}/easy-rsa-master/cloud-pvl-admission"
+    ./easyrsa init-pki
+    # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
+    ./easyrsa --batch "--req-cn=${CLOUD_PVL_ADMISSION_PRIMARY_CN}@$(date +%s)" build-ca nopass
+    ./easyrsa --subject-alt-name="${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
+    ./easyrsa build-client-full client nopass
+
+    kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
+
+    # make the config for the signer
+    echo '{"signing":{"default":{"expiry":"43800h","usages":["signing","key encipherment","agent auth"]}}}' > "ca-config.json"
+    # create the cloud-pvl-admission server cert with the correct groups
+    echo '{"CN":"cloud-pvl-admission","hosts":[""],"key":{"algo":"rsa","size":2048}}' | "${CFSSL_BIN}" gencert -ca=pki/ca.crt -ca-key=pki/private/ca.key -config=ca-config.json - | "${CFSSLJSON_BIN}" -bare konnectivity-agent
+    rm -f "konnectivity-agent.csr"
+
+    echo "completed main certificate section") &>"${cert_create_debug_output}" || true
+
+  local output_file_missing=0
+  local output_file
+  for output_file in \
+    "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/private/ca.key" \
+    "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/ca.crt" \
+    "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/issued/server.crt" \
+    "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/private/server.key" \
+    "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/issued/client.crt" \
+    "${CLOUD_PVL_ADMISSION_CERT_DIR}/pki/private/client.key"
+  do
+    if [[ ! -s "${output_file}" ]]; then
+      echo "Expected file ${output_file} not created" >&2
+      output_file_missing=1
+    fi
+  done
+  if (( output_file_missing )); then
+    # TODO(roberthbailey,porridge): add better error handling here,
+    # see https://github.com/kubernetes/kubernetes/issues/55229
+    cat "${cert_create_debug_output}" >&2
+    echo "=== Failed to generate cloud-pvl-admission certificates: Aborting ===" >&2
+    exit 2
+  fi
+}
+
 # Using provided master env, extracts value from provided key.
 #
 # Args:
@@ -2008,6 +2128,10 @@ function parse-master-env() {
   ETCD_APISERVER_SERVER_CERT_BASE64=$(get-env-val "${master_env}" "ETCD_APISERVER_SERVER_CERT")
   ETCD_APISERVER_CLIENT_KEY_BASE64=$(get-env-val "${master_env}" "ETCD_APISERVER_CLIENT_KEY")
   ETCD_APISERVER_CLIENT_CERT_BASE64=$(get-env-val "${master_env}" "ETCD_APISERVER_CLIENT_CERT")
+  CLOUD_PVL_ADMISSION_CA_KEY_BASE64=$(get-env-val "${master_env}" "CLOUD_PVL_ADMISSION_CA_KEY")
+  CLOUD_PVL_ADMISSION_CA_CERT_BASE64=$(get-env-val "${master_env}" "CLOUD_PVL_ADMISSION_CA_CERT")
+  CLOUD_PVL_ADMISSION_CERT_BASE64=$(get-env-val "${master_env}" "CLOUD_PVL_ADMISSION_CERT")
+  CLOUD_PVL_ADMISSION_KEY_BASE64=$(get-env-val "${master_env}" "CLOUD_PVL_ADMISSION_KEY")
   KONNECTIVITY_SERVER_CA_KEY_BASE64=$(get-env-val "${master_env}" "KONNECTIVITY_SERVER_CA_KEY")
   KONNECTIVITY_SERVER_CA_CERT_BASE64=$(get-env-val "${master_env}" "KONNECTIVITY_SERVER_CA_CERT")
   KONNECTIVITY_SERVER_CERT_BASE64=$(get-env-val "${master_env}" "KONNECTIVITY_SERVER_CERT")
@@ -2721,9 +2845,9 @@ function create-etcd-certs {
     generate-etcd-cert "${KUBE_TEMP}/cfssl" "${host}" "peer" "peer"
 
   pushd "${KUBE_TEMP}/cfssl"
-  ETCD_CA_KEY_BASE64=$(base64 "ca-key.pem" | tr -d '\r\n')
+  ETCD_CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "ca-key.pem" | tr -d '\r\n')
   ETCD_CA_CERT_BASE64=$(gzip -c "ca.pem" | base64 | tr -d '\r\n')
-  ETCD_PEER_KEY_BASE64=$(base64 "peer-key.pem" | tr -d '\r\n')
+  ETCD_PEER_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "peer-key.pem" | tr -d '\r\n')
   ETCD_PEER_CERT_BASE64=$(gzip -c "peer.pem" | base64 | tr -d '\r\n')
   popd
 }
@@ -2760,11 +2884,11 @@ function create-etcd-apiserver-certs {
     generate-etcd-cert "${KUBE_TEMP}/cfssl" "${hostClient}" "client" "etcd-apiserver-client"
 
   pushd "${KUBE_TEMP}/cfssl"
-  ETCD_APISERVER_CA_KEY_BASE64=$(base64 "ca-key.pem" | tr -d '\r\n')
+  ETCD_APISERVER_CA_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "ca-key.pem" | tr -d '\r\n')
   ETCD_APISERVER_CA_CERT_BASE64=$(gzip -c "ca.pem" | base64 | tr -d '\r\n')
-  ETCD_APISERVER_SERVER_KEY_BASE64=$(base64 "etcd-apiserver-server-key.pem" | tr -d '\r\n')
+  ETCD_APISERVER_SERVER_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "etcd-apiserver-server-key.pem" | tr -d '\r\n')
   ETCD_APISERVER_SERVER_CERT_BASE64=$(gzip -c "etcd-apiserver-server.pem" | base64 | tr -d '\r\n')
-  ETCD_APISERVER_CLIENT_KEY_BASE64=$(base64 "etcd-apiserver-client-key.pem" | tr -d '\r\n')
+  ETCD_APISERVER_CLIENT_KEY_BASE64=$(base64 $BASE64_INPUT_FLAG "etcd-apiserver-client-key.pem" | tr -d '\r\n')
   ETCD_APISERVER_CLIENT_CERT_BASE64=$(gzip -c "etcd-apiserver-client.pem" | base64 | tr -d '\r\n')
   popd
 }

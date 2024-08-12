@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/component-base/metrics/testutil"
 	statsapi "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
@@ -48,8 +47,6 @@ func TestCollectResourceMetrics(t *testing.T) {
 		"pod_memory_working_set_bytes",
 		"pod_swap_usage_bytes",
 	}
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 
 	tests := []struct {
 		name            string
@@ -213,9 +210,9 @@ func TestCollectResourceMetrics(t *testing.T) {
 				container_memory_working_set_bytes{container="container_b",namespace="namespace_a",pod="pod_a"} 1000 1624396278302
 				# HELP container_start_time_seconds [STABLE] Start time of the container since unix epoch in seconds
 				# TYPE container_start_time_seconds gauge
-				container_start_time_seconds{container="container_a",namespace="namespace_a",pod="pod_a"} 1.6243962483020916e+09 1624396248302
-				container_start_time_seconds{container="container_a",namespace="namespace_b",pod="pod_b"} 1.6243956783020916e+09 1624395678302
-				container_start_time_seconds{container="container_b",namespace="namespace_a",pod="pod_a"} 1.6243961583020916e+09 1624396158302
+				container_start_time_seconds{container="container_a",namespace="namespace_a",pod="pod_a"} 1.6243962483020916e+09
+				container_start_time_seconds{container="container_a",namespace="namespace_b",pod="pod_b"} 1.6243956783020916e+09
+				container_start_time_seconds{container="container_b",namespace="namespace_a",pod="pod_a"} 1.6243961583020916e+09
         		# HELP container_swap_usage_bytes [ALPHA] Current amount of the container swap usage in bytes. Reported only on non-windows systems
         		# TYPE container_swap_usage_bytes gauge
         		container_swap_usage_bytes{container="container_a",namespace="namespace_a",pod="pod_a"} 1000 1624396278302
@@ -319,8 +316,8 @@ func TestCollectResourceMetrics(t *testing.T) {
 				container_memory_working_set_bytes{container="container_a",namespace="namespace_b",pod="pod_b"} 1000 1624396278302
 				# HELP container_start_time_seconds [STABLE] Start time of the container since unix epoch in seconds
 				# TYPE container_start_time_seconds gauge
-				container_start_time_seconds{container="container_a",namespace="namespace_a",pod="pod_a"} 1.6243962483020916e+09 1624396248302
-				container_start_time_seconds{container="container_a",namespace="namespace_b",pod="pod_b"} 1.6243956783020916e+09 1624395678302
+				container_start_time_seconds{container="container_a",namespace="namespace_a",pod="pod_a"} 1.6243962483020916e+09
+				container_start_time_seconds{container="container_a",namespace="namespace_b",pod="pod_b"} 1.6243956783020916e+09
 				# HELP scrape_error [ALPHA] 1 if there was an error while getting container metrics, 0 otherwise
 				# TYPE scrape_error gauge
 				scrape_error 0
@@ -408,8 +405,8 @@ func TestCollectResourceMetrics(t *testing.T) {
 		tc := test
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			provider := summaryprovidertest.NewMockSummaryProvider(mockCtrl)
-			provider.EXPECT().GetCPUAndMemoryStats(ctx).Return(tc.summary, tc.summaryErr).AnyTimes()
+			provider := summaryprovidertest.NewMockSummaryProvider(t)
+			provider.EXPECT().GetCPUAndMemoryStats(ctx).Return(tc.summary, tc.summaryErr).Maybe()
 			collector := NewResourceMetricsCollector(provider)
 
 			if err := testutil.CustomCollectAndCompare(collector, strings.NewReader(tc.expectedMetrics), interestedMetrics...); err != nil {

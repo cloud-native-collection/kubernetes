@@ -96,7 +96,7 @@ func TestVModule(t *testing.T) {
 			},
 		},
 		{
-			arg:         fmt.Sprintf("invalidint32=%d", math.MaxInt32+1),
+			arg:         fmt.Sprintf("invalidint32=%d", uint(math.MaxInt32+1)),
 			expectError: `parsing verbosity in "invalidint32=2147483648": strconv.ParseUint: parsing "2147483648": value out of range`,
 		},
 	}
@@ -160,6 +160,10 @@ func TestCompatibility(t *testing.T) {
 		{"filePattern": "anotherFile", "verbosity": 1}
 	],
 	"options": {
+		"text": {
+			"splitStream": true,
+			"infoBufferSize": "2048"
+		},
 		"json": {
 			"splitStream": true,
 			"infoBufferSize": "1024"
@@ -184,10 +188,20 @@ func TestCompatibility(t *testing.T) {
 					},
 				},
 				Options: FormatOptions{
+					Text: TextOptions{
+						OutputRoutingOptions: OutputRoutingOptions{
+							SplitStream: true,
+							InfoBufferSize: resource.QuantityValue{
+								Quantity: *resource.NewQuantity(2048, resource.DecimalSI),
+							},
+						},
+					},
 					JSON: JSONOptions{
-						SplitStream: true,
-						InfoBufferSize: resource.QuantityValue{
-							Quantity: *resource.NewQuantity(1024, resource.DecimalSI),
+						OutputRoutingOptions: OutputRoutingOptions{
+							SplitStream: true,
+							InfoBufferSize: resource.QuantityValue{
+								Quantity: *resource.NewQuantity(1024, resource.DecimalSI),
+							},
 						},
 					},
 				},
@@ -207,6 +221,7 @@ func TestCompatibility(t *testing.T) {
 			}
 			// This sets the internal "s" field just like unmarshaling does.
 			// Required for assert.Equal to pass.
+			_ = tc.expectConfig.Options.Text.InfoBufferSize.String()
 			_ = tc.expectConfig.Options.JSON.InfoBufferSize.String()
 			assert.Equal(t, tc.expectConfig, config)
 			if tc.expectAllFields {

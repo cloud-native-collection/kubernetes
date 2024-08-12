@@ -112,7 +112,7 @@ func (r *RestartDaemonConfig) waitUp(ctx context.Context) {
 			"curl -s -o %v -I -w \"%%{http_code}\" http://localhost:%v/healthz", nullDev, r.healthzPort)
 
 	}
-	err := wait.PollWithContext(ctx, r.pollInterval, r.pollTimeout, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, r.pollInterval, r.pollTimeout, false, func(ctx context.Context) (bool, error) {
 		result, err := e2essh.NodeExec(ctx, r.nodeName, healthzCheck, framework.TestContext.Provider)
 		if err != nil {
 			return false, err
@@ -205,7 +205,7 @@ func getContainerRestarts(ctx context.Context, c clientset.Interface, ns string,
 	return failedContainers, containerRestartNodes.List()
 }
 
-var _ = SIGDescribe("DaemonRestart [Disruptive]", func() {
+var _ = SIGDescribe("DaemonRestart", framework.WithDisruptive(), func() {
 
 	f := framework.NewDefaultFramework("daemonrestart")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged

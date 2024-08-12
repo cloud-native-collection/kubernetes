@@ -48,7 +48,7 @@ import (
 	"k8s.io/utils/clock"
 	testingclock "k8s.io/utils/clock/testing"
 
-	jsonpatch "github.com/evanphx/json-patch"
+	jsonpatch "gopkg.in/evanphx/json-patch.v4"
 )
 
 var (
@@ -91,9 +91,7 @@ func (m *FakeNodeHandler) GetUpdatedNodesCopy() []*v1.Node {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	updatedNodesCopy := make([]*v1.Node, len(m.UpdatedNodes), len(m.UpdatedNodes))
-	for i, ptr := range m.UpdatedNodes {
-		updatedNodesCopy[i] = ptr
-	}
+	copy(updatedNodesCopy, m.UpdatedNodes)
 	return updatedNodesCopy
 }
 

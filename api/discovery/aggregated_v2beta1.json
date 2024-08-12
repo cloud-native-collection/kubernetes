@@ -854,29 +854,6 @@
           "freshness": "Current",
           "resources": [
             {
-              "resource": "clustercidrs",
-              "responseKind": {
-                "group": "",
-                "kind": "ClusterCIDR",
-                "version": ""
-              },
-              "scope": "Cluster",
-              "shortNames": [
-                "cc"
-              ],
-              "singularResource": "clustercidr",
-              "verbs": [
-                "create",
-                "delete",
-                "deletecollection",
-                "get",
-                "list",
-                "patch",
-                "update",
-                "watch"
-              ]
-            },
-            {
               "resource": "ipaddresses",
               "responseKind": {
                 "group": "",
@@ -898,9 +875,44 @@
                 "update",
                 "watch"
               ]
+            },
+            {
+              "resource": "servicecidrs",
+              "responseKind": {
+                "group": "",
+                "kind": "ServiceCIDR",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "servicecidr",
+              "subresources": [
+                {
+                  "responseKind": {
+                    "group": "",
+                    "kind": "ServiceCIDR",
+                    "version": ""
+                  },
+                  "subresource": "status",
+                  "verbs": [
+                    "get",
+                    "patch",
+                    "update"
+                  ]
+                }
+              ],
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
             }
           ],
-          "version": "v1alpha1"
+          "version": "v1beta1"
         }
       ]
     },
@@ -1179,6 +1191,64 @@
             }
           ],
           "version": "v1"
+        },
+        {
+          "freshness": "Current",
+          "resources": [
+            {
+              "resource": "volumeattributesclasses",
+              "responseKind": {
+                "group": "",
+                "kind": "VolumeAttributesClass",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "shortNames": [
+                "vac"
+              ],
+              "singularResource": "volumeattributesclass",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            }
+          ],
+          "version": "v1beta1"
+        },
+        {
+          "freshness": "Current",
+          "resources": [
+            {
+              "resource": "volumeattributesclasses",
+              "responseKind": {
+                "group": "",
+                "kind": "VolumeAttributesClass",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "shortNames": [
+                "vac"
+              ],
+              "singularResource": "volumeattributesclass",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            }
+          ],
+          "version": "v1alpha1"
         }
       ]
     },
@@ -1203,6 +1273,67 @@
               },
               "scope": "Cluster",
               "singularResource": "mutatingwebhookconfiguration",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            },
+            {
+              "categories": [
+                "api-extensions"
+              ],
+              "resource": "validatingadmissionpolicies",
+              "responseKind": {
+                "group": "",
+                "kind": "ValidatingAdmissionPolicy",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "validatingadmissionpolicy",
+              "subresources": [
+                {
+                  "responseKind": {
+                    "group": "",
+                    "kind": "ValidatingAdmissionPolicy",
+                    "version": ""
+                  },
+                  "subresource": "status",
+                  "verbs": [
+                    "get",
+                    "patch",
+                    "update"
+                  ]
+                }
+              ],
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            },
+            {
+              "categories": [
+                "api-extensions"
+              ],
+              "resource": "validatingadmissionpolicybindings",
+              "responseKind": {
+                "group": "",
+                "kind": "ValidatingAdmissionPolicyBinding",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "validatingadmissionpolicybinding",
               "verbs": [
                 "create",
                 "delete",
@@ -1500,6 +1631,32 @@
             }
           ],
           "version": "v1"
+        },
+        {
+          "freshness": "Current",
+          "resources": [
+            {
+              "resource": "leasecandidates",
+              "responseKind": {
+                "group": "",
+                "kind": "LeaseCandidate",
+                "version": ""
+              },
+              "scope": "Namespaced",
+              "singularResource": "leasecandidate",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            }
+          ],
+          "version": "v1alpha1"
         }
       ]
     },
@@ -1651,7 +1808,7 @@
               ]
             }
           ],
-          "version": "v1beta3"
+          "version": "v1"
         },
         {
           "freshness": "Current",
@@ -1727,7 +1884,7 @@
               ]
             }
           ],
-          "version": "v1beta2"
+          "version": "v1beta3"
         }
       ]
     },
@@ -1789,6 +1946,26 @@
         {
           "freshness": "Current",
           "resources": [
+            {
+              "resource": "deviceclasses",
+              "responseKind": {
+                "group": "",
+                "kind": "DeviceClass",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "deviceclass",
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            },
             {
               "resource": "podschedulingcontexts",
               "responseKind": {
@@ -1880,14 +2057,14 @@
               ]
             },
             {
-              "resource": "resourceclasses",
+              "resource": "resourceslices",
               "responseKind": {
                 "group": "",
-                "kind": "ResourceClass",
+                "kind": "ResourceSlice",
                 "version": ""
               },
               "scope": "Cluster",
-              "singularResource": "resourceclass",
+              "singularResource": "resourceslice",
               "verbs": [
                 "create",
                 "delete",
@@ -1900,7 +2077,56 @@
               ]
             }
           ],
-          "version": "v1alpha2"
+          "version": "v1alpha3"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "creationTimestamp": null,
+        "name": "storagemigration.k8s.io"
+      },
+      "versions": [
+        {
+          "freshness": "Current",
+          "resources": [
+            {
+              "resource": "storageversionmigrations",
+              "responseKind": {
+                "group": "",
+                "kind": "StorageVersionMigration",
+                "version": ""
+              },
+              "scope": "Cluster",
+              "singularResource": "storageversionmigration",
+              "subresources": [
+                {
+                  "responseKind": {
+                    "group": "",
+                    "kind": "StorageVersionMigration",
+                    "version": ""
+                  },
+                  "subresource": "status",
+                  "verbs": [
+                    "get",
+                    "patch",
+                    "update"
+                  ]
+                }
+              ],
+              "verbs": [
+                "create",
+                "delete",
+                "deletecollection",
+                "get",
+                "list",
+                "patch",
+                "update",
+                "watch"
+              ]
+            }
+          ],
+          "version": "v1alpha1"
         }
       ]
     }

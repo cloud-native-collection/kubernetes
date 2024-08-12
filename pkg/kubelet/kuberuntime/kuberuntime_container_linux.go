@@ -107,18 +107,8 @@ func (m *kubeGenericRuntimeManager) generateLinuxContainerResources(pod *v1.Pod,
 
 	lcr.HugepageLimits = GetHugepageLimitsFromResources(container.Resources)
 
-	if swapConfigurationHelper := newSwapConfigurationHelper(*m.machineInfo); utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) {
-		// NOTE(ehashman): Behaviour is defined in the opencontainers runtime spec:
-		// https://github.com/opencontainers/runtime-spec/blob/1c3f411f041711bbeecf35ff7e93461ea6789220/config-linux.md#memory
-		switch m.memorySwapBehavior {
-		case kubelettypes.LimitedSwap:
-			swapConfigurationHelper.ConfigureLimitedSwap(lcr, pod, container)
-		default:
-			swapConfigurationHelper.ConfigureUnlimitedSwap(lcr)
-		}
-	} else {
-		swapConfigurationHelper.ConfigureNoSwap(lcr)
-	}
+	// Configure swap for the container
+	m.configureContainerSwapResources(lcr, pod, container)
 
 	// Set memory.min and memory.high to enforce MemoryQoS
 	if enforceMemoryQoS {
@@ -168,6 +158,43 @@ func (m *kubeGenericRuntimeManager) generateLinuxContainerResources(pod *v1.Pod,
 	}
 
 	return lcr
+}
+
+// configureContainerSwapResources configures the swap resources for a specified (linux) container.
+// Swap is only configured if a swap cgroup controller is available and the NodeSwap feature gate is enabled.
+func (m *kubeGenericRuntimeManager) configureContainerSwapResources(lcr *runtimeapi.LinuxContainerResources, pod *v1.Pod, container *v1.Container) {
+	if !swapControllerAvailable() {
+		return
+	}
+
+	swapConfigurationHelper := newSwapConfigurationHelper(*m.machineInfo)
+	if m.memorySwapBehavior == kubelettypes.LimitedSwap {
+		if !isCgroup2UnifiedMode() {
+			swapConfigurationHelper.ConfigureNoSwap(lcr)
+			return
+		}
+	}
+
+	if !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) {
+		swapConfigurationHelper.ConfigureNoSwap(lcr)
+		return
+	}
+
+	if kubelettypes.IsCriticalPod(pod) {
+		swapConfigurationHelper.ConfigureNoSwap(lcr)
+		return
+	}
+
+	// NOTE(ehashman): Behavior is defined in the opencontainers runtime spec:
+	// https://github.com/opencontainers/runtime-spec/blob/1c3f411f041711bbeecf35ff7e93461ea6789220/config-linux.md#memory
+	switch m.memorySwapBehavior {
+	case kubelettypes.NoSwap:
+		swapConfigurationHelper.ConfigureNoSwap(lcr)
+	case kubelettypes.LimitedSwap:
+		swapConfigurationHelper.ConfigureLimitedSwap(lcr, pod, container)
+	default:
+		swapConfigurationHelper.ConfigureNoSwap(lcr)
+	}
 }
 
 // generateContainerResources generates platform specific (linux) container resources config for runtime
@@ -315,12 +342,15 @@ var (
 	swapControllerAvailabilityOnce sync.Once
 )
 
-func swapControllerAvailable() bool {
+// Note: this function variable is being added here so it would be possible to mock
+// the swap controller availability for unit tests by assigning a new function to it. Without it,
+// the swap controller availability would solely depend on the environment running the test.
+var swapControllerAvailable = func() bool {
 	// See https://github.com/containerd/containerd/pull/7838/
 	swapControllerAvailabilityOnce.Do(func() {
 		const warn = "Failed to detect the availability of the swap controller, assuming not available"
 		p := "/sys/fs/cgroup/memory/memory.memsw.limit_in_bytes"
-		if libcontainercgroups.IsCgroup2UnifiedMode() {
+		if isCgroup2UnifiedMode() {
 			// memory.swap.max does not exist in the cgroup root, so we check /sys/fs/cgroup/<SELF>/memory.swap.max
 			_, unified, err := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
 			if err != nil {
@@ -384,19 +414,6 @@ func (m swapConfigurationHelper) ConfigureNoSwap(lcr *runtimeapi.LinuxContainerR
 	m.configureSwap(lcr, 0)
 }
 
-func (m swapConfigurationHelper) ConfigureUnlimitedSwap(lcr *runtimeapi.LinuxContainerResources) {
-	if !isCgroup2UnifiedMode() {
-		m.ConfigureNoSwap(lcr)
-		return
-	}
-
-	if lcr.Unified == nil {
-		lcr.Unified = map[string]string{}
-	}
-
-	lcr.Unified[cm.Cgroup2MaxSwapFilename] = "max"
-}
-
 func (m swapConfigurationHelper) configureSwap(lcr *runtimeapi.LinuxContainerResources, swapMemory int64) {
 	if !isCgroup2UnifiedMode() {
 		klog.ErrorS(fmt.Errorf("swap configuration is not supported with cgroup v1"), "swap configuration under cgroup v1 is unexpected")
@@ -424,4 +441,21 @@ func calcSwapForBurstablePods(containerMemoryRequest, nodeTotalMemory, totalPods
 	swapAllocation := containerMemoryProportion * float64(totalPodsSwapAvailable)
 
 	return int64(swapAllocation), nil
+}
+
+func toKubeContainerUser(statusUser *runtimeapi.ContainerUser) *kubecontainer.ContainerUser {
+	if statusUser == nil {
+		return nil
+	}
+
+	user := &kubecontainer.ContainerUser{}
+	if statusUser.GetLinux() != nil {
+		user.Linux = &kubecontainer.LinuxContainerUser{
+			UID:                statusUser.GetLinux().GetUid(),
+			GID:                statusUser.GetLinux().GetGid(),
+			SupplementalGroups: statusUser.GetLinux().GetSupplementalGroups(),
+		}
+	}
+
+	return user
 }

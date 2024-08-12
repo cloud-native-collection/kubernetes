@@ -44,11 +44,6 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/staticpod"
 )
 
-const (
-	// UpgradeManifestTimeout is timeout of upgrading the static pod manifest
-	UpgradeManifestTimeout = 5 * time.Minute
-)
-
 // StaticPodPathManager is responsible for tracking the directories used in the static pod upgrade transition
 type StaticPodPathManager interface {
 	// MoveFile should move a file from oldPath to newPath
@@ -123,7 +118,7 @@ func NewKubeStaticPodPathManagerUsingTempDirs(kubernetesDir, patchesDir string, 
 
 // MoveFile should move a file from oldPath to newPath
 func (spm *KubeStaticPodPathManager) MoveFile(oldPath, newPath string) error {
-	return os.Rename(oldPath, newPath)
+	return kubeadmutil.MoveFile(oldPath, newPath)
 }
 
 // KubernetesDir should point to the directory Kubernetes owns for storing various configuration files
@@ -194,10 +189,18 @@ func (spm *KubeStaticPodPathManager) CleanupDirs() error {
 
 func upgradeComponent(component string, certsRenewMgr *renewal.Manager, waiter apiclient.Waiter, pathMgr StaticPodPathManager, cfg *kubeadmapi.InitConfiguration, beforePodHash string, recoverManifests map[string]string) error {
 	// Special treatment is required for etcd case, when rollbackOldManifests should roll back etcd
-	// manifests only for the case when component is Etcd
+	// manifests only for the case when component is Etcd. Also check if the kube-apiserver needs an upgrade
+	// by comparing its manifests and later decide if etcd certs can be renewed and etcd can be restarted.
 	recoverEtcd := false
+	apiServerUpgrade := false
 	if component == constants.Etcd {
 		recoverEtcd = true
+		equal, _, err := staticpod.ManifestFilesAreEqual(pathMgr.RealManifestPath(constants.KubeAPIServer),
+			pathMgr.TempManifestPath(constants.KubeAPIServer))
+		if err != nil {
+			return err
+		}
+		apiServerUpgrade = !equal
 	}
 
 	fmt.Printf("[upgrade/staticpods] Preparing for %q upgrade\n", component)
@@ -214,13 +217,19 @@ func upgradeComponent(component string, certsRenewMgr *renewal.Manager, waiter a
 	recoverManifests[component] = backupManifestPath
 
 	// Skip upgrade if current and new manifests are equal
-	equal, err := staticpod.ManifestFilesAreEqual(currentManifestPath, newManifestPath)
+	equal, diff, err := staticpod.ManifestFilesAreEqual(currentManifestPath, newManifestPath)
 	if err != nil {
 		return err
 	}
 	if equal {
-		fmt.Printf("[upgrade/staticpods] Current and new manifests of %s are equal, skipping upgrade\n", component)
-		return nil
+		if !apiServerUpgrade {
+			fmt.Printf("[upgrade/staticpods] Current and new manifests of %s are equal, skipping upgrade\n", component)
+			return nil
+		}
+		klog.V(4).Infof("[upgrade/staticpods] Current and new manifests of %s are equal, but %s will be upgraded\n",
+			component, constants.KubeAPIServer)
+	} else {
+		klog.V(4).Infof("Pod manifest files diff:\n%s\n", diff)
 	}
 
 	// if certificate renewal should be performed
@@ -229,6 +238,15 @@ func upgradeComponent(component string, certsRenewMgr *renewal.Manager, waiter a
 		if err := renewCertsByComponent(cfg, component, certsRenewMgr); err != nil {
 			return rollbackOldManifests(recoverManifests, errors.Wrapf(err, "failed to renew certificates for component %q", component), pathMgr, recoverEtcd)
 		}
+	}
+
+	// This can only happen if the component is etcd, cert renewal is enabled and kube-apiserver needs an upgrade
+	if equal && certsRenewMgr != nil {
+		fmt.Printf("[upgrade/staticpods] Restarting the %s static pod and backing up its manifest to %q\n",
+			component, backupManifestPath)
+	} else {
+		fmt.Printf("[upgrade/staticpods] Moving new manifest to %q and backing up old manifest to %q\n",
+			currentManifestPath, backupManifestPath)
 	}
 
 	// Move the old manifest into the old-manifests directory
@@ -241,17 +259,17 @@ func upgradeComponent(component string, certsRenewMgr *renewal.Manager, waiter a
 		return rollbackOldManifests(recoverManifests, err, pathMgr, recoverEtcd)
 	}
 
-	fmt.Printf("[upgrade/staticpods] Moved new manifest to %q and backed up old manifest to %q\n", currentManifestPath, backupManifestPath)
-
 	fmt.Println("[upgrade/staticpods] Waiting for the kubelet to restart the component")
-	fmt.Printf("[upgrade/staticpods] This might take a minute or longer depending on the component/version gap (timeout %v)\n", UpgradeManifestTimeout)
+	fmt.Printf("[upgrade/staticpods] This can take up to %v\n", kubeadmapi.GetActiveTimeouts().UpgradeManifests.Duration)
 
 	// Wait for the mirror Pod hash to change; otherwise we'll run into race conditions here when the kubelet hasn't had time to
 	// notice the removal of the Static Pod, leading to a false positive below where we check that the API endpoint is healthy
 	// If we don't do this, there is a case where we remove the Static Pod manifest, kubelet is slow to react, kubeadm checks the
 	// API endpoint below of the OLD Static Pod component and proceeds quickly enough, which might lead to unexpected results.
-	if err := waiter.WaitForStaticPodHashChange(cfg.NodeRegistration.Name, component, beforePodHash); err != nil {
-		return rollbackOldManifests(recoverManifests, err, pathMgr, recoverEtcd)
+	if !equal {
+		if err := waiter.WaitForStaticPodHashChange(cfg.NodeRegistration.Name, component, beforePodHash); err != nil {
+			return rollbackOldManifests(recoverManifests, err, pathMgr, recoverEtcd)
+		}
 	}
 
 	// Wait for the static pod component to come up and register itself as a mirror pod
@@ -456,11 +474,16 @@ func StaticPodControlPlane(client clientset.Interface, waiter apiclient.Waiter, 
 		}
 	}
 
+	// Write the updated static Pod manifests into the temporary directory.
+	// As part of the design, this must be called before the below performEtcdStaticPodUpgrade() call.
+	fmt.Printf("[upgrade/staticpods] Writing new Static Pod manifests to %q\n", pathMgr.TempManifestDir())
+	err = controlplane.CreateInitStaticPodManifestFiles(pathMgr.TempManifestDir(), pathMgr.PatchesDir(), cfg, false /* isDryRun */)
+	if err != nil {
+		return errors.Wrap(err, "error creating init static pod manifest files")
+	}
+
 	// etcd upgrade is done prior to other control plane components
 	if !isExternalEtcd && etcdUpgrade {
-		// set the TLS upgrade flag for all components
-		fmt.Printf("[upgrade/etcd] Upgrading to TLS for %s\n", constants.Etcd)
-
 		// Perform etcd upgrade using common to all control plane components function
 		fatal, err := performEtcdStaticPodUpgrade(certsRenewMgr, client, waiter, pathMgr, cfg, recoverManifests, oldEtcdClient, newEtcdClient)
 		if err != nil {
@@ -471,13 +494,7 @@ func StaticPodControlPlane(client clientset.Interface, waiter apiclient.Waiter, 
 		}
 	}
 
-	// Write the updated static Pod manifests into the temporary directory
-	fmt.Printf("[upgrade/staticpods] Writing new Static Pod manifests to %q\n", pathMgr.TempManifestDir())
-	err = controlplane.CreateInitStaticPodManifestFiles(pathMgr.TempManifestDir(), pathMgr.PatchesDir(), cfg, false /* isDryRun */)
-	if err != nil {
-		return errors.Wrap(err, "error creating init static pod manifest files")
-	}
-
+	// Upgrade the rest of the control plane components
 	for _, component := range constants.ControlPlaneComponents {
 		if err = upgradeComponent(component, certsRenewMgr, waiter, pathMgr, cfg, beforePodHashMap[component], recoverManifests); err != nil {
 			return err
@@ -494,6 +511,20 @@ func StaticPodControlPlane(client clientset.Interface, waiter apiclient.Waiter, 
 		if !renewed {
 			// if not error, but not renewed because of external CA detected, inform the user
 			fmt.Printf("[upgrade/staticpods] External CA detected, %s certificate can't be renewed\n", constants.AdminKubeConfigFileName)
+		}
+
+		// Do the same for super-admin.conf, but only if it exists
+		if _, err := os.Stat(filepath.Join(pathMgr.KubernetesDir(), constants.SuperAdminKubeConfigFileName)); err == nil {
+			// renew the certificate embedded in the super-admin.conf file
+			renewed, err := certsRenewMgr.RenewUsingLocalCA(constants.SuperAdminKubeConfigFileName)
+			if err != nil {
+				return rollbackOldManifests(recoverManifests, errors.Wrapf(err, "failed to upgrade the %s certificates", constants.SuperAdminKubeConfigFileName), pathMgr, false)
+			}
+
+			if !renewed {
+				// if not error, but not renewed because of external CA detected, inform the user
+				fmt.Printf("[upgrade/staticpods] External CA detected, %s certificate can't be renewed\n", constants.SuperAdminKubeConfigFileName)
+			}
 		}
 	}
 

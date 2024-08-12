@@ -19,9 +19,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"path"
-	"time"
-
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
@@ -30,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2edeployment "k8s.io/kubernetes/test/e2e/framework/deployment"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
@@ -39,14 +37,10 @@ import (
 	"k8s.io/kubernetes/test/e2e/storage/testsuites"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
 	admissionapi "k8s.io/pod-security-admission/api"
+	"path"
 )
 
-const (
-	// total time to wait for cloudprovider or file system resize to finish
-	totalResizeWaitPeriod = 10 * time.Minute
-)
-
-var _ = utils.SIGDescribe("[Feature:Flexvolumes] Mounted flexvolume expand[Slow]", func() {
+var _ = utils.SIGDescribe(feature.Flexvolumes, "Mounted flexvolume expand", framework.WithSlow(), func() {
 	var (
 		c                 clientset.Interface
 		ns                string

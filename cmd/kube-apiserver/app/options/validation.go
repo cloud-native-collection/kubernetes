@@ -24,6 +24,7 @@ import (
 
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	utilversion "k8s.io/apiserver/pkg/util/version"
 	netutils "k8s.io/utils/net"
 
 	controlplaneapiserver "k8s.io/kubernetes/pkg/controlplane/apiserver/options"
@@ -37,9 +38,6 @@ func validateClusterIPFlags(options Extra) []error {
 	var errs []error
 	// maxCIDRBits is used to define the maximum CIDR size for the cluster ip(s)
 	maxCIDRBits := 20
-	if utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) {
-		maxCIDRBits = 64
-	}
 
 	// validate that primary has been processed by user provided values or it has been defaulted
 	if options.PrimaryServiceClusterIPRange.IP == nil {
@@ -51,10 +49,13 @@ func validateClusterIPFlags(options Extra) []error {
 		errs = append(errs, errors.New("--service-cluster-ip-range must not contain more than two entries"))
 	}
 
-	// Complete() expected to have set Primary* and Secondary*
-	// primary CIDR validation
-	if err := validateMaxCIDRRange(options.PrimaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range"); err != nil {
-		errs = append(errs, err)
+	// Complete() expected to have set Primary* and Secondary
+	if !utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) ||
+		!utilfeature.DefaultFeatureGate.Enabled(features.DisableAllocatorDualWrite) {
+		// primary CIDR validation
+		if err := validateMaxCIDRRange(options.PrimaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range"); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	secondaryServiceClusterIPRangeUsed := (options.SecondaryServiceClusterIPRange.IP != nil)
@@ -72,9 +73,11 @@ func validateClusterIPFlags(options Extra) []error {
 		if !dualstack {
 			errs = append(errs, errors.New("--service-cluster-ip-range[0] and --service-cluster-ip-range[1] must be of different IP family"))
 		}
-
-		if err := validateMaxCIDRRange(options.SecondaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range[1]"); err != nil {
-			errs = append(errs, err)
+		if !utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) ||
+			!utilfeature.DefaultFeatureGate.Enabled(features.DisableAllocatorDualWrite) {
+			if err := validateMaxCIDRRange(options.SecondaryServiceClusterIPRange, maxCIDRBits, "--service-cluster-ip-range[1]"); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 
@@ -130,12 +133,19 @@ func (s CompletedOptions) Validate() []error {
 	var errs []error
 
 	errs = append(errs, s.CompletedOptions.Validate()...)
+	errs = append(errs, s.CloudProvider.Validate()...)
 	errs = append(errs, validateClusterIPFlags(s.Extra)...)
 	errs = append(errs, validateServiceNodePort(s.Extra)...)
 	errs = append(errs, validatePublicIPServiceClusterIPRangeIPFamilies(s.Extra, *s.GenericServerRunOptions)...)
 
 	if s.MasterCount <= 0 {
 		errs = append(errs, fmt.Errorf("--apiserver-count should be a positive number, but value '%d' provided", s.MasterCount))
+	}
+
+	// TODO(#125980): remove in 1.32
+	effectiveVersion := s.GenericServerRunOptions.ComponentGlobalsRegistry.EffectiveVersionFor(s.GenericServerRunOptions.ComponentName)
+	if err := utilversion.ValidateKubeEffectiveVersion(effectiveVersion); err != nil {
+		errs = append(errs, err)
 	}
 
 	return errs
