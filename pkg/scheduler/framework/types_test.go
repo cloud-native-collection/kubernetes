@@ -18,11 +18,11 @@ package framework
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,11 +31,17 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/features"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	schedutil "k8s.io/kubernetes/pkg/scheduler/util"
 	"k8s.io/kubernetes/test/utils/ktesting"
 	"k8s.io/kubernetes/test/utils/ktesting/initoption"
 )
+
+var nodeInfoCmpOpts = []cmp.Option{
+	cmp.AllowUnexported(NodeInfo{}, PodInfo{}, podResource{}),
+}
 
 func TestNewResource(t *testing.T) {
 	tests := []struct {
@@ -71,8 +77,8 @@ func TestNewResource(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			r := NewResource(test.resourceList)
-			if !reflect.DeepEqual(test.expected, r) {
-				t.Errorf("expected: %#v, got: %#v", test.expected, r)
+			if diff := cmp.Diff(test.expected, r); diff != "" {
+				t.Errorf("Unexpected resource (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -110,8 +116,8 @@ func TestResourceClone(t *testing.T) {
 			r := test.resource.Clone()
 			// Modify the field to check if the result is a clone of the origin one.
 			test.resource.MilliCPU += 1000
-			if !reflect.DeepEqual(test.expected, r) {
-				t.Errorf("expected: %#v, got: %#v", test.expected, r)
+			if diff := cmp.Diff(test.expected, r); diff != "" {
+				t.Errorf("Unexpected resource (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -155,8 +161,8 @@ func TestResourceAddScalar(t *testing.T) {
 	for _, test := range tests {
 		t.Run(string(test.scalarName), func(t *testing.T) {
 			test.resource.AddScalar(test.scalarName, test.scalarQuantity)
-			if !reflect.DeepEqual(test.expected, test.resource) {
-				t.Errorf("expected: %#v, got: %#v", test.expected, test.resource)
+			if diff := cmp.Diff(test.expected, test.resource); diff != "" {
+				t.Errorf("Unexpected resource (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -207,8 +213,8 @@ func TestSetMaxResource(t *testing.T) {
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
 			test.resource.SetMaxResource(test.resourceList)
-			if !reflect.DeepEqual(test.expected, test.resource) {
-				t.Errorf("expected: %#v, got: %#v", test.expected, test.resource)
+			if diff := cmp.Diff(test.expected, test.resource); diff != "" {
+				t.Errorf("Unexpected resource (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -294,6 +300,14 @@ func TestNewNodeInfo(t *testing.T) {
 						NodeName: nodeName,
 					},
 				},
+				cachedResource: &podResource{
+					resource: Resource{
+						MilliCPU: 100,
+						Memory:   500,
+					},
+					non0CPU: 100,
+					non0Mem: 500,
+				},
 			},
 			{
 				Pod: &v1.Pod{
@@ -323,6 +337,14 @@ func TestNewNodeInfo(t *testing.T) {
 						NodeName: nodeName,
 					},
 				},
+				cachedResource: &podResource{
+					resource: Resource{
+						MilliCPU: 200,
+						Memory:   1024,
+					},
+					non0CPU: 200,
+					non0Mem: 1024,
+				},
 			},
 		},
 	}
@@ -333,8 +355,8 @@ func TestNewNodeInfo(t *testing.T) {
 		t.Errorf("Generation is not incremented. previous: %v, current: %v", gen, ni.Generation)
 	}
 	expected.Generation = ni.Generation
-	if !reflect.DeepEqual(expected, ni) {
-		t.Errorf("expected: %#v, got: %#v", expected, ni)
+	if diff := cmp.Diff(expected, ni, nodeInfoCmpOpts...); diff != "" {
+		t.Errorf("Unexpected NodeInfo (-want, +got):\n%s", diff)
 	}
 }
 
@@ -387,6 +409,14 @@ func TestNodeInfoClone(t *testing.T) {
 								NodeName: nodeName,
 							},
 						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 100,
+								Memory:   500,
+							},
+							non0CPU: 100,
+							non0Mem: 500,
+						},
 					},
 					{
 						Pod: &v1.Pod{
@@ -415,6 +445,14 @@ func TestNodeInfoClone(t *testing.T) {
 								},
 								NodeName: nodeName,
 							},
+						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 200,
+								Memory:   1024,
+							},
+							non0CPU: 200,
+							non0Mem: 1024,
 						},
 					},
 				},
@@ -461,6 +499,14 @@ func TestNodeInfoClone(t *testing.T) {
 								NodeName: nodeName,
 							},
 						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 100,
+								Memory:   500,
+							},
+							non0CPU: 100,
+							non0Mem: 500,
+						},
 					},
 					{
 						Pod: &v1.Pod{
@@ -490,6 +536,14 @@ func TestNodeInfoClone(t *testing.T) {
 								NodeName: nodeName,
 							},
 						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 200,
+								Memory:   1024,
+							},
+							non0CPU: 200,
+							non0Mem: 1024,
+						},
 					},
 				},
 			},
@@ -502,8 +556,8 @@ func TestNodeInfoClone(t *testing.T) {
 			// Modify the field to check if the result is a clone of the origin one.
 			test.nodeInfo.Generation += 10
 			test.nodeInfo.UsedPorts.Remove("127.0.0.1", "TCP", 80)
-			if !reflect.DeepEqual(test.expected, ni) {
-				t.Errorf("expected: %#v, got: %#v", test.expected, ni)
+			if diff := cmp.Diff(test.expected, ni, nodeInfoCmpOpts...); diff != "" {
+				t.Errorf("Unexpected NodeInfo (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -711,6 +765,14 @@ func TestNodeInfoAddPod(t *testing.T) {
 						},
 					},
 				},
+				cachedResource: &podResource{
+					resource: Resource{
+						MilliCPU: 600,
+						Memory:   500,
+					},
+					non0CPU: 600,
+					non0Mem: 500,
+				},
 			},
 			{
 				Pod: &v1.Pod{
@@ -751,6 +813,14 @@ func TestNodeInfoAddPod(t *testing.T) {
 							},
 						},
 					},
+				},
+				cachedResource: &podResource{
+					resource: Resource{
+						MilliCPU: 700,
+						Memory:   500,
+					},
+					non0CPU: 700,
+					non0Mem: schedutil.DefaultMemoryRequest + 500,
 				},
 			},
 			{
@@ -803,6 +873,14 @@ func TestNodeInfoAddPod(t *testing.T) {
 						},
 					},
 				},
+				cachedResource: &podResource{
+					resource: Resource{
+						MilliCPU: 1000,
+						Memory:   schedutil.DefaultMemoryRequest + 500,
+					},
+					non0CPU: 1000,
+					non0Mem: schedutil.DefaultMemoryRequest + 500,
+				},
 			},
 		},
 	}
@@ -818,8 +896,8 @@ func TestNodeInfoAddPod(t *testing.T) {
 	}
 
 	expected.Generation = ni.Generation
-	if !reflect.DeepEqual(expected, ni) {
-		t.Errorf("expected: %#v, got: %#v", expected, ni)
+	if diff := cmp.Diff(expected, ni, nodeInfoCmpOpts...); diff != "" {
+		t.Errorf("Unexpected NodeInfo (-want, +got):\n%s", diff)
 	}
 }
 
@@ -938,6 +1016,14 @@ func TestNodeInfoRemovePod(t *testing.T) {
 								},
 							},
 						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 600,
+								Memory:   1000,
+							},
+							non0CPU: 600,
+							non0Mem: 1000,
+						},
 					},
 					{
 						Pod: &v1.Pod{
@@ -970,6 +1056,14 @@ func TestNodeInfoRemovePod(t *testing.T) {
 									v1.ResourceMemory: resource.MustParse("500"),
 								},
 							},
+						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 700,
+								Memory:   1524,
+							},
+							non0CPU: 700,
+							non0Mem: 1524,
 						},
 					},
 				},
@@ -1079,6 +1173,14 @@ func TestNodeInfoRemovePod(t *testing.T) {
 								},
 							},
 						},
+						cachedResource: &podResource{
+							resource: Resource{
+								MilliCPU: 700,
+								Memory:   1524,
+							},
+							non0CPU: 700,
+							non0Mem: 1524,
+						},
 					},
 				},
 			},
@@ -1108,8 +1210,8 @@ func TestNodeInfoRemovePod(t *testing.T) {
 			}
 
 			test.expectedNodeInfo.Generation = ni.Generation
-			if !reflect.DeepEqual(test.expectedNodeInfo, ni) {
-				t.Errorf("expected: %#v, got: %#v", test.expectedNodeInfo, ni)
+			if diff := cmp.Diff(test.expectedNodeInfo, ni, nodeInfoCmpOpts...); diff != "" {
+				t.Errorf("Unexpected NodeInfo (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -1375,7 +1477,7 @@ func TestGetNamespacesFromPodAffinityTerm(t *testing.T) {
 				},
 			}, test.term)
 			if diff := cmp.Diff(test.want, got); diff != "" {
-				t.Errorf("unexpected diff (-want, +got):\n%s", diff)
+				t.Errorf("Unexpected namespaces (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -1394,13 +1496,13 @@ func TestFitError_Error(t *testing.T) {
 			numAllNodes: 3,
 			diagnosis: Diagnosis{
 				PreFilterMsg: "Node(s) failed PreFilter plugin FalsePreFilter",
-				NodeToStatusMap: NodeToStatusMap{
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
 					// They're inserted by the framework.
 					// We don't include them in the reason message because they'd be just duplicates.
-					"node1": NewStatus(Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
-					"node2": NewStatus(Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
-					"node3": NewStatus(Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
-				},
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
+					"node2": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
+					"node3": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
 			wantReasonMsg: "0/3 nodes are available: Node(s) failed PreFilter plugin FalsePreFilter.",
 		},
@@ -1409,13 +1511,13 @@ func TestFitError_Error(t *testing.T) {
 			numAllNodes: 3,
 			diagnosis: Diagnosis{
 				PreFilterMsg: "Node(s) failed PreFilter plugin FalsePreFilter",
-				NodeToStatusMap: NodeToStatusMap{
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
 					// They're inserted by the framework.
 					// We don't include them in the reason message because they'd be just duplicates.
-					"node1": NewStatus(Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
-					"node2": NewStatus(Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
-					"node3": NewStatus(Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
-				},
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
+					"node2": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
+					"node3": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed PreFilter plugin FalsePreFilter"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 				// PostFilterMsg will be included.
 				PostFilterMsg: "Error running PostFilter plugin FailedPostFilter",
 			},
@@ -1426,11 +1528,11 @@ func TestFitError_Error(t *testing.T) {
 			numAllNodes: 3,
 			diagnosis: Diagnosis{
 				PreFilterMsg: "",
-				NodeToStatusMap: NodeToStatusMap{
-					"node1": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node2": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node3": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-				},
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node2": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node3": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
 			wantReasonMsg: "0/3 nodes are available: 3 Node(s) failed Filter plugin FalseFilter-1.",
 		},
@@ -1439,11 +1541,11 @@ func TestFitError_Error(t *testing.T) {
 			numAllNodes: 3,
 			diagnosis: Diagnosis{
 				PreFilterMsg: "",
-				NodeToStatusMap: NodeToStatusMap{
-					"node1": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node2": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node3": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-				},
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node2": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node3": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 				PostFilterMsg: "Error running PostFilter plugin FailedPostFilter",
 			},
 			wantReasonMsg: "0/3 nodes are available: 3 Node(s) failed Filter plugin FalseFilter-1. Error running PostFilter plugin FailedPostFilter",
@@ -1453,11 +1555,11 @@ func TestFitError_Error(t *testing.T) {
 			numAllNodes: 3,
 			diagnosis: Diagnosis{
 				PreFilterMsg: "",
-				NodeToStatusMap: NodeToStatusMap{
-					"node1": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node2": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node3": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-2"),
-				},
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node2": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node3": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-2"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
 			wantReasonMsg: "0/3 nodes are available: 1 Node(s) failed Filter plugin FalseFilter-2, 2 Node(s) failed Filter plugin FalseFilter-1.",
 		},
@@ -1466,11 +1568,11 @@ func TestFitError_Error(t *testing.T) {
 			numAllNodes: 3,
 			diagnosis: Diagnosis{
 				PreFilterMsg: "",
-				NodeToStatusMap: NodeToStatusMap{
-					"node1": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node2": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
-					"node3": NewStatus(Unschedulable, "Node(s) failed Filter plugin FalseFilter-2"),
-				},
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node2": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-1"),
+					"node3": fwk.NewStatus(fwk.Unschedulable, "Node(s) failed Filter plugin FalseFilter-2"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 				PostFilterMsg: "Error running PostFilter plugin FailedPostFilter",
 			},
 			wantReasonMsg: "0/3 nodes are available: 1 Node(s) failed Filter plugin FalseFilter-2, 2 Node(s) failed Filter plugin FalseFilter-1. Error running PostFilter plugin FailedPostFilter",
@@ -1479,10 +1581,10 @@ func TestFitError_Error(t *testing.T) {
 			name:        "failed to Permit on node",
 			numAllNodes: 1,
 			diagnosis: Diagnosis{
-				NodeToStatusMap: NodeToStatusMap{
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
 					// There should be only one node here.
-					"node1": NewStatus(Unschedulable, "Node failed Permit plugin Permit-1"),
-				},
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node failed Permit plugin Permit-1"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
 			wantReasonMsg: "0/1 nodes are available: 1 Node failed Permit plugin Permit-1.",
 		},
@@ -1490,10 +1592,10 @@ func TestFitError_Error(t *testing.T) {
 			name:        "failed to Reserve on node",
 			numAllNodes: 1,
 			diagnosis: Diagnosis{
-				NodeToStatusMap: NodeToStatusMap{
+				NodeToStatus: NewNodeToStatus(map[string]*fwk.Status{
 					// There should be only one node here.
-					"node1": NewStatus(Unschedulable, "Node failed Reserve plugin Reserve-1"),
-				},
+					"node1": fwk.NewStatus(fwk.Unschedulable, "Node failed Reserve plugin Reserve-1"),
+				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
 			wantReasonMsg: "0/1 nodes are available: 1 Node failed Reserve plugin Reserve-1.",
 		},
@@ -1512,101 +1614,480 @@ func TestFitError_Error(t *testing.T) {
 	}
 }
 
+var (
+	cpu500m       = resource.MustParse("500m")
+	mem500M       = resource.MustParse("500Mi")
+	cpu700m       = resource.MustParse("700m")
+	mem800M       = resource.MustParse("800Mi")
+	cpu1200m      = resource.MustParse("1200m")
+	mem1200M      = resource.MustParse("1200Mi")
+	restartAlways = v1.ContainerRestartPolicyAlways
+)
+
+func TestPodInfoCalculateResources(t *testing.T) {
+	testCases := []struct {
+		name                     string
+		containers               []v1.Container
+		podResources             *v1.ResourceRequirements
+		podLevelResourcesEnabled bool
+		expectedResource         podResource
+		initContainers           []v1.Container
+	}{
+		{
+			name:       "requestless container",
+			containers: []v1.Container{{}},
+			expectedResource: podResource{
+				resource: Resource{},
+				non0CPU:  schedutil.DefaultMilliCPURequest,
+				non0Mem:  schedutil.DefaultMemoryRequest,
+			},
+		},
+		{
+			name: "1X container with requests",
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu500m,
+							v1.ResourceMemory: mem500M,
+						},
+					},
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue(),
+					Memory:   mem500M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue(),
+				non0Mem: mem500M.Value(),
+			},
+		},
+		{
+			name: "2X container with requests",
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu500m,
+							v1.ResourceMemory: mem500M,
+						},
+					},
+				},
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu700m,
+							v1.ResourceMemory: mem800M,
+						},
+					},
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue() + cpu700m.MilliValue(),
+					Memory:   mem500M.Value() + mem800M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue() + cpu700m.MilliValue(),
+				non0Mem: mem500M.Value() + mem800M.Value(),
+			},
+		},
+		{
+			name:                     "1X container and 1X init container with pod-level requests",
+			podLevelResourcesEnabled: true,
+			initContainers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu500m,
+							v1.ResourceMemory: mem500M,
+						},
+					},
+				},
+			},
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu500m,
+							v1.ResourceMemory: mem500M,
+						},
+					},
+				},
+			},
+			podResources: &v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:    cpu1200m,
+					v1.ResourceMemory: mem1200M,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu1200m.MilliValue(),
+					Memory:   mem1200M.Value(),
+				},
+				non0CPU: cpu1200m.MilliValue(),
+				non0Mem: mem1200M.Value(),
+			},
+		},
+		{
+			name:                     "1X container and 1X sidecar container with pod-level requests",
+			podLevelResourcesEnabled: true,
+			initContainers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu500m,
+							v1.ResourceMemory: mem500M,
+						},
+					},
+					RestartPolicy: &restartAlways,
+				},
+			},
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceCPU:    cpu500m,
+							v1.ResourceMemory: mem500M,
+						},
+					},
+				},
+			},
+			podResources: &v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:    cpu1200m,
+					v1.ResourceMemory: mem1200M,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu1200m.MilliValue(),
+					Memory:   mem1200M.Value(),
+				},
+				non0CPU: cpu1200m.MilliValue(),
+				non0Mem: mem1200M.Value(),
+			},
+		},
+		{
+			name:                     "1X container with pod-level memory requests",
+			podLevelResourcesEnabled: true,
+			initContainers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{},
+				},
+			},
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{},
+				},
+			},
+			podResources: &v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceMemory: mem1200M,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					Memory: mem1200M.Value(),
+				},
+				non0CPU: schedutil.DefaultMilliCPURequest,
+				non0Mem: mem1200M.Value(),
+			},
+		},
+		{
+			name:                     "1X container with pod-level cpu requests",
+			podLevelResourcesEnabled: true,
+			initContainers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{},
+				},
+			},
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{},
+				},
+			},
+			podResources: &v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceCPU: cpu500m,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue(),
+				},
+				non0CPU: cpu500m.MilliValue(),
+				non0Mem: schedutil.DefaultMemoryRequest,
+			},
+		},
+		{
+			name:                     "1X container unsupported resources and pod-level supported resources",
+			podLevelResourcesEnabled: true,
+			initContainers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceEphemeralStorage: mem500M,
+						},
+					},
+				},
+			},
+			containers: []v1.Container{
+				{
+					Resources: v1.ResourceRequirements{
+						Requests: v1.ResourceList{
+							v1.ResourceEphemeralStorage: mem800M,
+						},
+					},
+				},
+			},
+			podResources: &v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceCPU: cpu500m,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU:         cpu500m.MilliValue(),
+					EphemeralStorage: mem800M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue(),
+				non0Mem: schedutil.DefaultMemoryRequest,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodLevelResources, tc.podLevelResourcesEnabled)
+			podInfo := PodInfo{
+				Pod: &v1.Pod{
+					Spec: v1.PodSpec{
+						Resources:      tc.podResources,
+						Containers:     tc.containers,
+						InitContainers: tc.initContainers,
+					},
+				},
+			}
+			res := podInfo.calculateResource()
+			if diff := cmp.Diff(tc.expectedResource, res, nodeInfoCmpOpts...); diff != "" {
+				t.Errorf("Unexpected resource (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCalculatePodResourcesWithResize(t *testing.T) {
 	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)
-	cpu500m := resource.MustParse("500m")
-	mem500M := resource.MustParse("500Mi")
-	cpu700m := resource.MustParse("700m")
-	mem800M := resource.MustParse("800Mi")
 	testpod := v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "pod_resize_test",
 			Name:      "testpod",
 			UID:       types.UID("testpod"),
 		},
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{
-					Name:      "c1",
-					Resources: v1.ResourceRequirements{Requests: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M}},
-				},
-			},
-		},
 		Status: v1.PodStatus{
-			Phase:  v1.PodRunning,
-			Resize: "",
-			ContainerStatuses: []v1.ContainerStatus{
-				{
-					Name:               "c1",
-					AllocatedResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-				},
-			},
+			Phase: v1.PodRunning,
 		},
 	}
 
+	restartAlways := v1.ContainerRestartPolicyAlways
+
+	preparePodInfo := func(pod v1.Pod,
+		requests, statusResources,
+		initRequests, initStatusResources,
+		sidecarRequests, sidecarStatusResources *v1.ResourceList,
+		resizeStatus []*v1.PodCondition) PodInfo {
+
+		if requests != nil {
+			pod.Spec.Containers = append(pod.Spec.Containers,
+				v1.Container{
+					Name:      "c1",
+					Resources: v1.ResourceRequirements{Requests: *requests},
+				})
+		}
+		if statusResources != nil {
+			pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses,
+				v1.ContainerStatus{
+					Name: "c1",
+					Resources: &v1.ResourceRequirements{
+						Requests: *statusResources,
+					},
+				})
+		}
+
+		if initRequests != nil {
+			pod.Spec.InitContainers = append(pod.Spec.InitContainers,
+				v1.Container{
+					Name:      "i1",
+					Resources: v1.ResourceRequirements{Requests: *initRequests},
+				},
+			)
+		}
+		if initStatusResources != nil {
+			pod.Status.InitContainerStatuses = append(pod.Status.InitContainerStatuses,
+				v1.ContainerStatus{
+					Name: "i1",
+					Resources: &v1.ResourceRequirements{
+						Requests: *initStatusResources,
+					},
+				})
+		}
+
+		if sidecarRequests != nil {
+			pod.Spec.InitContainers = append(pod.Spec.InitContainers,
+				v1.Container{
+					Name:          "s1",
+					Resources:     v1.ResourceRequirements{Requests: *sidecarRequests},
+					RestartPolicy: &restartAlways,
+				},
+			)
+		}
+		if sidecarStatusResources != nil {
+			pod.Status.InitContainerStatuses = append(pod.Status.InitContainerStatuses,
+				v1.ContainerStatus{
+					Name: "s1",
+					Resources: &v1.ResourceRequirements{
+						Requests: *sidecarStatusResources,
+					},
+				})
+		}
+
+		for _, c := range resizeStatus {
+			pod.Status.Conditions = append(pod.Status.Conditions, *c)
+		}
+
+		return PodInfo{Pod: &pod}
+	}
+
 	tests := []struct {
-		name               string
-		requests           v1.ResourceList
-		allocatedResources v1.ResourceList
-		resizeStatus       v1.PodResizeStatus
-		expectedResource   Resource
-		expectedNon0CPU    int64
-		expectedNon0Mem    int64
+		name                   string
+		requests               v1.ResourceList
+		statusResources        v1.ResourceList
+		initRequests           *v1.ResourceList
+		initStatusResources    *v1.ResourceList
+		resizeStatus           []*v1.PodCondition
+		sidecarRequests        *v1.ResourceList
+		sidecarStatusResources *v1.ResourceList
+		expectedResource       podResource
 	}{
 		{
-			name:               "Pod with no pending resize",
-			requests:           v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-			allocatedResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-			resizeStatus:       "",
-			expectedResource:   Resource{MilliCPU: cpu500m.MilliValue(), Memory: mem500M.Value()},
-			expectedNon0CPU:    cpu500m.MilliValue(),
-			expectedNon0Mem:    mem500M.Value(),
+			name:            "Pod with no pending resize",
+			requests:        v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			statusResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue(),
+					Memory:   mem500M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue(),
+				non0Mem: mem500M.Value(),
+			},
 		},
 		{
-			name:               "Pod with resize in progress",
-			requests:           v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-			allocatedResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-			resizeStatus:       v1.PodResizeStatusInProgress,
-			expectedResource:   Resource{MilliCPU: cpu500m.MilliValue(), Memory: mem500M.Value()},
-			expectedNon0CPU:    cpu500m.MilliValue(),
-			expectedNon0Mem:    mem500M.Value(),
+			name:            "Pod with resize in progress",
+			requests:        v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			statusResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			resizeStatus: []*v1.PodCondition{
+				{
+					Type:   v1.PodResizeInProgress,
+					Status: v1.ConditionTrue,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue(),
+					Memory:   mem500M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue(),
+				non0Mem: mem500M.Value(),
+			},
 		},
 		{
-			name:               "Pod with deferred resize",
-			requests:           v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
-			allocatedResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-			resizeStatus:       v1.PodResizeStatusDeferred,
-			expectedResource:   Resource{MilliCPU: cpu700m.MilliValue(), Memory: mem800M.Value()},
-			expectedNon0CPU:    cpu700m.MilliValue(),
-			expectedNon0Mem:    mem800M.Value(),
+			name:            "Pod with deferred resize",
+			requests:        v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			statusResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			resizeStatus: []*v1.PodCondition{
+				{
+					Type:   v1.PodResizePending,
+					Status: v1.ConditionTrue,
+					Reason: v1.PodReasonDeferred,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu700m.MilliValue(),
+					Memory:   mem800M.Value(),
+				},
+				non0CPU: cpu700m.MilliValue(),
+				non0Mem: mem800M.Value(),
+			},
 		},
 		{
-			name:               "Pod with infeasible resize",
-			requests:           v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
-			allocatedResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
-			resizeStatus:       v1.PodResizeStatusInfeasible,
-			expectedResource:   Resource{MilliCPU: cpu500m.MilliValue(), Memory: mem500M.Value()},
-			expectedNon0CPU:    cpu500m.MilliValue(),
-			expectedNon0Mem:    mem500M.Value(),
+			name:            "Pod with infeasible resize",
+			requests:        v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			statusResources: v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			resizeStatus: []*v1.PodCondition{
+				{
+					Type:   v1.PodResizePending,
+					Status: v1.ConditionTrue,
+					Reason: v1.PodReasonInfeasible,
+				},
+			},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue(),
+					Memory:   mem500M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue(),
+				non0Mem: mem500M.Value(),
+			},
+		},
+		{
+			name:                "Pod with init container and no pending resize",
+			requests:            v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			statusResources:     v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			initRequests:        &v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			initStatusResources: &v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu700m.MilliValue(),
+					Memory:   mem800M.Value(),
+				},
+				non0CPU: cpu700m.MilliValue(),
+				non0Mem: mem800M.Value(),
+			},
+		},
+		{
+			name:                   "Pod with sider container and no pending resize",
+			requests:               v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			statusResources:        v1.ResourceList{v1.ResourceCPU: cpu500m, v1.ResourceMemory: mem500M},
+			initRequests:           &v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			initStatusResources:    &v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			sidecarRequests:        &v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			sidecarStatusResources: &v1.ResourceList{v1.ResourceCPU: cpu700m, v1.ResourceMemory: mem800M},
+			expectedResource: podResource{
+				resource: Resource{
+					MilliCPU: cpu500m.MilliValue() + cpu700m.MilliValue(),
+					Memory:   mem500M.Value() + mem800M.Value(),
+				},
+				non0CPU: cpu500m.MilliValue() + cpu700m.MilliValue(),
+				non0Mem: mem500M.Value() + mem800M.Value(),
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pod := testpod.DeepCopy()
-			pod.Spec.Containers[0].Resources.Requests = tt.requests
-			pod.Status.ContainerStatuses[0].AllocatedResources = tt.allocatedResources
-			pod.Status.Resize = tt.resizeStatus
+			podInfo := preparePodInfo(*testpod.DeepCopy(),
+				&tt.requests, &tt.statusResources,
+				tt.initRequests, tt.initStatusResources,
+				tt.sidecarRequests, tt.sidecarStatusResources,
+				tt.resizeStatus)
 
-			res, non0CPU, non0Mem := calculateResource(pod)
-			if !reflect.DeepEqual(tt.expectedResource, res) {
-				t.Errorf("Test: %s expected resource: %+v, got: %+v", tt.name, tt.expectedResource, res)
-			}
-			if non0CPU != tt.expectedNon0CPU {
-				t.Errorf("Test: %s expected non0CPU: %d, got: %d", tt.name, tt.expectedNon0CPU, non0CPU)
-			}
-			if non0Mem != tt.expectedNon0Mem {
-				t.Errorf("Test: %s expected non0Mem: %d, got: %d", tt.name, tt.expectedNon0Mem, non0Mem)
+			res := podInfo.calculateResource()
+			if diff := cmp.Diff(tt.expectedResource, res, nodeInfoCmpOpts...); diff != "" {
+				t.Errorf("Unexpected podResource (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -1615,45 +2096,63 @@ func TestCalculatePodResourcesWithResize(t *testing.T) {
 func TestCloudEvent_Match(t *testing.T) {
 	testCases := []struct {
 		name        string
-		event       ClusterEvent
-		comingEvent ClusterEvent
+		event       fwk.ClusterEvent
+		comingEvent fwk.ClusterEvent
 		wantResult  bool
 	}{
 		{
 			name:        "wildcard event matches with all kinds of coming events",
-			event:       ClusterEvent{Resource: WildCard, ActionType: All},
-			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			event:       fwk.ClusterEvent{Resource: fwk.WildCard, ActionType: fwk.All},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel},
 			wantResult:  true,
 		},
 		{
 			name:        "event with resource = 'Pod' matching with coming events carries same actionType",
-			event:       ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel | UpdateNodeTaint},
-			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			event:       fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel | fwk.UpdateNodeTaint},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel},
+			wantResult:  true,
+		},
+		{
+			name:        "event with resource = 'Pod' matching with coming events carries unschedulablePod",
+			event:       fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel | fwk.UpdateNodeTaint},
+			comingEvent: fwk.ClusterEvent{Resource: unschedulablePod, ActionType: fwk.UpdateNodeLabel},
 			wantResult:  true,
 		},
 		{
 			name:        "event with resource = '*' matching with coming events carries same actionType",
-			event:       ClusterEvent{Resource: WildCard, ActionType: UpdateNodeLabel},
-			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
+			event:       fwk.ClusterEvent{Resource: fwk.WildCard, ActionType: fwk.UpdateNodeLabel},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel},
 			wantResult:  true,
 		},
 		{
 			name:        "event with resource = '*' matching with coming events carries different actionType",
-			event:       ClusterEvent{Resource: WildCard, ActionType: UpdateNodeLabel},
-			comingEvent: ClusterEvent{Resource: Pod, ActionType: UpdateNodeAllocatable},
+			event:       fwk.ClusterEvent{Resource: fwk.WildCard, ActionType: fwk.UpdateNodeLabel},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeAllocatable},
 			wantResult:  false,
 		},
 		{
 			name:        "event matching with coming events carries '*' resources",
-			event:       ClusterEvent{Resource: Pod, ActionType: UpdateNodeLabel},
-			comingEvent: ClusterEvent{Resource: WildCard, ActionType: UpdateNodeLabel},
+			event:       fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.WildCard, ActionType: fwk.UpdateNodeLabel},
 			wantResult:  false,
+		},
+		{
+			name:        "event with resource = '*' matching with coming events carrying a too broad actionType",
+			event:       fwk.ClusterEvent{Resource: fwk.WildCard, ActionType: fwk.UpdateNodeLabel},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.Update},
+			wantResult:  false,
+		},
+		{
+			name:        "event with resource = '*' matching with coming events carrying a more specific actionType",
+			event:       fwk.ClusterEvent{Resource: fwk.WildCard, ActionType: fwk.Update},
+			comingEvent: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.UpdateNodeLabel},
+			wantResult:  true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.event.Match(tc.comingEvent)
+			got := MatchClusterEvents(tc.event, tc.comingEvent)
 			if got != tc.wantResult {
 				t.Fatalf("unexpected result")
 			}
@@ -1672,5 +2171,355 @@ func TestNodeInfoKMetadata(t *testing.T) {
 	// which becomes an empty string during output formatting.
 	if !strings.Contains(output, `Some NodeInfo slice nodes=["","<no node>","","worker"]`) {
 		tCtx.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
+func TestUpdateUsedPorts_PodAdd(t *testing.T) {
+	testCases := []struct {
+		ports HostPortInfo
+		pod   *v1.Pod
+		want  HostPortInfo
+	}{
+		{
+			ports: HostPortInfo{},
+			pod:   nil,
+			want:  HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: nil,
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+					ProtocolPort{"TCP", 8002}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{},
+			pod: st.MakePod().
+				InitContainerPort(false /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(false /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{},
+			pod: st.MakePod().
+				InitContainerPort(true /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(true /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(true /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+					ProtocolPort{"TCP", 8002}: struct{}{},
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		ni := NodeInfo{UsedPorts: tc.ports}
+		ni.updateUsedPorts(tc.pod, true)
+		if diff := cmp.Diff(tc.want, ni.UsedPorts); diff != "" {
+			t.Errorf("updateUsedPorts() unexpected diff (-want, +got):\n%s", diff)
+		}
+	}
+}
+
+func TestUpdateUsedPorts_PodRemove(t *testing.T) {
+	testCases := []struct {
+		ports HostPortInfo
+		pod   *v1.Pod
+		want  HostPortInfo
+	}{
+		{
+			ports: HostPortInfo{},
+			pod:   nil,
+			want:  HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: nil,
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+					ProtocolPort{"TCP", 8002}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				ContainerPort([]v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(false /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(true /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8001,
+						HostPort:      8001,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(true /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+		{
+			ports: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+					ProtocolPort{"TCP", 8002}: struct{}{},
+				},
+			},
+			pod: st.MakePod().
+				InitContainerPort(true /* sidecar */, []v1.ContainerPort{
+					{
+						ContainerPort: 8002,
+						HostPort:      8002,
+						Protocol:      v1.ProtocolTCP,
+					}}).
+				Obj(),
+			want: HostPortInfo{
+				"0.0.0.0": {
+					ProtocolPort{"TCP", 8001}: struct{}{},
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		ni := NodeInfo{UsedPorts: tc.ports}
+		ni.updateUsedPorts(tc.pod, false)
+		if diff := cmp.Diff(tc.want, ni.UsedPorts); diff != "" {
+			t.Errorf("updateUsedPorts() unexpected diff (-want, +got):\n%s", diff)
+		}
 	}
 }

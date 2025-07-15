@@ -25,11 +25,11 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/util/certificate/csr"
 	"k8s.io/kubernetes/pkg/apis/admissionregistration"
@@ -46,6 +46,7 @@ import (
 	nodeapi "k8s.io/kubernetes/pkg/apis/node"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/apis/rbac"
+	resourceapis "k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/apis/scheduling"
 	"k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/apis/storagemigration"
@@ -2841,6 +2842,29 @@ func TestPrintJob(t *testing.T) {
 			// Columns: Name, Status, Completions, Duration, Age
 			expected: []metav1.TableRow{{Cells: []interface{}{"job9", "Terminating", "0/1", "", "0s"}}},
 		},
+		{
+			job: batch.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "job10",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(1.9e9)},
+				},
+				Spec: batch.JobSpec{
+					Completions: nil,
+				},
+				Status: batch.JobStatus{
+					Succeeded: 0,
+					Conditions: []batch.JobCondition{
+						{
+							Type:   batch.JobSuccessCriteriaMet,
+							Status: api.ConditionTrue,
+						},
+					},
+				},
+			},
+			options: printers.GenerateOptions{},
+			// Columns: Name, Status, Completions, Duration, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"job10", "SuccessCriteriaMet", "0/1", "", "0s"}}},
+		},
 	}
 
 	for i, test := range tests {
@@ -4557,18 +4581,21 @@ func TestPrintCertificateSigningRequest(t *testing.T) {
 
 func TestPrintReplicationController(t *testing.T) {
 	tests := []struct {
+		name     string
 		rc       api.ReplicationController
 		options  printers.GenerateOptions
 		expected []metav1.TableRow
 	}{
 		// Basic print replication controller without replicas or status.
 		{
+			name: "basic",
 			rc: api.ReplicationController{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "rc1",
 					Namespace: "test-namespace",
 				},
 				Spec: api.ReplicationControllerSpec{
+					Replicas: ptr.To[int32](0),
 					Selector: map[string]string{"a": "b"},
 					Template: &api.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
@@ -4595,13 +4622,14 @@ func TestPrintReplicationController(t *testing.T) {
 		},
 		// Basic print replication controller with replicas; does not print containers or labels
 		{
+			name: "basic with replicas",
 			rc: api.ReplicationController{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "rc1",
 					Namespace: "test-namespace",
 				},
 				Spec: api.ReplicationControllerSpec{
-					Replicas: 5,
+					Replicas: ptr.To[int32](5),
 					Selector: map[string]string{"a": "b"},
 					Template: &api.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
@@ -4632,12 +4660,13 @@ func TestPrintReplicationController(t *testing.T) {
 		},
 		// Generate options: Wide; print containers and labels.
 		{
+			name: "wide",
 			rc: api.ReplicationController{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "rc1",
 				},
 				Spec: api.ReplicationControllerSpec{
-					Replicas: 5,
+					Replicas: ptr.To[int32](5),
 					Selector: map[string]string{"a": "b"},
 					Template: &api.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
@@ -4668,11 +4697,15 @@ func TestPrintReplicationController(t *testing.T) {
 		},
 		{
 			// make sure Bookmark event will not lead a panic
+			name: "no panic",
 			rc: api.ReplicationController{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
 						metav1.InitialEventsAnnotationKey: "true",
 					},
+				},
+				Spec: api.ReplicationControllerSpec{
+					Replicas: ptr.To[int32](0),
 				},
 			},
 			options: printers.GenerateOptions{Wide: true},
@@ -5757,35 +5790,71 @@ func TestPrintLease(t *testing.T) {
 }
 
 func TestPrintPriorityClass(t *testing.T) {
+	preemptNever := api.PreemptNever
+	preemptLowerPriority := api.PreemptLowerPriority
 	tests := []struct {
+		name     string
+		options  printers.GenerateOptions
 		pc       scheduling.PriorityClass
 		expected []metav1.TableRow
 	}{
 		{
+			name: "Test case with PreemptNever policy",
 			pc: scheduling.PriorityClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:              "pc1",
 					CreationTimestamp: metav1.Time{Time: time.Now().Add(1.9e9)},
 				},
-				Value: 1,
+				Value:            1,
+				PreemptionPolicy: &preemptNever,
 			},
 			expected: []metav1.TableRow{{Cells: []interface{}{"pc1", int64(1), bool(false), "0s"}}},
 		},
 		{
+			name: "Test case with PreemptLowerPriority policy",
 			pc: scheduling.PriorityClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:              "pc2",
 					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
 				},
-				Value:         1000000000,
-				GlobalDefault: true,
+				Value:            1000000000,
+				GlobalDefault:    true,
+				PreemptionPolicy: &preemptLowerPriority,
 			},
 			expected: []metav1.TableRow{{Cells: []interface{}{"pc2", int64(1000000000), bool(true), "5m"}}},
+		},
+		{
+			name:    "Test case with PreemptLowerPriority policy and wide output",
+			options: printers.GenerateOptions{Wide: true},
+			pc: scheduling.PriorityClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "pc2",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Value:            1000000000,
+				GlobalDefault:    true,
+				PreemptionPolicy: &preemptLowerPriority,
+			},
+			expected: []metav1.TableRow{{Cells: []interface{}{"pc2", int64(1000000000), bool(true), "5m", string(api.PreemptLowerPriority)}}},
+		},
+		{
+			name:    "Test case without set PreemptLowerPriority policy",
+			options: printers.GenerateOptions{Wide: true},
+			pc: scheduling.PriorityClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "pc2",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Value:            1000000000,
+				GlobalDefault:    true,
+				PreemptionPolicy: nil,
+			},
+			expected: []metav1.TableRow{{Cells: []interface{}{"pc2", int64(1000000000), bool(true), "5m", string("")}}},
 		},
 	}
 
 	for i, test := range tests {
-		rows, err := printPriorityClass(&test.pc, printers.GenerateOptions{})
+		rows, err := printPriorityClass(&test.pc, test.options)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -5793,7 +5862,7 @@ func TestPrintPriorityClass(t *testing.T) {
 			rows[i].Object.Object = nil
 		}
 		if !reflect.DeepEqual(test.expected, rows) {
-			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+			t.Errorf("test case %s: %d mismatch: %s", test.name, i, cmp.Diff(test.expected, rows))
 		}
 	}
 }
@@ -6206,6 +6275,313 @@ func TestPrintFlowSchema(t *testing.T) {
 	}
 }
 
+func TestPrintDeviceClass(t *testing.T) {
+
+	tests := []struct {
+		deviceClass resourceapis.DeviceClass
+		expected    []metav1.TableRow
+	}{
+		{
+			deviceClass: resourceapis.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-deviceclass",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+			},
+			// Columns: Name, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-deviceclass", "5m"}}},
+		},
+		{
+			// test case for Empty creation timestamp that is translated to <unknown>
+			deviceClass: resourceapis.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-deviceclass",
+					CreationTimestamp: metav1.Time{},
+				},
+			},
+			// Columns: Name, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-deviceclass", "<unknown>"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printDeviceClass(&test.deviceClass, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceClaim(t *testing.T) {
+
+	tests := []struct {
+		name          string
+		resourceClaim resourceapis.ResourceClaim
+		expected      []metav1.TableRow
+	}{
+		{
+			name: "ResourceClaim with Pending State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name: "deviceRequest",
+								Exactly: &resourceapis.ExactDeviceRequest{
+									DeviceClassName: "deviceClass",
+									AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+									Count:           1,
+								},
+							},
+						},
+					},
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceclaim", "pending", "5m"}}},
+		},
+		{
+			// test case for Empty creation timestamp that is translated to <unknown>
+			name: "ResourceClaim with Pending State and Empty creation timestamp",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceclaim",
+					CreationTimestamp: metav1.Time{},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name: "deviceRequest",
+								Exactly: &resourceapis.ExactDeviceRequest{
+									DeviceClassName: "deviceClass",
+									AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+									Count:           1,
+								},
+							},
+						},
+					},
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceclaim", "pending", "<unknown>"}}},
+		},
+		{
+			name: "ResourceClaim with Allocated and Reserved State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name: "deviceRequest",
+								Exactly: &resourceapis.ExactDeviceRequest{
+									DeviceClassName: "deviceClass",
+									AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+									Count:           1,
+								},
+							},
+						},
+					},
+				},
+				Status: resourceapis.ResourceClaimStatus{
+					Allocation: &resourceapis.AllocationResult{},
+					ReservedFor: []resourceapis.ResourceClaimConsumerReference{
+						{
+							Resource: "pods",
+							Name:     "pod-test",
+							UID:      types.UID("pod-test"),
+						},
+					},
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceclaim", "allocated,reserved", "5m"}}},
+		},
+		{
+			name: "ResourceClaim with Deleted State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+					DeletionTimestamp: &metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name: "deviceRequest",
+								Exactly: &resourceapis.ExactDeviceRequest{
+									DeviceClassName: "deviceClass",
+									AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+									Count:           1,
+								},
+							},
+						},
+					},
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceclaim", "deleted", "5m"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceClaim(&test.resourceClaim, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceClaimTemplate(t *testing.T) {
+
+	tests := []struct {
+		resourceClaimTemplate resourceapis.ResourceClaimTemplate
+		expected              []metav1.TableRow
+	}{
+		{
+			resourceClaimTemplate: resourceapis.ResourceClaimTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceclaimtemplate",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: resourceapis.ResourceClaimTemplateSpec{
+					Spec: resourceapis.ResourceClaimSpec{
+						Devices: resourceapis.DeviceClaim{
+							Requests: []resourceapis.DeviceRequest{{
+								Name: "test-deviceRequest",
+								Exactly: &resourceapis.ExactDeviceRequest{
+									DeviceClassName: "deviceClassName",
+									AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+									Count:           1,
+								},
+							}},
+						},
+					},
+				},
+			},
+			// Columns: Name, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceclaimtemplate", "5m"}}},
+		},
+		{
+			// test case for Empty creation timestamp that is translated to <unknown>
+			resourceClaimTemplate: resourceapis.ResourceClaimTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceclaimtemplate",
+					CreationTimestamp: metav1.Time{},
+				},
+				Spec: resourceapis.ResourceClaimTemplateSpec{
+					Spec: resourceapis.ResourceClaimSpec{
+						Devices: resourceapis.DeviceClaim{
+							Requests: []resourceapis.DeviceRequest{{
+								Name: "test-deviceRequest",
+								Exactly: &resourceapis.ExactDeviceRequest{
+									DeviceClassName: "deviceClassName",
+									AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+									Count:           1,
+								},
+							}},
+						},
+					},
+				},
+			},
+			// Columns: Name, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceclaimtemplate", "<unknown>"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceClaimTemplate(&test.resourceClaimTemplate, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceSlice(t *testing.T) {
+
+	tests := []struct {
+		resourceSlice resourceapis.ResourceSlice
+		expected      []metav1.TableRow
+	}{
+		{
+			resourceSlice: resourceapis.ResourceSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceslice",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: resourceapis.ResourceSliceSpec{
+					NodeName: ptr.To("nodeName"),
+					Driver:   "driverName",
+					Pool: resourceapis.ResourcePool{
+						Name:               "poolName",
+						ResourceSliceCount: 1,
+					},
+				},
+			},
+			// Columns: Name, Node, Driver, Pool, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceslice", "nodeName", "driverName", "poolName", "5m"}}},
+		},
+		{
+			resourceSlice: resourceapis.ResourceSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourceslice",
+					CreationTimestamp: metav1.Time{},
+				},
+				Spec: resourceapis.ResourceSliceSpec{
+					NodeName: ptr.To("nodeName"),
+					Driver:   "driverName",
+					Pool: resourceapis.ResourcePool{
+						Name:               "poolName",
+						ResourceSliceCount: 1,
+					},
+				},
+			},
+			// Columns: Name, Node, Driver, Pool, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"test-resourceslice", "nodeName", "driverName", "poolName", "<unknown>"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceSlice(&test.resourceSlice, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
 func TestPrintPriorityLevelConfiguration(t *testing.T) {
 	tests := []struct {
 		pl       flowcontrol.PriorityLevelConfiguration
@@ -6442,6 +6818,183 @@ func TestPrintScale(t *testing.T) {
 	}
 }
 
+func TestPrintClusterTrustBundle(t *testing.T) {
+	tests := []struct {
+		bundle   certificates.ClusterTrustBundle
+		options  printers.GenerateOptions
+		expected []metav1.TableRow
+	}{
+		{
+			bundle: certificates.ClusterTrustBundle{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-cluster-trust-bundle",
+				},
+				Spec: certificates.ClusterTrustBundleSpec{
+					SignerName: "test-signer-name",
+				},
+			},
+			expected: []metav1.TableRow{
+				{
+					Cells: []interface{}{"test-cluster-trust-bundle", "test-signer-name"},
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printClusterTrustBundle(&test.bundle, test.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintValidatingAdmissionPolicyBinding(t *testing.T) {
+	tests := []struct {
+		validatingAdmissionPolicyBinding admissionregistration.ValidatingAdmissionPolicyBinding
+		options                          printers.GenerateOptions
+		expected                         []metav1.TableRow
+	}{
+		{
+			validatingAdmissionPolicyBinding: admissionregistration.ValidatingAdmissionPolicyBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "config",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: admissionregistration.ValidatingAdmissionPolicyBindingSpec{
+					PolicyName: "test-scale.example.com",
+					ParamRef: &admissionregistration.ParamRef{
+						Name:                    "test-scale-setting.example.com",
+						ParameterNotFoundAction: ptr.To(admissionregistration.DenyAction),
+					},
+				},
+			},
+			expected: []metav1.TableRow{
+				{
+					Cells: []interface{}{"config", "test-scale.example.com", "*/test-scale-setting.example.com", "5m"},
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printValidatingAdmissionPolicyBinding(&test.validatingAdmissionPolicyBinding, test.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintLeaseCandidate(t *testing.T) {
+	tests := []struct {
+		leaseCandidate coordination.LeaseCandidate
+		options        printers.GenerateOptions
+		expected       []metav1.TableRow
+	}{
+		{
+			leaseCandidate: coordination.LeaseCandidate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-lease",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: coordination.LeaseCandidateSpec{
+					BinaryVersion:    "test-binary-version",
+					EmulationVersion: "test-emulation-version",
+					LeaseName:        "test-lease-name",
+				},
+			},
+			expected: []metav1.TableRow{
+				{
+					Cells: []interface{}{"test-lease", "test-lease-name", "test-binary-version", "test-emulation-version", "5m"},
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printLeaseCandidate(&test.leaseCandidate, test.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceQuota(t *testing.T) {
+	tests := []struct {
+		resourceQuota api.ResourceQuota
+		options       printers.GenerateOptions
+		expected      []metav1.TableRow
+	}{
+		{
+			resourceQuota: api.ResourceQuota{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test-resourcequota",
+					CreationTimestamp: metav1.Time{Time: time.Now().Add(-3e11)},
+				},
+				Spec: api.ResourceQuotaSpec{},
+				Status: api.ResourceQuotaStatus{
+					Used: api.ResourceList{
+						api.ResourceCPU:                    resource.MustParse("1"),
+						api.ResourceMemory:                 resource.MustParse("1Gi"),
+						api.ResourcePods:                   resource.MustParse("1"),
+						api.ResourceServices:               resource.MustParse("1"),
+						api.ResourceReplicationControllers: resource.MustParse("1"),
+						api.ResourceQuotas:                 resource.MustParse("1"),
+						api.ResourceLimitsCPU:              resource.MustParse("2"),
+						api.ResourceLimitsMemory:           resource.MustParse("2Gi"),
+					},
+					Hard: api.ResourceList{
+						api.ResourceCPU:                    resource.MustParse("100"),
+						api.ResourceMemory:                 resource.MustParse("4Gi"),
+						api.ResourcePods:                   resource.MustParse("10"),
+						api.ResourceServices:               resource.MustParse("10"),
+						api.ResourceReplicationControllers: resource.MustParse("10"),
+						api.ResourceQuotas:                 resource.MustParse("1"),
+						api.ResourceLimitsCPU:              resource.MustParse("200"),
+						api.ResourceLimitsMemory:           resource.MustParse("8Gi"),
+					},
+				},
+			},
+			expected: []metav1.TableRow{
+				{
+					Cells: []interface{}{"test-resourcequota", "cpu: 1/100, memory: 1Gi/4Gi, pods: 1/10, replicationcontrollers: 1/10, resourcequotas: 1/1, services: 1/10", "limits.cpu: 2/200, limits.memory: 2Gi/8Gi", "5m"},
+				},
+			},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceQuota(&test.resourceQuota, test.options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
 func TestTableRowDeepCopyShouldNotPanic(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -6571,6 +7124,18 @@ func TestTableRowDeepCopyShouldNotPanic(t *testing.T) {
 			name: "ValidatingAdmissionPolicyBinding",
 			printer: func() ([]metav1.TableRow, error) {
 				return printValidatingAdmissionPolicyBinding(&admissionregistration.ValidatingAdmissionPolicyBinding{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "MutatingAdmissionPolicy",
+			printer: func() ([]metav1.TableRow, error) {
+				return printMutatingAdmissionPolicy(&admissionregistration.MutatingAdmissionPolicy{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "MutatingAdmissionPolicyBinding",
+			printer: func() ([]metav1.TableRow, error) {
+				return printMutatingAdmissionPolicyBinding(&admissionregistration.MutatingAdmissionPolicyBinding{}, printers.GenerateOptions{})
 			},
 		},
 		{
@@ -6733,6 +7298,42 @@ func TestTableRowDeepCopyShouldNotPanic(t *testing.T) {
 			name: "Status",
 			printer: func() ([]metav1.TableRow, error) {
 				return printStatus(&metav1.Status{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "DeviceClass",
+			printer: func() ([]metav1.TableRow, error) {
+				return printDeviceClass(&resourceapis.DeviceClass{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ResourceClaim",
+			printer: func() ([]metav1.TableRow, error) {
+				return printResourceClaim(&resourceapis.ResourceClaim{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ResourceClaimTemplate",
+			printer: func() ([]metav1.TableRow, error) {
+				return printResourceClaimTemplate(&resourceapis.ResourceClaimTemplate{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ResourceSlice",
+			printer: func() ([]metav1.TableRow, error) {
+				return printResourceSlice(&resourceapis.ResourceSlice{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "LeaseCandidate",
+			printer: func() ([]metav1.TableRow, error) {
+				return printLeaseCandidate(&coordination.LeaseCandidate{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ClusterTrustBundle",
+			printer: func() ([]metav1.TableRow, error) {
+				return printClusterTrustBundle(&certificates.ClusterTrustBundle{}, printers.GenerateOptions{})
 			},
 		},
 	}

@@ -20,8 +20,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pkg/errors"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	versionutil "k8s.io/apimachinery/pkg/util/version"
 	pkgversion "k8s.io/apimachinery/pkg/version"
@@ -31,6 +29,7 @@ import (
 
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/errors"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/image"
 )
 
@@ -72,7 +71,7 @@ func (g *KubeVersionGetter) ClusterVersion() (string, *versionutil.Version, erro
 	// common.go#getClient()
 	// The problem here is that during upgrade dry-run client reactors are backed by a dynamic client
 	// via NewClientBackedDryRunGetterFromKubeconfig() and for GetActions there seems to be no analog to
-	// Discovery().Serverversion() resource for a dynamic client(?).
+	// Discovery().ServerVersion() resource for a dynamic client(?).
 	fakeclientDiscovery, ok := g.client.Discovery().(*fakediscovery.FakeDiscovery)
 	if ok {
 		clusterVersionInfo = fakeclientDiscovery.FakedServerVersion

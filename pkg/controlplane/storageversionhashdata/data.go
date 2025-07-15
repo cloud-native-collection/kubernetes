@@ -62,6 +62,8 @@ var GVRToStorageVersionHash = map[string]string{
 	"networking.k8s.io/v1/networkpolicies":                              "YpfwF18m1G8=",
 	"networking.k8s.io/v1/ingresses":                                    "39NQlfNR+bo=",
 	"networking.k8s.io/v1/ingressclasses":                               "l/iqIbDgFyQ=",
+	"networking.k8s.io/v1/ipaddresses":                                  "3f/plJFChNE=",
+	"networking.k8s.io/v1/servicecidrs":                                 "gNLvruQhW2g=",
 	"node.k8s.io/v1/runtimeclasses":                                     "WQTu1GL3T2Q=",
 	"policy/v1/poddisruptionbudgets":                                    "EVWiDmWqyJw=",
 	"rbac.authorization.k8s.io/v1/clusterrolebindings":                  "48tpQ8gZHFc=",
@@ -84,8 +86,6 @@ var GVRToStorageVersionHash = map[string]string{
 	"admissionregistration.k8s.io/v1/validatingadmissionpolicies":       "6OxvlMmQ6is=",
 	"admissionregistration.k8s.io/v1/validatingadmissionpolicybindings": "v9715VZqakg=",
 	"events.k8s.io/v1/events":                                           "r2yiGXH7wu8=",
-	"flowcontrol.apiserver.k8s.io/v1beta3/flowschemas":                  "GJVAJZSZBIw=",
-	"flowcontrol.apiserver.k8s.io/v1beta3/prioritylevelconfigurations":  "Kir5PVfvNeI=",
 	"flowcontrol.apiserver.k8s.io/v1/flowschemas":                       "GJVAJZSZBIw=",
 	"flowcontrol.apiserver.k8s.io/v1/prioritylevelconfigurations":       "Kir5PVfvNeI=",
 }

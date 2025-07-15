@@ -19,6 +19,7 @@ package options
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
@@ -77,23 +78,6 @@ func validateNodeSelectorAuthorizationFeature() []error {
 	return nil
 }
 
-func validateDRAControlPlaneControllerFeature() []error {
-	if utilfeature.DefaultFeatureGate.Enabled(features.DRAControlPlaneController) && !utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
-		return []error{fmt.Errorf("DRAControlPlaneController feature requires DynamicResourceAllocation feature to be enabled")}
-	}
-	return nil
-}
-
-func validateUnknownVersionInteroperabilityProxyFeature() []error {
-	if utilfeature.DefaultFeatureGate.Enabled(features.UnknownVersionInteroperabilityProxy) {
-		if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.StorageVersionAPI) {
-			return nil
-		}
-		return []error{fmt.Errorf("UnknownVersionInteroperabilityProxy feature requires StorageVersionAPI feature flag to be enabled")}
-	}
-	return nil
-}
-
 func validateUnknownVersionInteroperabilityProxyFlags(options *Options) []error {
 	err := []error{}
 	if !utilfeature.DefaultFeatureGate.Enabled(features.UnknownVersionInteroperabilityProxy) {
@@ -108,6 +92,40 @@ func validateUnknownVersionInteroperabilityProxyFlags(options *Options) []error 
 		}
 	}
 	return err
+}
+
+var abstractSocketRegex = regexp.MustCompile(`^@([a-zA-Z0-9_-]+\.)*[a-zA-Z0-9_-]+$`)
+
+func validateServiceAccountTokenSigningConfig(options *Options) []error {
+	if len(options.ServiceAccountSigningEndpoint) == 0 {
+		return nil
+	}
+
+	errors := []error{}
+
+	if len(options.ServiceAccountSigningKeyFile) != 0 || len(options.Authentication.ServiceAccounts.KeyFiles) != 0 {
+		errors = append(errors, fmt.Errorf("can't set `--service-account-signing-key-file` and/or `--service-account-key-file` with `--service-account-signing-endpoint` (They are mutually exclusive)"))
+	}
+	if !utilfeature.DefaultFeatureGate.Enabled(features.ExternalServiceAccountTokenSigner) {
+		errors = append(errors, fmt.Errorf("setting `--service-account-signing-endpoint` requires enabling ExternalServiceAccountTokenSigner feature gate"))
+	}
+	// Ensure ServiceAccountSigningEndpoint is a valid abstract socket name if prefixed with '@'.
+	if strings.HasPrefix(options.ServiceAccountSigningEndpoint, "@") && !abstractSocketRegex.MatchString(options.ServiceAccountSigningEndpoint) {
+		errors = append(errors, fmt.Errorf("invalid value %q passed for `--service-account-signing-endpoint`, when prefixed with @ must be a valid abstract socket name", options.ServiceAccountSigningEndpoint))
+	}
+
+	return errors
+}
+
+func validateCoordinatedLeadershipFlags(options *Options) []error {
+	var errs []error
+	if options.CoordinatedLeadershipLeaseDuration <= options.CoordinatedLeadershipRenewDeadline {
+		errs = append(errs, fmt.Errorf("--coordinated-leadership-lease-duration must be greater than --coordinated-leadership-renew-deadline"))
+	}
+	if options.CoordinatedLeadershipRenewDeadline <= options.CoordinatedLeadershipRetryPeriod {
+		errs = append(errs, fmt.Errorf("--coordinated-leadership-renew-deadline must be greater than --coordinated-leadership-retry-period"))
+	}
+	return errs
 }
 
 // Validate checks Options and return a slice of found errs.
@@ -125,10 +143,10 @@ func (s *Options) Validate() []error {
 	errs = append(errs, s.APIEnablement.Validate(legacyscheme.Scheme, apiextensionsapiserver.Scheme, aggregatorscheme.Scheme)...)
 	errs = append(errs, validateTokenRequest(s)...)
 	errs = append(errs, s.Metrics.Validate()...)
-	errs = append(errs, validateUnknownVersionInteroperabilityProxyFeature()...)
 	errs = append(errs, validateUnknownVersionInteroperabilityProxyFlags(s)...)
 	errs = append(errs, validateNodeSelectorAuthorizationFeature()...)
-	errs = append(errs, validateDRAControlPlaneControllerFeature()...)
+	errs = append(errs, validateServiceAccountTokenSigningConfig(s)...)
+	errs = append(errs, validateCoordinatedLeadershipFlags(s)...)
 
 	return errs
 }

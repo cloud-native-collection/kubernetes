@@ -22,21 +22,23 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pkg/errors"
-
+	nodeutil "k8s.io/component-helpers/node/util"
 	"k8s.io/klog/v2"
 
-	nodeutil "k8s.io/component-helpers/node/util"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	"k8s.io/kubernetes/cmd/kubeadm/app/features"
 	"k8s.io/kubernetes/cmd/kubeadm/app/images"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/errors"
 )
 
 type kubeletFlagsOpts struct {
 	nodeRegOpts              *kubeadmapi.NodeRegistrationOptions
 	pauseImage               string
 	registerTaintsUsingFlags bool
+	// TODO: remove this field once the feature NodeLocalCRISocket is GA.
+	criSocket string
 }
 
 // GetNodeNameAndHostname obtains the name for this Node using the following precedence
@@ -64,9 +66,19 @@ func WriteKubeletDynamicEnvFile(cfg *kubeadmapi.ClusterConfiguration, nodeReg *k
 		nodeRegOpts:              nodeReg,
 		pauseImage:               images.GetPauseImage(cfg),
 		registerTaintsUsingFlags: registerTaintsUsingFlags,
+		criSocket:                nodeReg.CRISocket,
+	}
+
+	if features.Enabled(cfg.FeatureGates, features.NodeLocalCRISocket) {
+		flagOpts.criSocket = ""
 	}
 	stringMap := buildKubeletArgs(flagOpts)
-	argList := kubeadmutil.ArgumentsToCommand(stringMap, nodeReg.KubeletExtraArgs)
+	return WriteKubeletArgsToFile(stringMap, nodeReg.KubeletExtraArgs, kubeletDir)
+}
+
+// WriteKubeletArgsToFile writes combined kubelet flags to KubeletEnvFile file in kubeletDir.
+func WriteKubeletArgsToFile(kubeletFlags, overridesFlags []kubeadmapi.Arg, kubeletDir string) error {
+	argList := kubeadmutil.ArgumentsToCommand(kubeletFlags, overridesFlags)
 	envFileContent := fmt.Sprintf("%s=%q\n", constants.KubeletEnvFileVariableName, strings.Join(argList, " "))
 
 	return writeKubeletFlagBytesToDisk([]byte(envFileContent), kubeletDir)
@@ -76,7 +88,9 @@ func WriteKubeletDynamicEnvFile(cfg *kubeadmapi.ClusterConfiguration, nodeReg *k
 // that are common to both Linux and Windows
 func buildKubeletArgsCommon(opts kubeletFlagsOpts) []kubeadmapi.Arg {
 	kubeletFlags := []kubeadmapi.Arg{}
-	kubeletFlags = append(kubeletFlags, kubeadmapi.Arg{Name: "container-runtime-endpoint", Value: opts.nodeRegOpts.CRISocket})
+	if opts.criSocket != "" {
+		kubeletFlags = append(kubeletFlags, kubeadmapi.Arg{Name: "container-runtime-endpoint", Value: opts.criSocket})
+	}
 
 	// This flag passes the pod infra container image (e.g. "pause" image) to the kubelet
 	// and prevents its garbage collection
@@ -124,4 +138,48 @@ func writeKubeletFlagBytesToDisk(b []byte, kubeletDir string) error {
 // that should be given to the local kubelet daemon.
 func buildKubeletArgs(opts kubeletFlagsOpts) []kubeadmapi.Arg {
 	return buildKubeletArgsCommon(opts)
+}
+
+// ReadKubeletDynamicEnvFile reads the kubelet dynamic environment flags file a slice of strings.
+func ReadKubeletDynamicEnvFile(kubeletEnvFilePath string) ([]string, error) {
+	data, err := os.ReadFile(kubeletEnvFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Trim any surrounding whitespace.
+	content := strings.TrimSpace(string(data))
+
+	// Check if the content starts with the expected kubelet environment variable prefix.
+	const prefix = constants.KubeletEnvFileVariableName + "="
+	if !strings.HasPrefix(content, prefix) {
+		return nil, errors.Errorf("the file %q does not contain the  expected prefix %q", kubeletEnvFilePath, prefix)
+	}
+
+	// Trim the prefix and the surrounding double quotes.
+	flags := strings.TrimPrefix(content, prefix)
+	flags = strings.Trim(flags, `"`)
+
+	// Split the flags string by whitespace to get individual arguments.
+	trimmedFlags := strings.Fields(flags)
+	if len(trimmedFlags) == 0 {
+		return nil, errors.Errorf("no flags found in file %q", kubeletEnvFilePath)
+	}
+
+	var updatedFlags []string
+	for i := 0; i < len(trimmedFlags); i++ {
+		flag := trimmedFlags[i]
+		if strings.Contains(flag, "=") {
+			// If the flag contains '=', add it directly.
+			updatedFlags = append(updatedFlags, flag)
+		} else if i+1 < len(trimmedFlags) {
+			// If no '=' is found, combine the flag with the next item as its value.
+			combinedFlag := flag + "=" + trimmedFlags[i+1]
+			updatedFlags = append(updatedFlags, combinedFlag)
+			// Skip the next item as it has been used as the value.
+			i++
+		}
+	}
+
+	return updatedFlags, nil
 }

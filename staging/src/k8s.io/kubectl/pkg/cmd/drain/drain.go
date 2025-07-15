@@ -243,7 +243,7 @@ func (o *DrainCmdOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args [
 	var err error
 
 	if len(args) == 0 && !cmd.Flags().Changed("selector") {
-		return cmdutil.UsageErrorf(cmd, fmt.Sprintf("USAGE: %s [flags]", cmd.Use))
+		return cmdutil.UsageErrorf(cmd, "USAGE: %s [flags]", cmd.Use)
 	}
 	if len(args) > 0 && len(o.drainer.Selector) > 0 {
 		return cmdutil.UsageErrorf(cmd, "error: cannot specify both a node name and a --selector option")
@@ -326,7 +326,7 @@ func (o *DrainCmdOptions) RunDrain() error {
 		return err
 	}
 
-	drainedNodes := sets.NewString()
+	drainedNodes := sets.New[string]()
 	var fatal []error
 
 	remainingNodes := []string{}

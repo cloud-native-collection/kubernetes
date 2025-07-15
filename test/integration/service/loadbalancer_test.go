@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,13 +34,10 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	servicecontroller "k8s.io/cloud-provider/controllers/service"
 	fakecloud "k8s.io/cloud-provider/fake"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	controllersmetrics "k8s.io/component-base/metrics/prometheus/controllers"
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
-	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/test/integration/framework"
 	"k8s.io/utils/net"
-	utilpointer "k8s.io/utils/pointer"
 	"k8s.io/utils/ptr"
 )
 
@@ -63,7 +61,7 @@ func Test_ServiceLoadBalancerDisableAllocateNodePorts(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
-			AllocateLoadBalancerNodePorts: utilpointer.Bool(false),
+			AllocateLoadBalancerNodePorts: ptr.To(false),
 			Ports: []corev1.ServicePort{{
 				Port: int32(80),
 			}},
@@ -122,7 +120,7 @@ func Test_ServiceUpdateLoadBalancerDisableAllocateNodePorts(t *testing.T) {
 	}
 
 	service.Spec.Type = corev1.ServiceTypeLoadBalancer
-	service.Spec.AllocateLoadBalancerNodePorts = utilpointer.Bool(false)
+	service.Spec.AllocateLoadBalancerNodePorts = ptr.To(false)
 	service, err = client.CoreV1().Services(ns.Name).Update(context.TODO(), service, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Error updating test service: %v", err)
@@ -153,7 +151,7 @@ func Test_ServiceLoadBalancerEnableThenDisableAllocatedNodePorts(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
-			AllocateLoadBalancerNodePorts: utilpointer.Bool(true),
+			AllocateLoadBalancerNodePorts: ptr.To(true),
 			Ports: []corev1.ServicePort{{
 				Port: int32(80),
 			}},
@@ -172,7 +170,7 @@ func Test_ServiceLoadBalancerEnableThenDisableAllocatedNodePorts(t *testing.T) {
 		t.Error("expected node ports but found none")
 	}
 
-	service.Spec.AllocateLoadBalancerNodePorts = utilpointer.Bool(false)
+	service.Spec.AllocateLoadBalancerNodePorts = ptr.To(false)
 	service, err = client.CoreV1().Services(ns.Name).Update(context.TODO(), service, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Error updating test service: %v", err)
@@ -203,7 +201,7 @@ func Test_ServiceLoadBalancerDisableAllocatedNodePort(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
-			AllocateLoadBalancerNodePorts: utilpointer.Bool(true),
+			AllocateLoadBalancerNodePorts: ptr.To(true),
 			Ports: []corev1.ServicePort{{
 				Port: int32(80),
 			}},
@@ -222,7 +220,7 @@ func Test_ServiceLoadBalancerDisableAllocatedNodePort(t *testing.T) {
 		t.Error("expected node ports but found none")
 	}
 
-	service.Spec.AllocateLoadBalancerNodePorts = utilpointer.Bool(false)
+	service.Spec.AllocateLoadBalancerNodePorts = ptr.To(false)
 	service.Spec.Ports[0].NodePort = 0
 	service, err = client.CoreV1().Services(ns.Name).Update(context.TODO(), service, metav1.UpdateOptions{})
 	if err != nil {
@@ -254,7 +252,7 @@ func Test_ServiceLoadBalancerDisableAllocatedNodePorts(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
-			AllocateLoadBalancerNodePorts: utilpointer.Bool(true),
+			AllocateLoadBalancerNodePorts: ptr.To(true),
 			Ports: []corev1.ServicePort{{
 				Name: "np-1",
 				Port: int32(80),
@@ -277,7 +275,7 @@ func Test_ServiceLoadBalancerDisableAllocatedNodePorts(t *testing.T) {
 		t.Error("expected node ports but found none")
 	}
 
-	service.Spec.AllocateLoadBalancerNodePorts = utilpointer.Bool(false)
+	service.Spec.AllocateLoadBalancerNodePorts = ptr.To(false)
 	service.Spec.Ports[0].NodePort = 0
 	service, err = client.CoreV1().Services(ns.Name).Update(context.TODO(), service, metav1.UpdateOptions{})
 	if err != nil {
@@ -312,7 +310,7 @@ func Test_ServiceLoadBalancerDisableAllocatedNodePortsByPatch(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
-			AllocateLoadBalancerNodePorts: utilpointer.Bool(true),
+			AllocateLoadBalancerNodePorts: ptr.To(true),
 			Ports: []corev1.ServicePort{{
 				Name: "np-1",
 				Port: int32(80),
@@ -336,7 +334,7 @@ func Test_ServiceLoadBalancerDisableAllocatedNodePortsByPatch(t *testing.T) {
 	}
 
 	clone := service.DeepCopy()
-	clone.Spec.AllocateLoadBalancerNodePorts = utilpointer.Bool(false)
+	clone.Spec.AllocateLoadBalancerNodePorts = ptr.To(false)
 	clone.Spec.Ports[0].NodePort = 0
 
 	oldData, err := json.Marshal(service)
@@ -385,7 +383,7 @@ func Test_ServiceLoadBalancerDisableThenEnableAllocatedNodePorts(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
-			AllocateLoadBalancerNodePorts: utilpointer.Bool(false),
+			AllocateLoadBalancerNodePorts: ptr.To(false),
 			Ports: []corev1.ServicePort{{
 				Port: int32(80),
 			}},
@@ -404,7 +402,7 @@ func Test_ServiceLoadBalancerDisableThenEnableAllocatedNodePorts(t *testing.T) {
 		t.Error("not expected node ports but found one")
 	}
 
-	service.Spec.AllocateLoadBalancerNodePorts = utilpointer.Bool(true)
+	service.Spec.AllocateLoadBalancerNodePorts = ptr.To(true)
 	service, err = client.CoreV1().Services(ns.Name).Update(context.TODO(), service, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("Error updating test service: %v", err)
@@ -455,7 +453,7 @@ func Test_ServiceLoadBalancerEnableLoadBalancerClass(t *testing.T) {
 			Ports: []corev1.ServicePort{{
 				Port: int32(80),
 			}},
-			LoadBalancerClass: utilpointer.String("test.com/test"),
+			LoadBalancerClass: ptr.To("test.com/test"),
 		},
 	}
 
@@ -501,7 +499,7 @@ func Test_SetLoadBalancerClassThenUpdateLoadBalancerClass(t *testing.T) {
 			Ports: []corev1.ServicePort{{
 				Port: int32(80),
 			}},
-			LoadBalancerClass: utilpointer.String("test.com/test"),
+			LoadBalancerClass: ptr.To("test.com/test"),
 		},
 	}
 
@@ -510,7 +508,7 @@ func Test_SetLoadBalancerClassThenUpdateLoadBalancerClass(t *testing.T) {
 		t.Fatalf("Error creating test service: %v", err)
 	}
 
-	service.Spec.LoadBalancerClass = utilpointer.String("test.com/update")
+	service.Spec.LoadBalancerClass = ptr.To("test.com/update")
 	_, err = client.CoreV1().Services(ns.Name).Update(ctx, service, metav1.UpdateOptions{})
 	if err == nil {
 		t.Fatal("Error: updating test service load balancer class should throw error, field is immutable")
@@ -560,7 +558,7 @@ func Test_UpdateLoadBalancerWithLoadBalancerClass(t *testing.T) {
 		t.Fatalf("Error creating test service: %v", err)
 	}
 
-	service.Spec.LoadBalancerClass = utilpointer.String("test.com/test")
+	service.Spec.LoadBalancerClass = ptr.To("test.com/test")
 	_, err = client.CoreV1().Services(ns.Name).Update(ctx, service, metav1.UpdateOptions{})
 	if err == nil {
 		t.Fatal("Error: updating test service load balancer class should throw error, field is immutable")
@@ -707,8 +705,12 @@ func Test_ServiceLoadBalancerIPMode(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run("", func(t *testing.T) {
-			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.LoadBalancerIPMode, tc.ipModeEnabled)
-			server := kubeapiservertesting.StartTestServerOrDie(t, nil, framework.DefaultTestServerFlags(), framework.SharedEtcd())
+			serverFlags := framework.DefaultTestServerFlags()
+			if !tc.ipModeEnabled {
+				serverFlags = append(serverFlags, "--emulated-version=1.31")
+			}
+			serverFlags = append(serverFlags, fmt.Sprintf("--feature-gates=LoadBalancerIPMode=%v", tc.ipModeEnabled))
+			server := kubeapiservertesting.StartTestServerOrDie(t, nil, serverFlags, framework.SharedEtcd())
 			defer server.TearDownFn()
 
 			client, err := clientset.NewForConfig(server.ClientConfig)

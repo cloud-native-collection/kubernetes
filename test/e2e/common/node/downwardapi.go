@@ -24,10 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enetwork "k8s.io/kubernetes/test/e2e/framework/network"
 	e2epodoutput "k8s.io/kubernetes/test/e2e/framework/pod/output"
-	"k8s.io/kubernetes/test/e2e/nodefeature"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
 
@@ -90,6 +90,32 @@ var _ = SIGDescribe("Downward API", func() {
 	   Description: Downward API MUST expose Pod and Container fields as environment variables. Specify host IP as environment variable in the Pod Spec are visible at runtime in the container.
 	*/
 	framework.ConformanceIt("should provide host IP as an env var", f.WithNodeConformance(), func(ctx context.Context) {
+		podName := "downward-api-" + string(uuid.NewUUID())
+		env := []v1.EnvVar{
+			{
+				Name: "HOST_IP",
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						APIVersion: "v1",
+						FieldPath:  "status.hostIP",
+					},
+				},
+			},
+		}
+
+		expectations := []string{
+			fmt.Sprintf("HOST_IP=%v|%v", e2enetwork.RegexIPv4, e2enetwork.RegexIPv6),
+		}
+
+		testDownwardAPI(ctx, f, podName, env, expectations)
+	})
+
+	/*
+	   Release: v1.32
+	   Testname: DownwardAPI, environment for hostIPs
+	   Description: Downward API MUST expose Pod and Container fields as environment variables. Specify hostIPs as environment variable in the Pod Spec are visible at runtime in the container.
+	*/
+	framework.ConformanceIt("should provide hostIPs as an env var", f.WithNodeConformance(), func(ctx context.Context) {
 		podName := "downward-api-" + string(uuid.NewUUID())
 		env := []v1.EnvVar{
 			{
@@ -288,7 +314,7 @@ var _ = SIGDescribe("Downward API", func() {
 	})
 })
 
-var _ = SIGDescribe("Downward API", framework.WithSerial(), framework.WithDisruptive(), nodefeature.DownwardAPIHugePages, func() {
+var _ = SIGDescribe("Downward API", framework.WithSerial(), framework.WithDisruptive(), feature.DownwardAPIHugePages, func() {
 	f := framework.NewDefaultFramework("downward-api")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 

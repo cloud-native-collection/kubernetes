@@ -18,8 +18,14 @@ package options
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"os"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -29,6 +35,7 @@ import (
 	"github.com/spf13/pflag"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/apis/apiserver"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
@@ -43,10 +50,9 @@ import (
 	"k8s.io/component-base/featuregate"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
-	kubefeatures "k8s.io/kubernetes/pkg/features"
 	kubeauthenticator "k8s.io/kubernetes/pkg/kubeapiserver/authenticator"
 	"k8s.io/kubernetes/pkg/serviceaccount"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 func TestAuthenticationValidate(t *testing.T) {
@@ -59,6 +65,7 @@ func TestAuthenticationValidate(t *testing.T) {
 		testAuthenticationConfigFile      string
 		expectErr                         string
 		enabledFeatures, disabledFeatures []featuregate.Feature
+		emulationVersion                  *version.Version
 	}{
 		{
 			name: "test when OIDC and ServiceAccounts are nil",
@@ -66,11 +73,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when OIDC and ServiceAccounts are valid",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers:  []string{"http://foo.bar.com"},
@@ -80,10 +87,10 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when OIDC is invalid",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers:  []string{"http://foo.bar.com"},
@@ -94,25 +101,25 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when ServiceAccounts doesn't have key file",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers: []string{"http://foo.bar.com"},
 			},
-			expectErr: "service-account-key-file is a required flag",
+			expectErr: "either `--service-account-key-file` or `--service-account-signing-endpoint` must be set",
 		},
 		{
 			name: "test when ServiceAccounts doesn't have issuer",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers: []string{},
@@ -122,11 +129,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when ServiceAccounts has empty string as issuer",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers: []string{""},
@@ -136,11 +143,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when ServiceAccounts has duplicate issuers",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers: []string{"http://foo.bar.com", "http://foo.bar.com"},
@@ -150,11 +157,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when ServiceAccount has bad issuer",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				Issuers: []string{"http://[::1]:namedport"},
@@ -164,11 +171,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when ServiceAccounts has invalid JWKSURI",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				KeyFiles: []string{"cert", "key"},
@@ -180,11 +187,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when ServiceAccounts has invalid JWKSURI (not https scheme)",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				KeyFiles: []string{"cert", "key"},
@@ -196,11 +203,11 @@ func TestAuthenticationValidate(t *testing.T) {
 		{
 			name: "test when WebHook has invalid retry attempts",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			testSA: &ServiceAccountAuthenticationOptions{
 				KeyFiles: []string{"cert", "key"},
@@ -229,28 +236,25 @@ func TestAuthenticationValidate(t *testing.T) {
 			name:                         "test when authentication config file and oidc-* flags are set",
 			testAuthenticationConfigFile: "configfile",
 			testOIDC: &OIDCAuthenticationOptions{
-				UsernameClaim:      "sub",
-				SigningAlgs:        []string{"RS256"},
-				IssuerURL:          "https://testIssuerURL",
-				ClientID:           "testClientID",
-				areFlagsConfigured: func() bool { return true },
+				UsernameClaim: "sub",
+				SigningAlgs:   []string{"RS256"},
+				IssuerURL:     "https://testIssuerURL",
+				ClientID:      "testClientID",
+				FlagsSet:      true,
 			},
 			expectErr: "authentication-config file and oidc-* flags are mutually exclusive",
-		},
-		{
-			name:             "fails to validate if ServiceAccountTokenNodeBindingValidation is disabled and ServiceAccountTokenNodeBinding is enabled",
-			enabledFeatures:  []featuregate.Feature{kubefeatures.ServiceAccountTokenNodeBinding},
-			disabledFeatures: []featuregate.Feature{kubefeatures.ServiceAccountTokenNodeBindingValidation},
-			expectErr:        "the \"ServiceAccountTokenNodeBinding\" feature gate can only be enabled if the \"ServiceAccountTokenNodeBindingValidation\" feature gate is also enabled",
 		},
 		{
 			name:                         "test when authentication config file and anonymous-auth flags are set AnonymousAuthConfigurableEndpoints disabled",
 			disabledFeatures:             []featuregate.Feature{features.AnonymousAuthConfigurableEndpoints},
 			testAuthenticationConfigFile: "configfile",
 			testAnonymous: &AnonymousAuthenticationOptions{
-				Allow:       true,
-				areFlagsSet: func() bool { return true },
+				Allow:    true,
+				FlagsSet: true,
 			},
+			// This allows us to disable the AnonymousAuthConfigurableEndpoints
+			// feature-gate, otherwise this feature-gate cannot be disabled.
+			emulationVersion: version.MustParse("1.33"),
 		},
 	}
 
@@ -262,6 +266,12 @@ func TestAuthenticationValidate(t *testing.T) {
 			options.ServiceAccounts = testcase.testSA
 			options.WebHook = testcase.testWebHook
 			options.AuthenticationConfigFile = testcase.testAuthenticationConfigFile
+
+			// SetFeatureGateEmulationVersionDuringTest needs to be called
+			// before any calls to SetFeatureGateDuringTest to work reliably.
+			if testcase.emulationVersion != nil {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
+			}
 			for _, f := range testcase.enabledFeatures {
 				featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, f, true)
 			}
@@ -303,6 +313,7 @@ func TestToAuthenticationConfig(t *testing.T) {
 		},
 		RequestHeader: &apiserveroptions.RequestHeaderAuthenticationOptions{
 			UsernameHeaders:     []string{"x-remote-user"},
+			UIDHeaders:          []string{"x-remote-uid"},
 			GroupHeaders:        []string{"x-remote-group"},
 			ExtraHeaderPrefixes: []string{"x-remote-extra-"},
 			ClientCAFile:        "testdata/root.pem",
@@ -335,7 +346,7 @@ func TestToAuthenticationConfig(t *testing.T) {
 					ClaimMappings: apiserver.ClaimMappings{
 						Username: apiserver.PrefixedClaimOrExpression{
 							Claim:  "sub",
-							Prefix: pointer.String("https://testIssuerURL#"),
+							Prefix: ptr.To("https://testIssuerURL#"),
 						},
 					},
 				},
@@ -352,6 +363,7 @@ func TestToAuthenticationConfig(t *testing.T) {
 
 		RequestHeaderConfig: &authenticatorfactory.RequestHeaderConfig{
 			UsernameHeaders:     headerrequest.StaticStringSlice{"x-remote-user"},
+			UIDHeaders:          headerrequest.StaticStringSlice{"x-remote-uid"},
 			GroupHeaders:        headerrequest.StaticStringSlice{"x-remote-group"},
 			ExtraHeaderPrefixes: headerrequest.StaticStringSlice{"x-remote-extra-"},
 			CAContentProvider:   nil, // this is nil because you can't compare functions
@@ -397,6 +409,7 @@ func TestBuiltInAuthenticationOptionsAddFlags(t *testing.T) {
 		"--client-ca-file=client-cacert",
 		"--requestheader-client-ca-file=testdata/root.pem",
 		"--requestheader-username-headers=x-remote-user-custom",
+		"--requestheader-uid-headers=x-remote-uid-custom",
 		"--requestheader-group-headers=x-remote-group-custom",
 		"--requestheader-allowed-names=kube-aggregator",
 		"--service-account-key-file=cert",
@@ -411,7 +424,8 @@ func TestBuiltInAuthenticationOptionsAddFlags(t *testing.T) {
 	expected := &BuiltInAuthenticationOptions{
 		APIAudiences: []string{"foo"},
 		Anonymous: &AnonymousAuthenticationOptions{
-			Allow: true,
+			Allow:    true,
+			FlagsSet: true,
 		},
 		BootstrapToken: &BootstrapTokenAuthenticationOptions{
 			Enable: true,
@@ -426,19 +440,22 @@ func TestBuiltInAuthenticationOptionsAddFlags(t *testing.T) {
 			UsernameClaim:  "sub",
 			UsernamePrefix: "-",
 			SigningAlgs:    []string{"RS256"},
+			FlagsSet:       true,
 		},
 		RequestHeader: &apiserveroptions.RequestHeaderAuthenticationOptions{
 			ClientCAFile:    "testdata/root.pem",
 			UsernameHeaders: []string{"x-remote-user-custom"},
+			UIDHeaders:      []string{"x-remote-uid-custom"},
 			GroupHeaders:    []string{"x-remote-group-custom"},
 			AllowedNames:    []string{"kube-aggregator"},
 		},
 		ServiceAccounts: &ServiceAccountAuthenticationOptions{
-			KeyFiles:         []string{"cert", "key"},
-			Lookup:           true,
-			Issuers:          []string{"http://foo.bar.com"},
-			JWKSURI:          "https://qux.com",
-			ExtendExpiration: true,
+			KeyFiles:              []string{"cert", "key"},
+			Lookup:                true,
+			Issuers:               []string{"http://foo.bar.com"},
+			JWKSURI:               "https://qux.com",
+			ExtendExpiration:      true,
+			MaxExtendedExpiration: serviceaccount.ExpirationExtensionSeconds * time.Second,
 		},
 		TokenFile: &TokenFileAuthenticationOptions{
 			TokenFile: "tokenfile",
@@ -466,26 +483,12 @@ func TestBuiltInAuthenticationOptionsAddFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !opts.OIDC.areFlagsConfigured() {
-		t.Fatal("OIDC flags should be configured")
-	}
-	// nil these out because you cannot compare functions
-	opts.OIDC.areFlagsConfigured = nil
-
-	if !opts.Anonymous.areFlagsSet() {
-		t.Fatalf("Anonymous flags should be configured")
-	}
-
-	// nil these out because you cannot compare functions
-	opts.Anonymous.areFlagsSet = nil
-
 	if !reflect.DeepEqual(opts, expected) {
 		t.Error(cmp.Diff(opts, expected, cmp.AllowUnexported(OIDCAuthenticationOptions{}, AnonymousAuthenticationOptions{})))
 	}
 }
 
 func TestWithTokenGetterFunction(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, kubefeatures.ServiceAccountTokenNodeBindingValidation, false)
 	fakeClientset := fake.NewSimpleClientset()
 	versionedInformer := informers.NewSharedInformerFactory(fakeClientset, 0)
 	{
@@ -515,7 +518,6 @@ func TestWithTokenGetterFunction(t *testing.T) {
 }
 
 func TestToAuthenticationConfig_Anonymous(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, true)
 	testCases := []struct {
 		name                     string
 		args                     []string
@@ -554,7 +556,7 @@ func TestToAuthenticationConfig_Anonymous(t *testing.T) {
 			name: "file-anonymous-disabled-AnonymousAuthConfigurableEndpoints-disabled",
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -567,7 +569,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -580,7 +582,7 @@ anonymous:
 					Anonymous: &apiserver.AnonymousAuthConfig{Enabled: false},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -593,7 +595,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -606,7 +608,7 @@ anonymous:
 					Anonymous: &apiserver.AnonymousAuthConfig{Enabled: true},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -619,7 +621,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: false
@@ -634,7 +636,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   conditions:
@@ -648,7 +650,7 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -677,7 +679,7 @@ anonymous:
 					},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
@@ -692,20 +694,20 @@ anonymous:
 			enableAnonymousEndpoints: true,
 			args: []string{"--anonymous-auth=True",
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 anonymous:
   enabled: true
 `),
 			},
-			expectErr: "--anonynous-auth flag cannot be set when anonymous field is configured in authentication configuration file",
+			expectErr: "--anonymous-auth flag cannot be set when anonymous field is configured in authentication configuration file",
 		},
 		{
 			name:                     "flag-anonymous-enabled-file-anonymous-notset-AnonymousAuthConfigurableEndpoints-enabled",
 			enableAnonymousEndpoints: true,
 			args: []string{"--anonymous-auth=True",
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -730,14 +732,14 @@ jwt:
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "sub",
-									Prefix: pointer.String(""),
+									Prefix: ptr.To(""),
 								},
 							},
 						},
 					},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -755,7 +757,11 @@ jwt:
 
 	for _, testcase := range testCases {
 		t.Run(testcase.name, func(t *testing.T) {
+			if !testcase.enableAnonymousEndpoints {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.AnonymousAuthConfigurableEndpoints, testcase.enableAnonymousEndpoints)
+
 			opts := NewBuiltInAuthenticationOptions().WithAnonymous()
 			pf := pflag.NewFlagSet("test-builtin-authentication-opts", pflag.ContinueOnError)
 			opts.AddFlags(pf)
@@ -790,12 +796,11 @@ jwt:
 }
 
 func TestToAuthenticationConfig_OIDC(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, true)
-
 	testCases := []struct {
 		name         string
 		args         []string
 		expectConfig kubeauthenticator.Config
+		expectErr    string
 	}{
 		{
 			name: "username prefix is '-'",
@@ -819,7 +824,7 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "sub",
-									Prefix: pointer.String(""),
+									Prefix: ptr.To(""),
 								},
 							},
 							ClaimValidationRules: []apiserver.ClaimValidationRule{
@@ -855,7 +860,7 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "sub",
-									Prefix: pointer.String("https://testIssuerURL#"),
+									Prefix: ptr.To("https://testIssuerURL#"),
 								},
 							},
 							ClaimValidationRules: []apiserver.ClaimValidationRule{
@@ -891,7 +896,7 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "email",
-									Prefix: pointer.String(""),
+									Prefix: ptr.To(""),
 								},
 							},
 							ClaimValidationRules: []apiserver.ClaimValidationRule{
@@ -928,7 +933,7 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "sub",
-									Prefix: pointer.String("k8s-"),
+									Prefix: ptr.To("k8s-"),
 								},
 							},
 							ClaimValidationRules: []apiserver.ClaimValidationRule{
@@ -967,11 +972,11 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "sub",
-									Prefix: pointer.String(""),
+									Prefix: ptr.To(""),
 								},
 								Groups: apiserver.PrefixedClaimOrExpression{
 									Claim:  "groups",
-									Prefix: pointer.String("oidc:"),
+									Prefix: ptr.To("oidc:"),
 								},
 							},
 							ClaimValidationRules: []apiserver.ClaimValidationRule{
@@ -990,7 +995,7 @@ func TestToAuthenticationConfig_OIDC(t *testing.T) {
 			name: "basic authentication configuration",
 			args: []string{
 				"--authentication-config=" + writeTempFile(t, `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -1014,14 +1019,14 @@ jwt:
 							ClaimMappings: apiserver.ClaimMappings{
 								Username: apiserver.PrefixedClaimOrExpression{
 									Claim:  "sub",
-									Prefix: pointer.String(""),
+									Prefix: ptr.To(""),
 								},
 							},
 						},
 					},
 				},
 				AuthenticationConfigData: `
-apiVersion: apiserver.config.k8s.io/v1alpha1
+apiVersion: apiserver.config.k8s.io/v1
 kind: AuthenticationConfiguration
 jwt:
 - issuer:
@@ -1034,6 +1039,29 @@ jwt:
 `,
 				OIDCSigningAlgs: []string{"ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
 			},
+		},
+		{
+			name: "authentication config file not found",
+			args: []string{
+				"--authentication-config=nonexistent-file",
+			},
+			expectErr:    fmt.Sprintf(`failed to load authentication configuration from file "nonexistent-file": open nonexistent-file: %s`, getFileNotFoundForOS()),
+			expectConfig: kubeauthenticator.Config{},
+		},
+		{
+			name: "authentication config validation error",
+			args: []string{
+				"--authentication-config=" + writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+    audiences: [ "🐼" ]
+`),
+			},
+			expectErr:    "invalid authentication configuration: jwt[0].claimMappings.username: Required value: claim or expression is required",
+			expectConfig: kubeauthenticator.Config{},
 		},
 	}
 
@@ -1048,9 +1076,13 @@ jwt:
 			}
 
 			resultConfig, err := opts.ToAuthenticationConfig()
-			if err != nil {
-				t.Fatal(err)
+			if (err != nil) != (testcase.expectErr != "") {
+				t.Fatalf("Got err: %v; Want err: %v", err, testcase.expectErr)
 			}
+			if len(testcase.expectErr) > 0 && !strings.Contains(err.Error(), testcase.expectErr) {
+				t.Fatalf("Got err: %v; Want err: %v", err, testcase.expectErr)
+			}
+
 			if !reflect.DeepEqual(resultConfig, testcase.expectConfig) {
 				t.Error(cmp.Diff(resultConfig, testcase.expectConfig))
 			}
@@ -1203,6 +1235,9 @@ func TestValidateOIDCOptions(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
+			if !tt.structuredAuthenticationConfigEnabled {
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StructuredAuthenticationConfiguration, tt.structuredAuthenticationConfigEnabled)
 
 			opts := NewBuiltInAuthenticationOptions().WithOIDC()
@@ -1364,7 +1399,7 @@ jwt:
 						ClaimMappings: apiserver.ClaimMappings{
 							Username: apiserver.PrefixedClaimOrExpression{
 								Claim:  "sub",
-								Prefix: pointer.String(""),
+								Prefix: ptr.To(""),
 							},
 						},
 					},
@@ -1440,7 +1475,7 @@ jwt:
 						ClaimMappings: apiserver.ClaimMappings{
 							Username: apiserver.PrefixedClaimOrExpression{
 								Claim:  "sub",
-								Prefix: pointer.String(""),
+								Prefix: ptr.To(""),
 							},
 						},
 					},
@@ -1468,6 +1503,82 @@ jwt:
 			expectedConfig: &apiserver.AuthenticationConfiguration{},
 			expectedContentData: `{
 							"apiVersion":"apiserver.config.k8s.io/v1beta1",
+							"kind":"AuthenticationConfiguration"}`,
+		},
+		{
+			name: "v1 - json",
+			file: func() string {
+				return writeTempFile(t, `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{
+				JWT: []apiserver.JWTAuthenticator{
+					{
+						Issuer: apiserver.Issuer{
+							URL: "https://test-issuer",
+						},
+					},
+				},
+			},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
+							"kind":"AuthenticationConfiguration",
+							"jwt":[{"issuer":{"url": "https://test-issuer"}}]}`,
+		},
+		{
+			name: "v1 - yaml",
+			file: func() string {
+				return writeTempFile(t, `
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{
+				JWT: []apiserver.JWTAuthenticator{
+					{
+						Issuer: apiserver.Issuer{
+							URL: "https://test-issuer",
+						},
+						ClaimMappings: apiserver.ClaimMappings{
+							Username: apiserver.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To(""),
+							},
+						},
+					},
+				},
+			},
+			expectedContentData: `
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+jwt:
+- issuer:
+    url: https://test-issuer
+  claimMappings:
+    username:
+      claim: sub
+      prefix: ""
+`,
+		},
+		{
+			name: "v1 - no jwt",
+			file: func() string {
+				return writeTempFile(t, `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
+							"kind":"AuthenticationConfiguration"}`)
+			},
+			expectedConfig: &apiserver.AuthenticationConfiguration{},
+			expectedContentData: `{
+							"apiVersion":"apiserver.config.k8s.io/v1",
 							"kind":"AuthenticationConfiguration"}`,
 		},
 	}
@@ -1514,4 +1625,183 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func TestToAuthenticationConfigForServiceAccount(t *testing.T) {
+
+	dummyExternalGetter := &dummyPublicKeyGetter{}
+	keyFileName := "public_key.pem"
+
+	key1, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("Error while generating first RSA key")
+	}
+	pubKey1Bytes, err := x509.MarshalPKIXPublicKey(&key1.PublicKey)
+	if err != nil {
+		panic("Error while marshaling first public key")
+	}
+
+	publicKeyBlock := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubKey1Bytes,
+	}
+
+	publicKeyFile, err := os.Create(keyFileName)
+	if err != nil {
+		fmt.Println("Error creating public key file:", err)
+		return
+	}
+	t.Cleanup(func() {
+		// An open file cannot be removed on Windows. Close it first.
+		if err := publicKeyFile.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(publicKeyFile.Name()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if err := pem.Encode(publicKeyFile, publicKeyBlock); err != nil {
+		fmt.Println("Error encoding public key:", err)
+		return
+	}
+
+	testCases := []struct {
+		desc                   string
+		options                *BuiltInAuthenticationOptions
+		expectConfig           kubeauthenticator.Config
+		expectedErr            error
+		expectedExternalGetter bool
+		expectedStaticGetter   bool
+	}{
+		{
+			desc: "neither key file nor external getter configured",
+			options: &BuiltInAuthenticationOptions{
+				ServiceAccounts: &ServiceAccountAuthenticationOptions{
+					Lookup:                   true,
+					Issuers:                  []string{"http://foo.bar.com"},
+					KeyFiles:                 []string{},
+					ExternalPublicKeysGetter: nil,
+				},
+			},
+			expectConfig: kubeauthenticator.Config{
+				APIAudiences:          authenticator.Audiences{"http://foo.bar.com"},
+				ServiceAccountLookup:  true,
+				ServiceAccountIssuers: []string{"http://foo.bar.com"},
+			},
+			expectedErr: nil,
+		},
+		{
+			desc: "both key file and external getter configured",
+			options: &BuiltInAuthenticationOptions{
+				ServiceAccounts: &ServiceAccountAuthenticationOptions{
+					Lookup:                   true,
+					Issuers:                  []string{"http://foo.bar.com"},
+					KeyFiles:                 []string{keyFileName},
+					ExternalPublicKeysGetter: dummyExternalGetter,
+				},
+			},
+			expectConfig: kubeauthenticator.Config{
+				APIAudiences:          authenticator.Audiences{"http://foo.bar.com"},
+				ServiceAccountLookup:  true,
+				ServiceAccountIssuers: []string{"http://foo.bar.com"},
+			},
+			expectedErr: fmt.Errorf("cannot set mutually exclusive flags `--service-account-key-file` and `--service-account-signing-endpoint` at the same time"),
+		},
+		{
+			desc: "external getter configured",
+			options: &BuiltInAuthenticationOptions{
+				ServiceAccounts: &ServiceAccountAuthenticationOptions{
+					Lookup:                   true,
+					Issuers:                  []string{"http://foo.bar.com"},
+					KeyFiles:                 []string{},
+					ExternalPublicKeysGetter: dummyExternalGetter,
+				},
+			},
+			expectConfig: kubeauthenticator.Config{
+				APIAudiences:          authenticator.Audiences{"http://foo.bar.com"},
+				ServiceAccountLookup:  true,
+				ServiceAccountIssuers: []string{"http://foo.bar.com"},
+			},
+			expectedErr:            nil,
+			expectedExternalGetter: true,
+		},
+		{
+			desc: "external getter configured",
+			options: &BuiltInAuthenticationOptions{
+				ServiceAccounts: &ServiceAccountAuthenticationOptions{
+					Lookup:                   true,
+					Issuers:                  []string{"http://foo.bar.com"},
+					KeyFiles:                 []string{keyFileName},
+					ExternalPublicKeysGetter: nil,
+				},
+			},
+			expectConfig: kubeauthenticator.Config{
+				APIAudiences:          authenticator.Audiences{"http://foo.bar.com"},
+				ServiceAccountLookup:  true,
+				ServiceAccountIssuers: []string{"http://foo.bar.com"},
+			},
+			expectedErr:          nil,
+			expectedStaticGetter: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		resultConfig, err := tc.options.ToAuthenticationConfig()
+		if tc.expectedErr != nil {
+			if err == nil || tc.expectedErr.Error() != err.Error() {
+				t.Fatalf("Expected error: %v and got: %v", tc.expectedErr, err)
+			}
+			return
+		}
+
+		// make out of scope fields nil
+		resultConfig.AuthenticationConfig = nil
+
+		if tc.expectedExternalGetter {
+			if resultConfig.ServiceAccountPublicKeysGetter == nil {
+				t.Fatalf("Expected external getter but none")
+			} else if resultConfig.ServiceAccountPublicKeysGetter != dummyExternalGetter {
+				t.Fatalf("Expected external getter but found someting else")
+			}
+			resultConfig.ServiceAccountPublicKeysGetter = nil
+		}
+
+		if tc.expectedStaticGetter {
+			if resultConfig.ServiceAccountPublicKeysGetter == nil {
+				t.Fatalf("Expected static getter but none")
+			} else if resultConfig.ServiceAccountPublicKeysGetter == dummyExternalGetter {
+				t.Fatalf("Expected static getter but found external getter")
+			}
+			resultConfig.ServiceAccountPublicKeysGetter = nil
+		}
+
+		if !reflect.DeepEqual(resultConfig, tc.expectConfig) {
+			t.Error(cmp.Diff(resultConfig, tc.expectConfig))
+		}
+	}
+}
+
+type dummyPublicKeyGetter struct {
+}
+
+func (d *dummyPublicKeyGetter) AddListener(listener serviceaccount.Listener) {}
+
+func (d *dummyPublicKeyGetter) GetCacheAgeMaxSeconds() int {
+	return 10
+}
+
+func (d *dummyPublicKeyGetter) GetPublicKeys(ctx context.Context, keyIDHint string) []serviceaccount.PublicKey {
+	return []serviceaccount.PublicKey{}
+}
+
+// getFileNotFoundForOS returns the expected error message for a file not found error on the current OS
+// - on Windows, the error message is "The system cannot find the file specified"
+// - on other, the error message is "no such file or directory"
+func getFileNotFoundForOS() string {
+	if goruntime.GOOS == "windows" {
+		return "The system cannot find the file specified"
+	} else {
+		return "no such file or directory"
+	}
 }

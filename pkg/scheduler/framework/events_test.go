@@ -21,10 +21,17 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
+	fwk "k8s.io/kube-scheduler/framework"
+	"k8s.io/kubernetes/pkg/features"
 	st "k8s.io/kubernetes/pkg/scheduler/testing"
+	"k8s.io/utils/ptr"
 )
 
 func TestNodeAllocatableChange(t *testing.T) {
@@ -54,7 +61,7 @@ func TestNodeAllocatableChange(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			oldNode := &v1.Node{Status: v1.NodeStatus{Allocatable: test.oldAllocatable}}
 			newNode := &v1.Node{Status: v1.NodeStatus{Allocatable: test.newAllocatable}}
-			changed := extractNodeAllocatableChange(newNode, oldNode) != nil
+			changed := extractNodeAllocatableChange(newNode, oldNode) != fwk.None
 			if changed != test.changed {
 				t.Errorf("nodeAllocatableChanged should be %t, got %t", test.changed, changed)
 			}
@@ -87,7 +94,7 @@ func TestNodeLabelsChange(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			oldNode := &v1.Node{ObjectMeta: metav1.ObjectMeta{Labels: test.oldLabels}}
 			newNode := &v1.Node{ObjectMeta: metav1.ObjectMeta{Labels: test.newLabels}}
-			changed := extractNodeLabelsChange(newNode, oldNode) != nil
+			changed := extractNodeLabelsChange(newNode, oldNode) != fwk.None
 			if changed != test.changed {
 				t.Errorf("Test case %q failed: should be %t, got %t", test.name, test.changed, changed)
 			}
@@ -119,7 +126,7 @@ func TestNodeTaintsChange(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			oldNode := &v1.Node{Spec: v1.NodeSpec{Taints: test.oldTaints}}
 			newNode := &v1.Node{Spec: v1.NodeSpec{Taints: test.newTaints}}
-			changed := extractNodeTaintsChange(newNode, oldNode) != nil
+			changed := extractNodeTaintsChange(newNode, oldNode) != fwk.None
 			if changed != test.changed {
 				t.Errorf("Test case %q failed: should be %t, not %t", test.name, test.changed, changed)
 			}
@@ -174,7 +181,7 @@ func TestNodeConditionsChange(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			oldNode := &v1.Node{Status: v1.NodeStatus{Conditions: test.oldConditions}}
 			newNode := &v1.Node{Status: v1.NodeStatus{Conditions: test.newConditions}}
-			changed := extractNodeConditionsChange(newNode, oldNode) != nil
+			changed := extractNodeConditionsChange(newNode, oldNode) != fwk.None
 			if changed != test.changed {
 				t.Errorf("Test case %q failed: should be %t, got %t", test.name, test.changed, changed)
 			}
@@ -187,7 +194,7 @@ func TestNodeSchedulingPropertiesChange(t *testing.T) {
 		name       string
 		newNode    *v1.Node
 		oldNode    *v1.Node
-		wantEvents []ClusterEvent
+		wantEvents []fwk.ClusterEvent
 	}{
 		{
 			name:       "no specific changed applied",
@@ -199,7 +206,7 @@ func TestNodeSchedulingPropertiesChange(t *testing.T) {
 			name:       "only node spec unavailable changed",
 			newNode:    st.MakeNode().Unschedulable(false).Obj(),
 			oldNode:    st.MakeNode().Unschedulable(true).Obj(),
-			wantEvents: []ClusterEvent{NodeSpecUnschedulableChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeTaint}},
 		},
 		{
 			name: "only node allocatable changed",
@@ -213,13 +220,13 @@ func TestNodeSchedulingPropertiesChange(t *testing.T) {
 				v1.ResourceMemory:                  "100m",
 				v1.ResourceName("example.com/foo"): "2"},
 			).Obj(),
-			wantEvents: []ClusterEvent{NodeAllocatableChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeAllocatable}},
 		},
 		{
 			name:       "only node label changed",
 			newNode:    st.MakeNode().Label("foo", "bar").Obj(),
 			oldNode:    st.MakeNode().Label("foo", "fuz").Obj(),
-			wantEvents: []ClusterEvent{NodeLabelChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeLabel}},
 		},
 		{
 			name: "only node taint changed",
@@ -229,13 +236,13 @@ func TestNodeSchedulingPropertiesChange(t *testing.T) {
 			oldNode: st.MakeNode().Taints([]v1.Taint{
 				{Key: v1.TaintNodeUnschedulable, Value: "foo", Effect: v1.TaintEffectNoSchedule},
 			}).Obj(),
-			wantEvents: []ClusterEvent{NodeTaintChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeTaint}},
 		},
 		{
 			name:       "only node annotation changed",
 			newNode:    st.MakeNode().Annotation("foo", "bar").Obj(),
 			oldNode:    st.MakeNode().Annotation("foo", "fuz").Obj(),
-			wantEvents: []ClusterEvent{NodeAnnotationChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeAnnotation}},
 		},
 		{
 			name:    "only node condition changed",
@@ -246,7 +253,7 @@ func TestNodeSchedulingPropertiesChange(t *testing.T) {
 				"Ready",
 				"Ready",
 			).Obj(),
-			wantEvents: []ClusterEvent{NodeConditionChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeCondition}},
 		},
 		{
 			name: "both node label and node taint changed",
@@ -258,13 +265,13 @@ func TestNodeSchedulingPropertiesChange(t *testing.T) {
 			oldNode: st.MakeNode().Taints([]v1.Taint{
 				{Key: v1.TaintNodeUnschedulable, Value: "foo", Effect: v1.TaintEffectNoSchedule},
 			}).Obj(),
-			wantEvents: []ClusterEvent{NodeLabelChange, NodeTaintChange},
+			wantEvents: []fwk.ClusterEvent{{Resource: fwk.Node, ActionType: fwk.UpdateNodeLabel}, {Resource: fwk.Node, ActionType: fwk.UpdateNodeTaint}},
 		},
 	}
 
 	for _, tc := range testCases {
 		gotEvents := NodeSchedulingPropertiesChange(tc.newNode, tc.oldNode)
-		if diff := cmp.Diff(tc.wantEvents, gotEvents); diff != "" {
+		if diff := cmp.Diff(tc.wantEvents, gotEvents, cmpopts.EquateComparable(fwk.ClusterEvent{})); diff != "" {
 			t.Errorf("unexpected event (-want, +got):\n%s", diff)
 		}
 	}
@@ -334,47 +341,109 @@ func Test_podSchedulingPropertiesChange(t *testing.T) {
 			},
 		},
 	}
+	claimStatusA := v1.PodResourceClaimStatus{
+		Name:              "my-claim",
+		ResourceClaimName: ptr.To("claim"),
+	}
+	claimStatusB := v1.PodResourceClaimStatus{
+		Name:              "my-claim-2",
+		ResourceClaimName: ptr.To("claim-2"),
+	}
 	tests := []struct {
-		name   string
-		newPod *v1.Pod
-		oldPod *v1.Pod
-		want   []ClusterEvent
+		name        string
+		newPod      *v1.Pod
+		oldPod      *v1.Pod
+		draDisabled bool
+		want        []fwk.ClusterEvent
 	}{
+		{
+			name:   "assigned pod is updated",
+			newPod: st.MakePod().Label("foo", "bar").Node("node").Obj(),
+			oldPod: st.MakePod().Label("foo", "bar2").Node("node").Obj(),
+			want:   []fwk.ClusterEvent{{Resource: assignedPod, ActionType: fwk.UpdatePodLabel}},
+		},
 		{
 			name:   "only label is updated",
 			newPod: st.MakePod().Label("foo", "bar").Obj(),
 			oldPod: st.MakePod().Label("foo", "bar2").Obj(),
-			want:   []ClusterEvent{PodLabelChange},
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodLabel}},
 		},
 		{
 			name:   "pod's resource request is scaled down",
 			oldPod: podWithBigRequest,
 			newPod: podWithSmallRequest,
-			want:   []ClusterEvent{PodRequestScaledDown},
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodScaleDown}},
 		},
 		{
 			name:   "pod's resource request is scaled up",
 			oldPod: podWithSmallRequest,
 			newPod: podWithBigRequest,
-			want:   []ClusterEvent{assignedPodOtherUpdate},
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.Update}},
 		},
 		{
 			name:   "both pod's resource request and label are updated",
 			oldPod: podWithBigRequest,
 			newPod: podWithSmallRequestAndLabel,
-			want:   []ClusterEvent{PodLabelChange, PodRequestScaledDown},
+			want: []fwk.ClusterEvent{
+				{Resource: unschedulablePod, ActionType: fwk.UpdatePodLabel},
+				{Resource: unschedulablePod, ActionType: fwk.UpdatePodScaleDown},
+			},
 		},
 		{
 			name:   "untracked properties of pod is updated",
 			newPod: st.MakePod().Annotation("foo", "bar").Obj(),
 			oldPod: st.MakePod().Annotation("foo", "bar2").Obj(),
-			want:   []ClusterEvent{assignedPodOtherUpdate},
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.Update}},
+		},
+		{
+			name:   "scheduling gate is eliminated",
+			newPod: st.MakePod().SchedulingGates([]string{}).Obj(),
+			oldPod: st.MakePod().SchedulingGates([]string{"foo"}).Obj(),
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodSchedulingGatesEliminated}},
+		},
+		{
+			name:   "scheduling gate is removed, but not completely eliminated",
+			newPod: st.MakePod().SchedulingGates([]string{"foo"}).Obj(),
+			oldPod: st.MakePod().SchedulingGates([]string{"foo", "bar"}).Obj(),
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.Update}},
+		},
+		{
+			name:   "pod's tolerations are updated",
+			newPod: st.MakePod().Toleration("key").Toleration("key2").Obj(),
+			oldPod: st.MakePod().Toleration("key").Obj(),
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodToleration}},
+		},
+		{
+			name:        "pod claim statuses change, feature disabled",
+			draDisabled: true,
+			newPod:      st.MakePod().ResourceClaimStatuses(claimStatusA).Obj(),
+			oldPod:      st.MakePod().Obj(),
+			want:        []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.Update}},
+		},
+		{
+			name:   "pod claim statuses change, feature enabled",
+			newPod: st.MakePod().ResourceClaimStatuses(claimStatusA).Obj(),
+			oldPod: st.MakePod().Obj(),
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodGeneratedResourceClaim}},
+		},
+		{
+			name:   "pod claim statuses swapped",
+			newPod: st.MakePod().ResourceClaimStatuses(claimStatusA, claimStatusB).Obj(),
+			oldPod: st.MakePod().ResourceClaimStatuses(claimStatusB, claimStatusA).Obj(),
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodGeneratedResourceClaim}},
+		},
+		{
+			name:   "pod claim statuses extended",
+			newPod: st.MakePod().ResourceClaimStatuses(claimStatusA, claimStatusB).Obj(),
+			oldPod: st.MakePod().ResourceClaimStatuses(claimStatusA).Obj(),
+			want:   []fwk.ClusterEvent{{Resource: unschedulablePod, ActionType: fwk.UpdatePodGeneratedResourceClaim}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DynamicResourceAllocation, !tt.draDisabled)
 			got := PodSchedulingPropertiesChange(tt.newPod, tt.oldPod)
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, cmpopts.EquateComparable(fwk.ClusterEvent{})); diff != "" {
 				t.Errorf("unexpected event is returned from podSchedulingPropertiesChange (-want, +got):\n%s", diff)
 			}
 		})

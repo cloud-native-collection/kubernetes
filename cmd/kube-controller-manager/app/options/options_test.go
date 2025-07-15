@@ -34,7 +34,7 @@ import (
 
 	"k8s.io/apiserver/pkg/apis/apiserver"
 	apiserveroptions "k8s.io/apiserver/pkg/server/options"
-	utilversion "k8s.io/apiserver/pkg/util/version"
+	basecompatibility "k8s.io/component-base/compatibility"
 
 	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/component-base/featuregate"
@@ -98,6 +98,7 @@ var args = []string{
 	"--cluster-signing-legacy-unknown-cert-file=/cluster-signing-legacy-unknown/cert-file",
 	"--cluster-signing-legacy-unknown-key-file=/cluster-signing-legacy-unknown/key-file",
 	"--concurrent-deployment-syncs=10",
+	"--concurrent-daemonset-syncs=10",
 	"--concurrent-horizontal-pod-autoscaler-syncs=10",
 	"--concurrent-statefulset-syncs=15",
 	"--concurrent-endpoint-syncs=10",
@@ -136,7 +137,7 @@ var args = []string{
 	"--leader-elect=false",
 	"--leader-elect-lease-duration=30s",
 	"--leader-elect-renew-deadline=15s",
-	"--leader-elect-resource-lock=configmap",
+	"--leader-elect-resource-lock=leases",
 	"--leader-elect-retry-period=5s",
 	"--legacy-service-account-token-clean-up-period=8760h",
 	"--master=192.168.4.20",
@@ -192,7 +193,7 @@ func TestAddFlags(t *testing.T) {
 				},
 				ControllerStartInterval: metav1.Duration{Duration: 2 * time.Minute},
 				LeaderElection: componentbaseconfig.LeaderElectionConfiguration{
-					ResourceLock:      "configmap",
+					ResourceLock:      "leases",
 					LeaderElect:       false,
 					LeaseDuration:     metav1.Duration{Duration: 30 * time.Second},
 					RenewDeadline:     metav1.Duration{Duration: 15 * time.Second},
@@ -264,7 +265,7 @@ func TestAddFlags(t *testing.T) {
 		},
 		DaemonSetController: &DaemonSetControllerOptions{
 			&daemonconfig.DaemonSetControllerConfiguration{
-				ConcurrentDaemonSetSyncs: 2,
+				ConcurrentDaemonSetSyncs: 10,
 			},
 		},
 		DeploymentController: &DeploymentControllerOptions{
@@ -430,6 +431,7 @@ func TestAddFlags(t *testing.T) {
 			ClientCert:          apiserveroptions.ClientCertAuthenticationOptions{},
 			RequestHeader: apiserveroptions.RequestHeaderAuthenticationOptions{
 				UsernameHeaders:     []string{"x-remote-user"},
+				UIDHeaders:          nil,
 				GroupHeaders:        []string{"x-remote-group"},
 				ExtraHeaderPrefixes: []string{"x-remote-extra-"},
 			},
@@ -445,10 +447,11 @@ func TestAddFlags(t *testing.T) {
 			AlwaysAllowPaths:             []string{"/healthz", "/readyz", "/livez"}, // note: this does not match /healthz/ or /healthz/*
 			AlwaysAllowGroups:            []string{"system:masters"},
 		},
-		Master:                   "192.168.4.20",
-		Metrics:                  &metrics.Options{},
-		Logs:                     logs.NewOptions(),
-		ComponentGlobalsRegistry: utilversion.DefaultComponentGlobalsRegistry,
+		Master:  "192.168.4.20",
+		Metrics: &metrics.Options{},
+		Logs:    logs.NewOptions(),
+		// ignores comparing ComponentGlobalsRegistry in this test.
+		ComponentGlobalsRegistry: s.ComponentGlobalsRegistry,
 	}
 
 	// Sort GCIgnoredResources because it's built from a map, which means the
@@ -457,6 +460,83 @@ func TestAddFlags(t *testing.T) {
 
 	if !reflect.DeepEqual(expected, s) {
 		t.Errorf("Got different run options than expected.\nDifference detected on:\n%s", cmp.Diff(expected, s))
+	}
+}
+
+func TestValidateFlags(t *testing.T) {
+	testcases := []struct {
+		name    string
+		flags   []string // not a good place to test flagParse error
+		wantErr bool     // this won't apply to flagParse, it only apply to KubeControllerManagerOptions.Validate
+	}{
+		{
+			name:    "empty flags",
+			flags:   []string{},
+			wantErr: false,
+		},
+		{
+			name: "cloud provider empty flag",
+			flags: []string{
+				"--cloud-provider", "",
+			},
+			wantErr: false,
+		},
+		{
+			name: "cloud provider set but not external",
+			flags: []string{
+				"--cloud-provider=gce",
+			},
+			wantErr: true,
+		},
+		{
+			name: "cloud provider set to external",
+			flags: []string{
+				"--cloud-provider=external",
+			},
+			wantErr: false,
+		},
+		{
+			name: "nodeipam to cloudAllocator",
+			flags: []string{
+				"--cidr-allocator-type=CloudAllocator",
+			},
+			wantErr: true,
+		},
+		{
+			name: "nodeipam to rangeAllocator",
+			flags: []string{
+				"--cidr-allocator-type=RangeAllocator",
+			},
+			wantErr: false,
+		},
+		{
+			name: "nodeipam to IPAMFromCloud",
+			flags: []string{
+				"--cidr-allocator-type=IPAMFromCloud",
+			},
+			wantErr: true,
+		},
+		{
+			name: "concurrent daemonset syncs set to 0",
+			flags: []string{
+				"--concurrent-daemonset-syncs=0",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, s := setupControllerManagerFlagSet(t)
+			err := fs.Parse(tc.flags)
+			checkTestError(t, err, false, "")
+			err = s.Validate([]string{""}, []string{""}, nil)
+			if !tc.wantErr && err != nil {
+				t.Fatal(fmt.Errorf("expected no error, got %w", err))
+			} else if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
 	}
 }
 
@@ -481,7 +561,7 @@ func TestApplyTo(t *testing.T) {
 				},
 				ControllerStartInterval: metav1.Duration{Duration: 2 * time.Minute},
 				LeaderElection: componentbaseconfig.LeaderElectionConfiguration{
-					ResourceLock:      "configmap",
+					ResourceLock:      "leases",
 					LeaderElect:       false,
 					LeaseDuration:     metav1.Duration{Duration: 30 * time.Second},
 					RenewDeadline:     metav1.Duration{Duration: 15 * time.Second},
@@ -538,7 +618,7 @@ func TestApplyTo(t *testing.T) {
 				},
 			},
 			DaemonSetController: daemonconfig.DaemonSetControllerConfiguration{
-				ConcurrentDaemonSetSyncs: 2,
+				ConcurrentDaemonSetSyncs: 10,
 			},
 			DeploymentController: deploymentconfig.DeploymentControllerConfiguration{
 				ConcurrentDeploymentSyncs: 10,
@@ -657,27 +737,6 @@ func TestApplyTo(t *testing.T) {
 }
 
 func TestEmulatedVersion(t *testing.T) {
-	var cleanupAndSetupFunc = func() featuregate.FeatureGate {
-		componentGlobalsRegistry := utilversion.DefaultComponentGlobalsRegistry
-		componentGlobalsRegistry.Reset() // make sure this test have a clean state
-		t.Cleanup(func() {
-			componentGlobalsRegistry.Reset() // make sure this test doesn't leak a dirty state
-		})
-
-		verKube := utilversion.NewEffectiveVersion("1.32")
-		fg := featuregate.NewVersionedFeatureGate(version.MustParse("1.32"))
-		utilruntime.Must(fg.AddVersioned(map[featuregate.Feature]featuregate.VersionedSpecs{
-			"kubeA": {
-				{Version: version.MustParse("1.32"), Default: true, LockToDefault: true, PreRelease: featuregate.GA},
-				{Version: version.MustParse("1.30"), Default: false, PreRelease: featuregate.Beta},
-			},
-			"kubeB": {
-				{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
-			},
-		}))
-		utilruntime.Must(componentGlobalsRegistry.Register(utilversion.DefaultKubeComponent, verKube, fg))
-		return fg
-	}
 
 	testcases := []struct {
 		name              string
@@ -729,9 +788,8 @@ func TestEmulatedVersion(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			fg := cleanupAndSetupFunc()
-
 			fs, s := setupControllerManagerFlagSet(t)
+			fg := s.ComponentGlobalsRegistry.FeatureGateFor(basecompatibility.DefaultKubeComponent)
 			err := fs.Parse(tc.flags)
 			checkTestError(t, err, false, "")
 			err = s.Validate([]string{""}, []string{""}, nil)
@@ -1411,6 +1469,8 @@ func TestControllerManagerAliases(t *testing.T) {
 }
 
 func TestWatchListClientFlagUsage(t *testing.T) {
+	t.Skip("skip this test until we either bring back WatchListClient or remove it")
+
 	fs := pflag.NewFlagSet("addflagstest", pflag.ContinueOnError)
 	s, _ := NewKubeControllerManagerOptions()
 	for _, f := range s.Flags([]string{""}, []string{""}, nil).FlagSets {
@@ -1422,6 +1482,8 @@ func TestWatchListClientFlagUsage(t *testing.T) {
 }
 
 func TestWatchListClientFlagChange(t *testing.T) {
+	t.Skip("skip this test until we either bring back WatchListClient or remove it")
+
 	fs := pflag.NewFlagSet("addflagstest", pflag.ContinueOnError)
 	s, err := NewKubeControllerManagerOptions()
 	if err != nil {
@@ -1454,8 +1516,8 @@ func TestWatchListClientFlagChange(t *testing.T) {
 
 func assertWatchListClientFeatureDefaultValue(t *testing.T) {
 	watchListClientDefaultValue := clientgofeaturegate.FeatureGates().Enabled(clientgofeaturegate.WatchListClient)
-	if watchListClientDefaultValue {
-		t.Fatalf("expected %q feature gate to be disabled for KCM", clientgofeaturegate.WatchListClient)
+	if !watchListClientDefaultValue {
+		t.Fatalf("expected %q feature gate to be enabled for KCM", clientgofeaturegate.WatchListClient)
 	}
 }
 
@@ -1466,7 +1528,7 @@ func assertWatchListCommandLineDefaultValue(t *testing.T, fs *pflag.FlagSet) {
 		t.Fatalf("didn't find %q flag", fgFlagName)
 	}
 
-	expectedWatchListClientString := "WatchListClient=true|false (BETA - default=false)"
+	expectedWatchListClientString := "WatchListClient=true|false (BETA - default=true)"
 	if !strings.Contains(fg.Usage, expectedWatchListClientString) {
 		t.Fatalf("%q flag doesn't contain the expected usage for %v feature gate.\nExpected = %v\nUsage = %v", fgFlagName, clientgofeaturegate.WatchListClient, expectedWatchListClientString, fg.Usage)
 	}
@@ -1478,6 +1540,22 @@ func setupControllerManagerFlagSet(t *testing.T) (*pflag.FlagSet, *KubeControlle
 	if err != nil {
 		t.Fatal(fmt.Errorf("NewKubeControllerManagerOptions failed with %w", err))
 	}
+
+	componentGlobalsRegistry := basecompatibility.NewComponentGlobalsRegistry()
+
+	verKube := basecompatibility.NewEffectiveVersionFromString("1.32", "1.31", "1.31")
+	fg := featuregate.NewVersionedFeatureGate(version.MustParse("1.32"))
+	utilruntime.Must(fg.AddVersioned(map[featuregate.Feature]featuregate.VersionedSpecs{
+		"kubeA": {
+			{Version: version.MustParse("1.30"), Default: false, PreRelease: featuregate.Beta},
+			{Version: version.MustParse("1.32"), Default: true, LockToDefault: true, PreRelease: featuregate.GA},
+		},
+		"kubeB": {
+			{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
+		},
+	}))
+	utilruntime.Must(componentGlobalsRegistry.Register(basecompatibility.DefaultKubeComponent, verKube, fg))
+	s.ComponentGlobalsRegistry = componentGlobalsRegistry
 
 	for _, f := range s.Flags([]string{""}, []string{""}, nil).FlagSets {
 		fs.AddFlagSet(f)

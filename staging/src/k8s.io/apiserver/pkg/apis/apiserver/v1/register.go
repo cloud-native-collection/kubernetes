@@ -47,6 +47,8 @@ func init() {
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&AdmissionConfiguration{},
+		&AuthenticationConfiguration{},
+		&AuthorizationConfiguration{},
 		&EncryptionConfiguration{},
 	)
 	// also register into the v1 group as EncryptionConfig (due to a docs bug)

@@ -22,11 +22,18 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/klog/v2"
 )
+
+type LeaderElectionTimers struct {
+	LeaseDuration time.Duration
+	RenewDeadline time.Duration
+	RetryPeriod   time.Duration
+}
 
 type NewRunner func() (func(ctx context.Context, workers int), error)
 
@@ -35,57 +42,57 @@ type NewRunner func() (func(ctx context.Context, workers int), error)
 // controller instance's Run method each time.
 // RunWithLeaderElection only returns when the context is done, or initial
 // leader election fails.
-func RunWithLeaderElection(ctx context.Context, config *rest.Config, newRunnerFn NewRunner) {
-	var cancel context.CancelFunc
-
-	callbacks := leaderelection.LeaderCallbacks{
-		OnStartedLeading: func(ctx context.Context) {
-			ctx, cancel = context.WithCancel(ctx)
-			var err error
-			run, err := newRunnerFn()
-			if err != nil {
-				klog.Infof("Error creating runner: %v", err)
-				return
-			}
-			run(ctx, 1)
-		},
-		OnStoppedLeading: func() {
-			cancel()
-		},
-	}
-
+func RunWithLeaderElection(ctx context.Context, config *rest.Config, newRunnerFn NewRunner, timers LeaderElectionTimers) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		klog.Infof("Error parsing hostname: %v", err)
 		return
 	}
+	identity := hostname + "_" + string(uuid.NewUUID())
 
-	rl, err := resourcelock.NewFromKubeconfig(
-		"leases",
-		"kube-system",
-		controllerName,
-		resourcelock.ResourceLockConfig{
-			Identity: hostname + "_" + string(uuid.NewUUID()),
-		},
-		config,
-		10,
-	)
-	if err != nil {
-		klog.Infof("Error creating resourcelock: %v", err)
-		return
-	}
+	wait.Until(func() {
+		callbacks := leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(ctx context.Context) {
+				var err error
+				run, err := newRunnerFn()
+				if err != nil {
+					klog.Infof("Error creating runner: %v", err)
+					return
+				}
+				run(ctx, 1)
+			},
+			OnStoppedLeading: func() {
+			},
+		}
 
-	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-		Lock:          rl,
-		LeaseDuration: 15 * time.Second,
-		RenewDeadline: 10 * time.Second,
-		RetryPeriod:   2 * time.Second,
-		Callbacks:     callbacks,
-		Name:          controllerName,
-	})
-	if err != nil {
-		klog.Infof("Error creating leader elector: %v", err)
-		return
-	}
-	le.Run(ctx)
+		rl, err := resourcelock.NewFromKubeconfig(
+			"leases",
+			"kube-system",
+			controllerName,
+			resourcelock.ResourceLockConfig{
+				Identity: identity,
+			},
+			config,
+			10,
+		)
+		if err != nil {
+			klog.Infof("Error creating resourcelock: %v", err)
+			return
+		}
+
+		le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
+			Lock:            rl,
+			LeaseDuration:   timers.LeaseDuration,
+			RenewDeadline:   timers.RenewDeadline,
+			RetryPeriod:     timers.RetryPeriod,
+			Callbacks:       callbacks,
+			Name:            controllerName,
+			ReleaseOnCancel: true,
+		})
+		if err != nil {
+			klog.Infof("Error creating leader elector: %v", err)
+			return
+		}
+		le.Run(ctx)
+	}, timers.RetryPeriod, ctx.Done())
 }

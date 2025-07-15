@@ -18,12 +18,12 @@ package upgrade
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,6 +31,7 @@ import (
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/errors"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/output"
 )
 
@@ -127,7 +128,7 @@ const fakeCurrentCoreDNSVersion = "1.0.6"
 
 func TestGetAvailableUpgrades(t *testing.T) {
 
-	// constansts for test cases
+	// constants for test cases
 	// variables are in the form v{MAJOR}{MINOR}{PATCH}, where MINOR is a variable so test are automatically uptodate to the latest MinimumControlPlaneVersion/
 
 	// v1.X series, e.g. v1.14

@@ -71,42 +71,30 @@ func TestPolicyOptionsAvailable(t *testing.T) {
 			expectedAvailable: false,
 		},
 		{
-			option:            FullPCPUsOnlyOption,
+			option:            AlignBySocketOption,
+			featureGate:       pkgfeatures.CPUManagerPolicyAlphaOptions,
+			featureGateEnable: true,
+			expectedAvailable: true,
+		},
+		{
+			option:            AlignBySocketOption,
+			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
+			featureGateEnable: true,
+			expectedAvailable: false,
+		},
+		{
+			option:            DistributeCPUsAcrossNUMAOption,
 			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
 			featureGateEnable: true,
 			expectedAvailable: true,
 		},
 		{
-			option:            FullPCPUsOnlyOption,
+			option:            DistributeCPUsAcrossNUMAOption,
 			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
 			featureGateEnable: false,
 			expectedAvailable: false,
 		},
 		{
-			option:            AlignBySocketOption,
-			featureGate:       pkgfeatures.CPUManagerPolicyAlphaOptions,
-			featureGateEnable: true,
-			expectedAvailable: true,
-		},
-		{
-			option:            AlignBySocketOption,
-			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
-			featureGateEnable: true,
-			expectedAvailable: false,
-		},
-		{
-			option:            DistributeCPUsAcrossNUMAOption,
-			featureGate:       pkgfeatures.CPUManagerPolicyAlphaOptions,
-			featureGateEnable: true,
-			expectedAvailable: true,
-		},
-		{
-			option:            DistributeCPUsAcrossNUMAOption,
-			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
-			featureGateEnable: true,
-			expectedAvailable: false,
-		},
-		{
 			option:            DistributeCPUsAcrossCoresOption,
 			featureGate:       pkgfeatures.CPUManagerPolicyAlphaOptions,
 			featureGateEnable: true,
@@ -117,6 +105,18 @@ func TestPolicyOptionsAvailable(t *testing.T) {
 			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
 			featureGateEnable: true,
 			expectedAvailable: false,
+		},
+		{
+			option:            StrictCPUReservationOption,
+			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
+			featureGateEnable: false,
+			expectedAvailable: false,
+		},
+		{
+			option:            StrictCPUReservationOption,
+			featureGate:       pkgfeatures.CPUManagerPolicyBetaOptions,
+			featureGateEnable: true,
+			expectedAvailable: true,
 		},
 	}
 	for _, testCase := range testCases {
@@ -126,6 +126,21 @@ func TestPolicyOptionsAvailable(t *testing.T) {
 			isEnabled := (err == nil)
 			if isEnabled != testCase.expectedAvailable {
 				t.Errorf("option %q available got=%v expected=%v", testCase.option, isEnabled, testCase.expectedAvailable)
+			}
+		})
+	}
+}
+
+func TestPolicyOptionsAlwaysAvailableOnceGA(t *testing.T) {
+	options := []string{
+		FullPCPUsOnlyOption,
+	}
+	for _, option := range options {
+		t.Run(option, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyAlphaOptions, false)
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyBetaOptions, false)
+			if err := CheckPolicyOptionAvailable(option); err != nil {
+				t.Errorf("option %q should be available even with all featuregate disabled", option)
 			}
 		})
 	}

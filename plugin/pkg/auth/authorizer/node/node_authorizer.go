@@ -95,7 +95,7 @@ var (
 	csiNodeResource       = storageapi.Resource("csinodes")
 )
 
-func (r *NodeAuthorizer) RulesFor(user user.Info, namespace string) ([]authorizer.ResourceRuleInfo, []authorizer.NonResourceRuleInfo, bool, error) {
+func (r *NodeAuthorizer) RulesFor(ctx context.Context, user user.Info, namespace string) ([]authorizer.ResourceRuleInfo, []authorizer.NonResourceRuleInfo, bool, error) {
 	if _, isNode := r.identifier.NodeIdentity(user); isNode {
 		// indicate nodes do not have fully enumerated permissions
 		return nil, nil, true, fmt.Errorf("node authorizer does not support user rule resolution")
@@ -135,7 +135,7 @@ func (r *NodeAuthorizer) Authorize(ctx context.Context, attrs authorizer.Attribu
 		case vaResource:
 			return r.authorizeGet(nodeName, vaVertexType, attrs)
 		case svcAcctResource:
-			return r.authorizeCreateToken(nodeName, serviceAccountVertexType, attrs)
+			return r.authorizeServiceAccount(nodeName, attrs)
 		case leaseResource:
 			return r.authorizeLease(nodeName, attrs)
 		case csiNodeResource:
@@ -196,7 +196,7 @@ func (r *NodeAuthorizer) authorizeGet(nodeName string, startingType vertexType, 
 func (r *NodeAuthorizer) authorizeReadNamespacedObject(nodeName string, startingType vertexType, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
 	switch attrs.GetVerb() {
 	case "get", "list", "watch":
-		//ok
+		// ok
 	default:
 		klog.V(2).Infof("NODE DENY: '%s' %#v", nodeName, attrs)
 		return authorizer.DecisionNoOpinion, "can only read resources of this type", nil
@@ -231,6 +231,23 @@ func (r *NodeAuthorizer) authorize(nodeName string, startingType vertexType, att
 	return authorizer.DecisionAllow, "", nil
 }
 
+// authorizeServiceAccount authorizes
+// - "get" requests to serviceaccounts when KubeletServiceAccountTokenForCredentialProviders feature is enabled
+// - "create" requests to serviceaccounts 'token' subresource of pods running on a node
+func (r *NodeAuthorizer) authorizeServiceAccount(nodeName string, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
+	verb := attrs.GetVerb()
+
+	if verb == "get" && attrs.GetSubresource() == "" {
+		if !r.features.Enabled(features.KubeletServiceAccountTokenForCredentialProviders) {
+			klog.V(2).Infof("NODE DENY: '%s' %#v", nodeName, attrs)
+			return authorizer.DecisionNoOpinion, "not allowed to get service accounts", nil
+		}
+		return r.authorizeReadNamespacedObject(nodeName, serviceAccountVertexType, attrs)
+	}
+
+	return r.authorizeCreateToken(nodeName, serviceAccountVertexType, attrs)
+}
+
 // authorizeCreateToken authorizes "create" requests to serviceaccounts 'token'
 // subresource of pods running on a node
 func (r *NodeAuthorizer) authorizeCreateToken(nodeName string, startingType vertexType, attrs authorizer.Attributes) (authorizer.Decision, string, error) {
@@ -262,7 +279,7 @@ func (r *NodeAuthorizer) authorizeLease(nodeName string, attrs authorizer.Attrib
 	verb := attrs.GetVerb()
 	switch verb {
 	case "get", "create", "update", "patch", "delete":
-		//ok
+		// ok
 	default:
 		klog.V(2).Infof("NODE DENY: '%s' %#v", nodeName, attrs)
 		return authorizer.DecisionNoOpinion, "can only get, create, update, patch, or delete a node lease", nil
@@ -291,7 +308,7 @@ func (r *NodeAuthorizer) authorizeCSINode(nodeName string, attrs authorizer.Attr
 	verb := attrs.GetVerb()
 	switch verb {
 	case "get", "create", "update", "patch", "delete":
-		//ok
+		// ok
 	default:
 		klog.V(2).Infof("NODE DENY: '%s' %#v", nodeName, attrs)
 		return authorizer.DecisionNoOpinion, "can only get, create, update, patch, or delete a CSINode", nil
@@ -448,19 +465,27 @@ func (r *NodeAuthorizer) hasPathFrom(nodeName string, startingType vertexType, s
 	r.graph.lock.RLock()
 	defer r.graph.lock.RUnlock()
 
-	nodeVertex, exists := r.graph.getVertex_rlocked(nodeVertexType, "", nodeName)
+	nodeVertex, exists := r.graph.getVertexRLocked(nodeVertexType, "", nodeName)
 	if !exists {
 		return false, fmt.Errorf("unknown node '%s' cannot get %s %s/%s", nodeName, vertexTypes[startingType], startingNamespace, startingName)
 	}
 
-	startingVertex, exists := r.graph.getVertex_rlocked(startingType, startingNamespace, startingName)
+	startingVertex, exists := r.graph.getVertexRLocked(startingType, startingNamespace, startingName)
 	if !exists {
 		return false, fmt.Errorf("node '%s' cannot get unknown %s %s/%s", nodeName, vertexTypes[startingType], startingNamespace, startingName)
 	}
 
-	// Fast check to see if we know of a destination edge
-	if r.graph.destinationEdgeIndex[startingVertex.ID()].has(nodeVertex.ID()) {
-		return true, nil
+	if index, indexExists := r.graph.destinationEdgeIndex[startingVertex.ID()]; indexExists {
+		// Fast check to see if we know of a destination edge
+		if index.has(nodeVertex.ID()) {
+			return true, nil
+		}
+		// For some types of vertices, the destination edge index is authoritative
+		// (as long as it exists), hence we can fail-fast here instead of running
+		// a potentially costly DFS below.
+		if vertexTypeWithAuthoritativeIndex[startingType] {
+			return false, fmt.Errorf("node '%s' cannot get %s %s/%s, no relationship to this object was found in the node authorizer graph", nodeName, vertexTypes[startingType], startingNamespace, startingName)
+		}
 	}
 
 	found := false

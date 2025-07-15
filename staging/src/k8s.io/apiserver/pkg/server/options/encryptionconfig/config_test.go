@@ -47,7 +47,7 @@ import (
 	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/klog/v2"
 	kmsservice "k8s.io/kms/pkg/service"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -391,15 +391,13 @@ func TestKMSvsEnablement(t *testing.T) {
 	}
 	tts := []struct {
 		name            string
-		kmsv2Enabled    bool
 		expectedErr     string
 		expectedTimeout time.Duration
 		config          apiserver.EncryptionConfiguration
 		wantV2Used      bool
 	}{
 		{
-			name:         "with kmsv1 and kmsv2, KMSv2=true",
-			kmsv2Enabled: true,
+			name: "with kmsv1 and kmsv2, KMSv2=true",
 			config: apiserver.EncryptionConfiguration{
 				Resources: []apiserver.ResourceConfiguration{
 					{
@@ -413,7 +411,7 @@ func TestKMSvsEnablement(t *testing.T) {
 										Duration: 1 * time.Second,
 									},
 									Endpoint:  "unix:///tmp/testprovider.sock",
-									CacheSize: pointer.Int32(1000),
+									CacheSize: ptr.To[int32](1000),
 								},
 							},
 							{
@@ -424,7 +422,7 @@ func TestKMSvsEnablement(t *testing.T) {
 										Duration: 1 * time.Second,
 									},
 									Endpoint:  "unix:///tmp/anothertestprovider.sock",
-									CacheSize: pointer.Int32(1000),
+									CacheSize: ptr.To[int32](1000),
 								},
 							},
 						},
@@ -440,8 +438,6 @@ func TestKMSvsEnablement(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Just testing KMSv2 feature flag
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv1, true)
-
-			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, tt.kmsv2Enabled)
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // cancel this upfront so the kms v2 checks do not block
@@ -884,7 +880,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -908,7 +904,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -924,7 +920,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -948,7 +944,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -964,7 +960,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -988,7 +984,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1004,7 +1000,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1028,7 +1024,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1045,7 +1041,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/another-testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1071,7 +1067,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1095,7 +1091,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1112,7 +1108,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/another-testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1138,7 +1134,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1163,7 +1159,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1179,7 +1175,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/another-testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1205,7 +1201,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1229,7 +1225,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1245,7 +1241,7 @@ func TestWildcardMasking(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/another-testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1304,7 +1300,7 @@ func TestWildcardStructure(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1320,7 +1316,7 @@ func TestWildcardStructure(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 							{
@@ -1339,7 +1335,7 @@ func TestWildcardStructure(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1355,7 +1351,7 @@ func TestWildcardStructure(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1380,7 +1376,7 @@ func TestWildcardStructure(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 						},
@@ -1397,7 +1393,7 @@ func TestWildcardStructure(t *testing.T) {
 									APIVersion: "v1",
 									Timeout:    &metav1.Duration{Duration: 3 * time.Second},
 									Endpoint:   "unix:///tmp/testprovider.sock",
-									CacheSize:  pointer.Int32(10),
+									CacheSize:  ptr.To[int32](10),
 								},
 							},
 							{
@@ -1428,7 +1424,15 @@ func TestWildcardStructure(t *testing.T) {
 			for resource, expectedTransformerName := range tc.expectedResourceTransformers {
 				transformer := transformerFromOverrides(transformers, schema.ParseGroupResource(resource))
 				transformerName := string(
-					reflect.ValueOf(transformer).Elem().FieldByName("transformers").Index(0).FieldByName("Prefix").Bytes(),
+					reflect.ValueOf(transformer).
+						Elem().
+						FieldByName("delegate").
+						Elem().
+						Elem().
+						FieldByName("transformers").
+						Index(0).
+						FieldByName("Prefix").
+						Bytes(),
 				)
 
 				if transformerName != expectedTransformerName {
@@ -1847,7 +1851,7 @@ func TestComputeEncryptionConfigHash(t *testing.T) {
 }
 
 func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
-	defaultUseSeed := GetKDF()
+	defaultUseSeed := GetKDF("")
 
 	origNowFunc := envelopekmsv2.NowFunc
 	now := origNowFunc() // freeze time
@@ -2070,9 +2074,10 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 				`encryptKeyIDHash="", stateKeyIDHash="sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35", expirationTimestamp=` + now.Format(time.RFC3339),
 		},
 	}
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer SetKDFForTests(tt.useSeed)()
+			kmsName := fmt.Sprintf("panda-%d", i)
+			defer SetKDFForTests(kmsName, tt.useSeed)()
 
 			var buf bytes.Buffer
 			klog.SetOutput(&buf)
@@ -2080,7 +2085,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 			ctx := testContext(t)
 
 			h := &kmsv2PluginProbe{
-				name:    "panda",
+				name:    kmsName,
 				service: tt.service,
 			}
 			h.state.Store(&tt.state)
@@ -2129,7 +2134,7 @@ func Test_kmsv2PluginProbe_rotateDEKOnKeyIDChange(t *testing.T) {
 			if _, stateErr := h.getCurrentState(); stateErr == nil || err == nil {
 				transformer := envelopekmsv2.NewEnvelopeTransformer(
 					&testKMSv2EnvelopeService{err: fmt.Errorf("broken")}, // not called
-					"panda",
+					kmsName,
 					h.getCurrentState,
 					"",
 				)

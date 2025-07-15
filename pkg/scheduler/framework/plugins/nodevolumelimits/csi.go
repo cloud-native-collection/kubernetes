@@ -23,6 +23,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/rand"
 	corelisters "k8s.io/client-go/listers/core/v1"
@@ -31,11 +32,16 @@ import (
 	storagehelpers "k8s.io/component-helpers/storage/volume"
 	csitrans "k8s.io/csi-translation-lib"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/names"
 	"k8s.io/kubernetes/pkg/scheduler/util"
-	volumeutil "k8s.io/kubernetes/pkg/volume/util"
+)
+
+const (
+	// ErrReasonMaxVolumeCountExceeded is used for MaxVolumeCount predicate error.
+	ErrReasonMaxVolumeCountExceeded = "node(s) exceed max volume count"
 )
 
 // InTreeToCSITranslator contains methods required to check migratable status
@@ -46,8 +52,8 @@ type InTreeToCSITranslator interface {
 	IsMigratableIntreePluginByName(inTreePluginName string) bool
 	GetInTreePluginNameFromSpec(pv *v1.PersistentVolume, vol *v1.Volume) (string, error)
 	GetCSINameFromInTreeName(pluginName string) (string, error)
-	TranslateInTreePVToCSI(pv *v1.PersistentVolume) (*v1.PersistentVolume, error)
-	TranslateInTreeInlineVolumeToCSI(volume *v1.Volume, podNamespace string) (*v1.PersistentVolume, error)
+	TranslateInTreePVToCSI(logger klog.Logger, pv *v1.PersistentVolume) (*v1.PersistentVolume, error)
+	TranslateInTreeInlineVolumeToCSI(logger klog.Logger, volume *v1.Volume, podNamespace string) (*v1.PersistentVolume, error)
 }
 
 // CSILimits is a plugin that checks node volume limits.
@@ -56,8 +62,10 @@ type CSILimits struct {
 	pvLister      corelisters.PersistentVolumeLister
 	pvcLister     corelisters.PersistentVolumeClaimLister
 	scLister      storagelisters.StorageClassLister
+	vaLister      storagelisters.VolumeAttachmentLister
 
-	randomVolumeIDPrefix string
+	enableCSIMigrationPortworx bool
+	randomVolumeIDPrefix       string
 
 	translator InTreeToCSITranslator
 }
@@ -76,44 +84,157 @@ func (pl *CSILimits) Name() string {
 
 // EventsToRegister returns the possible events that may make a Pod.
 // failed by this plugin schedulable.
-func (pl *CSILimits) EventsToRegister(_ context.Context) ([]framework.ClusterEventWithHint, error) {
-	return []framework.ClusterEventWithHint{
+func (pl *CSILimits) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {
+	return []fwk.ClusterEventWithHint{
 		// We don't register any `QueueingHintFn` intentionally
 		// because any new CSINode could make pods that were rejected by CSI volumes schedulable.
-		{Event: framework.ClusterEvent{Resource: framework.CSINode, ActionType: framework.Add}},
-		{Event: framework.ClusterEvent{Resource: framework.Pod, ActionType: framework.Delete}, QueueingHintFn: pl.isSchedulableAfterPodDeleted},
-		{Event: framework.ClusterEvent{Resource: framework.PersistentVolumeClaim, ActionType: framework.Add}},
+		{Event: fwk.ClusterEvent{Resource: fwk.CSINode, ActionType: fwk.Add}},
+		{Event: fwk.ClusterEvent{Resource: fwk.CSINode, ActionType: fwk.Update}, QueueingHintFn: pl.isSchedulableAfterCSINodeUpdated},
+		{Event: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.Delete}, QueueingHintFn: pl.isSchedulableAfterPodDeleted},
+		{Event: fwk.ClusterEvent{Resource: fwk.PersistentVolumeClaim, ActionType: fwk.Add}, QueueingHintFn: pl.isSchedulableAfterPVCAdded},
+		{Event: fwk.ClusterEvent{Resource: fwk.VolumeAttachment, ActionType: fwk.Delete}, QueueingHintFn: pl.isSchedulableAfterVolumeAttachmentDeleted},
 	}, nil
 }
 
-func (pl *CSILimits) isSchedulableAfterPodDeleted(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+func (pl *CSILimits) isSchedulableAfterPodDeleted(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (fwk.QueueingHint, error) {
 	deletedPod, _, err := util.As[*v1.Pod](oldObj, newObj)
 	if err != nil {
-		return framework.Queue, fmt.Errorf("unexpected objects in isSchedulableAfterPodDeleted: %w", err)
+		return fwk.Queue, fmt.Errorf("unexpected objects in isSchedulableAfterPodDeleted: %w", err)
 	}
 
 	if len(deletedPod.Spec.Volumes) == 0 {
-		return framework.QueueSkip, nil
+		return fwk.QueueSkip, nil
 	}
 
-	if deletedPod.Spec.NodeName == "" {
-		return framework.QueueSkip, nil
+	if deletedPod.Spec.NodeName == "" && deletedPod.Status.NominatedNodeName == "" {
+		return fwk.QueueSkip, nil
 	}
 
 	for _, vol := range deletedPod.Spec.Volumes {
 		if vol.PersistentVolumeClaim != nil || vol.Ephemeral != nil || pl.translator.IsInlineMigratable(&vol) {
-			return framework.Queue, nil
+			return fwk.Queue, nil
 		}
 	}
 
 	logger.V(5).Info("The deleted pod does not impact the scheduling of the unscheduled pod", "deletedPod", klog.KObj(pod), "pod", klog.KObj(deletedPod))
-	return framework.QueueSkip, nil
+	return fwk.QueueSkip, nil
+}
+
+func (pl *CSILimits) isSchedulableAfterPVCAdded(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (fwk.QueueingHint, error) {
+	_, addedPvc, err := util.As[*v1.PersistentVolumeClaim](oldObj, newObj)
+	if err != nil {
+		return fwk.Queue, fmt.Errorf("unexpected objects in isSchedulableAfterPVCAdded: %w", err)
+	}
+
+	if addedPvc.Namespace != pod.Namespace {
+		return fwk.QueueSkip, nil
+	}
+
+	for _, volumes := range pod.Spec.Volumes {
+		var pvcName string
+		switch {
+		case volumes.PersistentVolumeClaim != nil:
+			pvcName = volumes.PersistentVolumeClaim.ClaimName
+		case volumes.Ephemeral != nil:
+			pvcName = ephemeral.VolumeClaimName(pod, &volumes)
+		default:
+			// Volume is not using a PVC, ignore
+			continue
+		}
+
+		if pvcName == addedPvc.Name {
+			logger.V(5).Info("PVC that is referred from the pod was created, which might make this pod schedulable", "pod", klog.KObj(pod), "PVC", klog.KObj(addedPvc))
+			return fwk.Queue, nil
+		}
+	}
+
+	logger.V(5).Info("PVC irrelevant to the Pod was created, which doesn't make this pod schedulable", "pod", klog.KObj(pod), "PVC", klog.KObj(addedPvc))
+	return fwk.QueueSkip, nil
+}
+
+func (pl *CSILimits) isSchedulableAfterVolumeAttachmentDeleted(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (fwk.QueueingHint, error) {
+	deletedVolumeAttachment, _, err := util.As[*storagev1.VolumeAttachment](oldObj, newObj)
+	if err != nil {
+		return fwk.Queue, fmt.Errorf("unexpected objects in isSchedulableAfterVolumeAttachmentDeleted: %w", err)
+	}
+
+	for _, vol := range pod.Spec.Volumes {
+		// Check if the pod volume uses a PVC
+		// If it does, return Queue
+		if vol.PersistentVolumeClaim != nil {
+			logger.V(5).Info("Pod volume uses PersistentVolumeClaim, which might make this pod schedulable due to VolumeAttachment deletion", "pod", klog.KObj(pod), "volumeAttachment", klog.KObj(deletedVolumeAttachment), "volume", vol.Name)
+			return fwk.Queue, nil
+		}
+
+		if !pl.translator.IsInlineMigratable(&vol) {
+			continue
+		}
+
+		translatedPV, err := pl.translator.TranslateInTreeInlineVolumeToCSI(logger, &vol, pod.Namespace)
+		if err != nil || translatedPV == nil {
+			return fwk.Queue, fmt.Errorf("converting volume(%s) from inline to csi: %w", vol.Name, err)
+		}
+
+		if translatedPV.Spec.CSI != nil && deletedVolumeAttachment.Spec.Attacher == translatedPV.Spec.CSI.Driver {
+			// deleted VolumeAttachment Attacher matches the translated PV CSI driver
+			logger.V(5).Info("Pod volume is an Inline Migratable volume that matches the CSI driver, which might make this pod schedulable due to VolumeAttachment deletion",
+				"pod", klog.KObj(pod), "volumeAttachment", klog.KObj(deletedVolumeAttachment),
+				"volume", vol.Name, "csiDriver", translatedPV.Spec.CSI.Driver,
+			)
+			return fwk.Queue, nil
+		}
+	}
+
+	logger.V(5).Info("the VolumeAttachment deletion wouldn't make this pod schedulable because the pod has no volume related to a deleted VolumeAttachment",
+		"pod", klog.KObj(pod), "volumeAttachment", klog.KObj(deletedVolumeAttachment))
+	return fwk.QueueSkip, nil
+}
+
+func (pl *CSILimits) isSchedulableAfterCSINodeUpdated(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (fwk.QueueingHint, error) {
+	oldCSINode, newCSINode, err := util.As[*storagev1.CSINode](oldObj, newObj)
+	if err != nil {
+		return fwk.Queue, fmt.Errorf("unexpected objects in isSchedulableAfterCSINodeUpdated: %w", err)
+	}
+
+	oldLimits := make(map[string]int32)
+	for _, d := range oldCSINode.Spec.Drivers {
+		var count int32
+		if d.Allocatable != nil && d.Allocatable.Count != nil {
+			count = *d.Allocatable.Count
+		}
+		oldLimits[d.Name] = count
+	}
+
+	// Compare new driver limits vs. old. If limit increased, queue pod.
+	for _, d := range newCSINode.Spec.Drivers {
+		var oldLimit int32
+		if val, exists := oldLimits[d.Name]; exists {
+			oldLimit = val
+		}
+		newLimit := int32(0)
+		if d.Allocatable != nil && d.Allocatable.Count != nil {
+			newLimit = *d.Allocatable.Count
+		}
+
+		if newLimit > oldLimit {
+			logger.V(5).Info("CSINode driver limit increased, might make this pod schedulable",
+				"pod", klog.KObj(pod),
+				"driver", d.Name,
+				"oldLimit", oldLimit,
+				"newLimit", newLimit,
+			)
+			return fwk.Queue, nil
+		}
+	}
+
+	// If no driver limit was increased, skip queueing.
+	return fwk.QueueSkip, nil
 }
 
 // PreFilter invoked at the prefilter extension point
 //
 // If the pod haven't those types of volumes, we'll skip the Filter phase
-func (pl *CSILimits) PreFilter(ctx context.Context, _ *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+func (pl *CSILimits) PreFilter(ctx context.Context, _ fwk.CycleState, pod *v1.Pod, _ []*framework.NodeInfo) (*framework.PreFilterResult, *fwk.Status) {
 	volumes := pod.Spec.Volumes
 	for i := range volumes {
 		vol := &volumes[i]
@@ -122,7 +243,7 @@ func (pl *CSILimits) PreFilter(ctx context.Context, _ *framework.CycleState, pod
 		}
 	}
 
-	return nil, framework.NewStatus(framework.Skip)
+	return nil, fwk.NewStatus(fwk.Skip)
 }
 
 // PreFilterExtensions returns prefilter extensions, pod add and remove.
@@ -131,7 +252,7 @@ func (pl *CSILimits) PreFilterExtensions() framework.PreFilterExtensions {
 }
 
 // Filter invoked at the filter extension point.
-func (pl *CSILimits) Filter(ctx context.Context, _ *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+func (pl *CSILimits) Filter(ctx context.Context, _ fwk.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *fwk.Status {
 	// If the new pod doesn't have any volume attached to it, the predicate will always be true
 	if len(pod.Spec.Volumes) == 0 {
 		return nil
@@ -141,20 +262,20 @@ func (pl *CSILimits) Filter(ctx context.Context, _ *framework.CycleState, pod *v
 
 	logger := klog.FromContext(ctx)
 
-	// If CSINode doesn't exist, the predicate may read the limits from Node object
 	csiNode, err := pl.csiNodeLister.Get(node.Name)
 	if err != nil {
 		// TODO: return the error once CSINode is created by default (2 releases)
 		logger.V(5).Info("Could not get a CSINode object for the node", "node", klog.KObj(node), "err", err)
 	}
 
+	// Count CSI volumes from the new pod
 	newVolumes := make(map[string]string)
 	if err := pl.filterAttachableVolumes(logger, pod, csiNode, true /* new pod */, newVolumes); err != nil {
 		if apierrors.IsNotFound(err) {
 			// PVC is not found. This Pod will never be schedulable until PVC is created.
-			return framework.NewStatus(framework.UnschedulableAndUnresolvable, err.Error())
+			return fwk.NewStatus(fwk.UnschedulableAndUnresolvable, err.Error())
 		}
-		return framework.AsStatus(err)
+		return fwk.AsStatus(err)
 	}
 
 	// If the pod doesn't have any new CSI volumes, the predicate will always be true
@@ -163,39 +284,54 @@ func (pl *CSILimits) Filter(ctx context.Context, _ *framework.CycleState, pod *v
 	}
 
 	// If the node doesn't have volume limits, the predicate will always be true
-	nodeVolumeLimits := getVolumeLimits(nodeInfo, csiNode)
+	nodeVolumeLimits := getVolumeLimits(csiNode)
 	if len(nodeVolumeLimits) == 0 {
 		return nil
 	}
 
+	// Count CSI volumes from existing pods
 	attachedVolumes := make(map[string]string)
 	for _, existingPod := range nodeInfo.Pods {
 		if err := pl.filterAttachableVolumes(logger, existingPod.Pod, csiNode, false /* existing pod */, attachedVolumes); err != nil {
-			return framework.AsStatus(err)
+			return fwk.AsStatus(err)
 		}
 	}
 
 	attachedVolumeCount := map[string]int{}
-	for volumeUniqueName, volumeLimitKey := range attachedVolumes {
+	for volumeUniqueName, driverName := range attachedVolumes {
 		// Don't count single volume used in multiple pods more than once
 		delete(newVolumes, volumeUniqueName)
-		attachedVolumeCount[volumeLimitKey]++
+		attachedVolumeCount[driverName]++
 	}
 
+	// Count CSI volumes from VolumeAttachments
+	volumeAttachments, err := pl.getNodeVolumeAttachmentInfo(logger, node.Name)
+	if err != nil {
+		return fwk.AsStatus(err)
+	}
+
+	for volumeUniqueName, driverName := range volumeAttachments {
+		// Avoid double-counting volumes already used by existing pods
+		if _, exists := attachedVolumes[volumeUniqueName]; !exists {
+			attachedVolumeCount[driverName]++
+		}
+	}
+
+	// Count the new volumes count per driver
 	newVolumeCount := map[string]int{}
-	for _, volumeLimitKey := range newVolumes {
-		newVolumeCount[volumeLimitKey]++
+	for _, driverName := range newVolumes {
+		newVolumeCount[driverName]++
 	}
 
-	for volumeLimitKey, count := range newVolumeCount {
-		maxVolumeLimit, ok := nodeVolumeLimits[v1.ResourceName(volumeLimitKey)]
+	for driverName, count := range newVolumeCount {
+		maxVolumeLimit, ok := nodeVolumeLimits[driverName]
 		if ok {
-			currentVolumeCount := attachedVolumeCount[volumeLimitKey]
-			logger.V(5).Info("Found plugin volume limits", "node", node.Name, "volumeLimitKey", volumeLimitKey,
+			currentVolumeCount := attachedVolumeCount[driverName]
+			logger.V(5).Info("Found plugin volume limits", "node", node.Name, "driverName", driverName,
 				"maxLimits", maxVolumeLimit, "currentVolumeCount", currentVolumeCount, "newVolumeCount", count,
 				"pod", klog.KObj(pod))
 			if currentVolumeCount+count > int(maxVolumeLimit) {
-				return framework.NewStatus(framework.Unschedulable, ErrReasonMaxVolumeCountExceeded)
+				return fwk.NewStatus(fwk.Unschedulable, ErrReasonMaxVolumeCountExceeded)
 			}
 		}
 	}
@@ -203,6 +339,9 @@ func (pl *CSILimits) Filter(ctx context.Context, _ *framework.CycleState, pod *v
 	return nil
 }
 
+// filterAttachableVolumes filters the attachable volumes from the pod and adds them to the result map.
+// The result map is a map of volumeUniqueName to driver name. The volumeUniqueName is a unique name for
+// the volume in the format of "driverName/volumeHandle". And driver name is the CSI driver name.
 func (pl *CSILimits) filterAttachableVolumes(
 	logger klog.Logger, pod *v1.Pod, csiNode *storagev1.CSINode, newPod bool, result map[string]string) error {
 	for _, vol := range pod.Spec.Volumes {
@@ -264,9 +403,8 @@ func (pl *CSILimits) filterAttachableVolumes(
 			continue
 		}
 
-		volumeUniqueName := fmt.Sprintf("%s/%s", driverName, volumeHandle)
-		volumeLimitKey := volumeutil.GetCSIAttachLimitKey(driverName)
-		result[volumeUniqueName] = volumeLimitKey
+		volumeUniqueName := getVolumeUniqueName(driverName, volumeHandle)
+		result[volumeUniqueName] = driverName
 	}
 	return nil
 }
@@ -283,7 +421,7 @@ func (pl *CSILimits) checkAttachableInlineVolume(logger klog.Logger, vol *v1.Vol
 	if err != nil {
 		return fmt.Errorf("looking up provisioner name for volume %s: %w", vol.Name, err)
 	}
-	if !isCSIMigrationOn(csiNode, inTreeProvisionerName) {
+	if !isCSIMigrationOn(csiNode, inTreeProvisionerName, pl.enableCSIMigrationPortworx) {
 		csiNodeName := ""
 		if csiNode != nil {
 			csiNodeName = csiNode.Name
@@ -293,7 +431,7 @@ func (pl *CSILimits) checkAttachableInlineVolume(logger klog.Logger, vol *v1.Vol
 		return nil
 	}
 	// Do translation for the in-tree volume.
-	translatedPV, err := pl.translator.TranslateInTreeInlineVolumeToCSI(vol, pod.Namespace)
+	translatedPV, err := pl.translator.TranslateInTreeInlineVolumeToCSI(logger, vol, pod.Namespace)
 	if err != nil || translatedPV == nil {
 		return fmt.Errorf("converting volume(%s) from inline to csi: %w", vol.Name, err)
 	}
@@ -306,9 +444,8 @@ func (pl *CSILimits) checkAttachableInlineVolume(logger klog.Logger, vol *v1.Vol
 	if translatedPV.Spec.PersistentVolumeSource.CSI == nil {
 		return nil
 	}
-	volumeUniqueName := fmt.Sprintf("%s/%s", driverName, translatedPV.Spec.PersistentVolumeSource.CSI.VolumeHandle)
-	volumeLimitKey := volumeutil.GetCSIAttachLimitKey(driverName)
-	result[volumeUniqueName] = volumeLimitKey
+	volumeUniqueName := getVolumeUniqueName(driverName, translatedPV.Spec.PersistentVolumeSource.CSI.VolumeHandle)
+	result[volumeUniqueName] = driverName
 	return nil
 }
 
@@ -345,12 +482,12 @@ func (pl *CSILimits) getCSIDriverInfo(logger klog.Logger, csiNode *storagev1.CSI
 			return "", ""
 		}
 
-		if !isCSIMigrationOn(csiNode, pluginName) {
+		if !isCSIMigrationOn(csiNode, pluginName, pl.enableCSIMigrationPortworx) {
 			logger.V(5).Info("CSI Migration of plugin is not enabled", "plugin", pluginName)
 			return "", ""
 		}
 
-		csiPV, err := pl.translator.TranslateInTreePVToCSI(pv)
+		csiPV, err := pl.translator.TranslateInTreePVToCSI(logger, pv)
 		if err != nil {
 			logger.V(5).Info("Unable to translate in-tree volume to CSI", "err", err)
 			return "", ""
@@ -393,7 +530,7 @@ func (pl *CSILimits) getCSIDriverInfoFromSC(logger klog.Logger, csiNode *storage
 
 	provisioner := storageClass.Provisioner
 	if pl.translator.IsMigratableIntreePluginByName(provisioner) {
-		if !isCSIMigrationOn(csiNode, provisioner) {
+		if !isCSIMigrationOn(csiNode, provisioner, pl.enableCSIMigrationPortworx) {
 			logger.V(5).Info("CSI Migration of provisioner is not enabled", "provisioner", provisioner)
 			return "", ""
 		}
@@ -416,30 +553,70 @@ func NewCSI(_ context.Context, _ runtime.Object, handle framework.Handle, fts fe
 	pvcLister := informerFactory.Core().V1().PersistentVolumeClaims().Lister()
 	csiNodesLister := informerFactory.Storage().V1().CSINodes().Lister()
 	scLister := informerFactory.Storage().V1().StorageClasses().Lister()
+	vaLister := informerFactory.Storage().V1().VolumeAttachments().Lister()
 	csiTranslator := csitrans.New()
 
 	return &CSILimits{
-		csiNodeLister:        csiNodesLister,
-		pvLister:             pvLister,
-		pvcLister:            pvcLister,
-		scLister:             scLister,
-		randomVolumeIDPrefix: rand.String(32),
-		translator:           csiTranslator,
+		csiNodeLister:              csiNodesLister,
+		pvLister:                   pvLister,
+		pvcLister:                  pvcLister,
+		scLister:                   scLister,
+		vaLister:                   vaLister,
+		enableCSIMigrationPortworx: fts.EnableCSIMigrationPortworx,
+		randomVolumeIDPrefix:       rand.String(32),
+		translator:                 csiTranslator,
 	}, nil
 }
 
-func getVolumeLimits(nodeInfo *framework.NodeInfo, csiNode *storagev1.CSINode) map[v1.ResourceName]int64 {
-	// TODO: stop getting values from Node object in v1.18
-	nodeVolumeLimits := volumeLimits(nodeInfo)
-	if csiNode != nil {
-		for i := range csiNode.Spec.Drivers {
-			d := csiNode.Spec.Drivers[i]
-			if d.Allocatable != nil && d.Allocatable.Count != nil {
-				// TODO: drop GetCSIAttachLimitKey once we don't get values from Node object (v1.18)
-				k := v1.ResourceName(volumeutil.GetCSIAttachLimitKey(d.Name))
-				nodeVolumeLimits[k] = int64(*d.Allocatable.Count)
-			}
+// getVolumeLimits reads the volume limits from CSINode object and returns a map of volume limits.
+// The key is the driver name and the value is the maximum number of volumes that can be attached to the node.
+// If a key is not found in the map, it means there is no limit for the driver on the node.
+func getVolumeLimits(csiNode *storagev1.CSINode) map[string]int64 {
+	nodeVolumeLimits := make(map[string]int64)
+	if csiNode == nil {
+		return nodeVolumeLimits
+	}
+	for _, d := range csiNode.Spec.Drivers {
+		if d.Allocatable != nil && d.Allocatable.Count != nil {
+			nodeVolumeLimits[d.Name] = int64(*d.Allocatable.Count)
 		}
 	}
 	return nodeVolumeLimits
+}
+
+// getNodeVolumeAttachmentInfo returns a map of volumeID to driver name for the given node.
+func (pl *CSILimits) getNodeVolumeAttachmentInfo(logger klog.Logger, nodeName string) (map[string]string, error) {
+	volumeAttachments := make(map[string]string)
+	vas, err := pl.vaLister.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	for _, va := range vas {
+		if va.Spec.NodeName == nodeName {
+			if va.Spec.Attacher == "" {
+				logger.V(5).Info("VolumeAttachment has no attacher", "VolumeAttachment", klog.KObj(va))
+				continue
+			}
+			if va.Spec.Source.PersistentVolumeName == nil {
+				logger.V(5).Info("VolumeAttachment has no PV name", "VolumeAttachment", klog.KObj(va))
+				continue
+			}
+			pv, err := pl.pvLister.Get(*va.Spec.Source.PersistentVolumeName)
+			if err != nil {
+				logger.V(5).Info("Unable to get PV for VolumeAttachment", "VolumeAttachment", klog.KObj(va), "err", err)
+				continue
+			}
+			if pv.Spec.CSI == nil {
+				logger.V(5).Info("PV is not a CSI volume", "PV", klog.KObj(pv))
+				continue
+			}
+			volumeID := getVolumeUniqueName(va.Spec.Attacher, pv.Spec.CSI.VolumeHandle)
+			volumeAttachments[volumeID] = va.Spec.Attacher
+		}
+	}
+	return volumeAttachments, nil
+}
+
+func getVolumeUniqueName(driverName, volumeHandle string) string {
+	return fmt.Sprintf("%s/%s", driverName, volumeHandle)
 }

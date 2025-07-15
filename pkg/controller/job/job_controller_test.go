@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/util/feature"
@@ -1249,6 +1250,16 @@ func TestControllerSyncJob(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			logger, _ := ktesting.NewTestContext(t)
+			if tc.podIndexLabelDisabled {
+				// TODO: this will be removed in 1.35 when 1.31 will fall out of support matrix
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.31"))
+			} else if !tc.jobSuccessPolicy {
+				// TODO: this will be removed in 1.36.
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.32"))
+			} else if !tc.jobPodReplacementPolicy {
+				// TODO: this will be removed in 1.37.
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.PodIndexLabel, !tc.podIndexLabelDisabled)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.jobPodReplacementPolicy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobSuccessPolicy, tc.jobSuccessPolicy)
@@ -1453,7 +1464,7 @@ func TestGetNewFinshedPods(t *testing.T) {
 	cases := map[string]struct {
 		job                  batch.Job
 		pods                 []*v1.Pod
-		expectedRmFinalizers sets.Set[string]
+		expectedRmFinalizers sets.Set[types.UID]
 		wantSucceeded        int32
 		wantFailed           int32
 	}{
@@ -1510,7 +1521,7 @@ func TestGetNewFinshedPods(t *testing.T) {
 					},
 				},
 			},
-			expectedRmFinalizers: sets.New("b", "f"),
+			expectedRmFinalizers: sets.New[types.UID]("b", "f"),
 			pods: []*v1.Pod{
 				buildPod().uid("a").phase(v1.PodSucceeded).Pod,
 				buildPod().uid("b").phase(v1.PodSucceeded).trackingFinalizer().Pod,
@@ -1575,7 +1586,7 @@ func TestTrackJobStatusAndRemoveFinalizers(t *testing.T) {
 		job                     batch.Job
 		pods                    []*v1.Pod
 		finishedCond            *batch.JobCondition
-		expectedRmFinalizers    sets.Set[string]
+		expectedRmFinalizers    sets.Set[types.UID]
 		needsFlush              bool
 		statusUpdateErr         error
 		podControlErr           error
@@ -1686,7 +1697,7 @@ func TestTrackJobStatusAndRemoveFinalizers(t *testing.T) {
 					},
 				},
 			},
-			expectedRmFinalizers: sets.New("c", "d", "g", "h"),
+			expectedRmFinalizers: sets.New[types.UID]("c", "d", "g", "h"),
 			pods: []*v1.Pod{
 				buildPod().uid("a").phase(v1.PodSucceeded).trackingFinalizer().Pod,
 				buildPod().uid("b").phase(v1.PodFailed).trackingFinalizer().Pod,
@@ -2432,6 +2443,10 @@ func TestTrackJobStatusAndRemoveFinalizers(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			if !tc.enableJobBackoffLimitPerIndex || !tc.enableJobSuccessPolicy {
+				// TODO: this will be removed in 1.36
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.32"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobBackoffLimitPerIndex, tc.enableJobBackoffLimitPerIndex)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobSuccessPolicy, tc.enableJobSuccessPolicy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.enableJobPodReplacementPolicy)
@@ -2685,6 +2700,10 @@ func TestSyncJobPastDeadline(t *testing.T) {
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			if !tc.enableJobPodReplacementPolicy {
+				// TODO: this will be removed in 1.37.
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobManagedBy, tc.enableJobManagedBy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.enableJobPodReplacementPolicy)
 			// job manager setup
@@ -2756,6 +2775,8 @@ func getCondition(job *batch.Job, condition batch.JobConditionType, status v1.Co
 // reaching the active deadline, at which point it is marked as Failed.
 func TestPastDeadlineJobFinished(t *testing.T) {
 	_, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
 	clientset := fake.NewClientset()
 	fakeClock := clocktesting.NewFakeClock(time.Now().Truncate(time.Second))
 	manager, sharedInformerFactory := newControllerFromClientWithClock(ctx, t, clientset, controller.NoResyncPeriodFunc, fakeClock)
@@ -2765,8 +2786,6 @@ func TestPastDeadlineJobFinished(t *testing.T) {
 		controller.NewControllerExpectations(), true, func() {
 		},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sharedInformerFactory.Start(ctx.Done())
 	sharedInformerFactory.WaitForCacheSync(ctx.Done())
 
@@ -3087,6 +3106,7 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 
 	testCases := map[string]struct {
 		enableJobPodReplacementPolicy bool
+		enableJobManagedBy            bool
 		job                           batch.Job
 		pods                          []v1.Pod
 		wantConditions                []batch.JobCondition
@@ -3411,6 +3431,56 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 				},
 				{
 					Type:    batch.JobFailed,
+					Status:  v1.ConditionTrue,
+					Reason:  batch.JobReasonPodFailurePolicy,
+					Message: "Container main-container for pod default/mypod-1 failed with exit code 5 matching FailJob rule at index 1",
+				},
+			},
+			wantStatusActive:    0,
+			wantStatusFailed:    2,
+			wantStatusSucceeded: 0,
+		},
+		"fail job with multiple pods; JobManagedBy enabled delays setting terminal condition": {
+			enableJobManagedBy: true,
+			job: batch.Job{
+				TypeMeta:   metav1.TypeMeta{Kind: "Job"},
+				ObjectMeta: validObjectMeta,
+				Spec: batch.JobSpec{
+					Selector:     validSelector,
+					Template:     validTemplate,
+					Parallelism:  ptr.To[int32](2),
+					Completions:  ptr.To[int32](2),
+					BackoffLimit: ptr.To[int32](6),
+					PodFailurePolicy: &batch.PodFailurePolicy{
+						Rules: onExitCodeRules,
+					},
+				},
+			},
+			pods: []v1.Pod{
+				{
+					Status: v1.PodStatus{
+						Phase: v1.PodRunning,
+					},
+				},
+				{
+					Status: v1.PodStatus{
+						Phase: v1.PodFailed,
+						ContainerStatuses: []v1.ContainerStatus{
+							{
+								Name: "main-container",
+								State: v1.ContainerState{
+									Terminated: &v1.ContainerStateTerminated{
+										ExitCode: 5,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantConditions: []batch.JobCondition{
+				{
+					Type:    batch.JobFailureTarget,
 					Status:  v1.ConditionTrue,
 					Reason:  batch.JobReasonPodFailurePolicy,
 					Message: "Container main-container for pod default/mypod-1 failed with exit code 5 matching FailJob rule at index 1",
@@ -3759,6 +3829,56 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 			wantStatusFailed:    1,
 			wantStatusSucceeded: 0,
 		},
+		"default job based on OnExitCodes; JobManagedBy enabled triggers adding interim condition": {
+			enableJobManagedBy: true,
+			job: batch.Job{
+				TypeMeta:   metav1.TypeMeta{Kind: "Job"},
+				ObjectMeta: validObjectMeta,
+				Spec: batch.JobSpec{
+					Selector:     validSelector,
+					Template:     validTemplate,
+					Parallelism:  ptr.To[int32](1),
+					Completions:  ptr.To[int32](1),
+					BackoffLimit: ptr.To[int32](0),
+					PodFailurePolicy: &batch.PodFailurePolicy{
+						Rules: onExitCodeRules,
+					},
+				},
+			},
+			pods: []v1.Pod{
+				{
+					Status: v1.PodStatus{
+						Phase: v1.PodFailed,
+						ContainerStatuses: []v1.ContainerStatus{
+							{
+								State: v1.ContainerState{
+									Terminated: &v1.ContainerStateTerminated{
+										ExitCode: 10,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantConditions: []batch.JobCondition{
+				{
+					Type:    batch.JobFailureTarget,
+					Status:  v1.ConditionTrue,
+					Reason:  batch.JobReasonBackoffLimitExceeded,
+					Message: "Job has reached the specified backoff limit",
+				},
+				{
+					Type:    batch.JobFailed,
+					Status:  v1.ConditionTrue,
+					Reason:  batch.JobReasonBackoffLimitExceeded,
+					Message: "Job has reached the specified backoff limit",
+				},
+			},
+			wantStatusActive:    0,
+			wantStatusFailed:    1,
+			wantStatusSucceeded: 0,
+		},
 		"count pod failure based on OnExitCodes; both rules are matching, the first is executed only": {
 			job: batch.Job{
 				TypeMeta:   metav1.TypeMeta{Kind: "Job"},
@@ -4056,7 +4176,12 @@ func TestSyncJobWithJobPodFailurePolicy(t *testing.T) {
 	}
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			if !tc.enableJobPodReplacementPolicy {
+				// TODO: this will be removed in 1.37.
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.enableJobPodReplacementPolicy)
+			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobManagedBy, tc.enableJobManagedBy)
 
 			if tc.job.Spec.PodReplacementPolicy == nil {
 				tc.job.Spec.PodReplacementPolicy = podReplacementPolicy(batch.Failed)
@@ -5064,6 +5189,10 @@ func TestSyncJobWithJobSuccessPolicy(t *testing.T) {
 	}
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			if !tc.enableBackoffLimitPerIndex || !tc.enableJobSuccessPolicy {
+				// TODO: this will be removed in 1.36
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.32"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobBackoffLimitPerIndex, tc.enableBackoffLimitPerIndex)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobSuccessPolicy, tc.enableJobSuccessPolicy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.enableJobPodReplacementPolicy)
@@ -5742,6 +5871,13 @@ func TestSyncJobWithJobBackoffLimitPerIndex(t *testing.T) {
 	}
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			if !tc.enableJobBackoffLimitPerIndex {
+				// TODO: this will be removed in 1.36
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.32"))
+			} else if !tc.enableJobPodReplacementPolicy {
+				// TODO: this will be removed in 1.37.
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobBackoffLimitPerIndex, tc.enableJobBackoffLimitPerIndex)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.enableJobPodReplacementPolicy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobManagedBy, tc.enableJobManagedBy)
@@ -6126,7 +6262,7 @@ func TestGetPodsForJob(t *testing.T) {
 }
 
 func TestAddPod(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	_, ctx := ktesting.NewTestContext(t)
 	logger := klog.FromContext(ctx)
 
@@ -6172,7 +6308,7 @@ func TestAddPod(t *testing.T) {
 }
 
 func TestAddPodOrphan(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	logger, ctx := ktesting.NewTestContext(t)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
 	fakeClock := clocktesting.NewFakeClock(time.Now())
@@ -6201,7 +6337,7 @@ func TestAddPodOrphan(t *testing.T) {
 }
 
 func TestUpdatePod(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	_, ctx := ktesting.NewTestContext(t)
 	logger := klog.FromContext(ctx)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
@@ -6250,7 +6386,7 @@ func TestUpdatePod(t *testing.T) {
 }
 
 func TestUpdatePodOrphanWithNewLabels(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	logger, ctx := ktesting.NewTestContext(t)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
 	fakeClock := clocktesting.NewFakeClock(time.Now())
@@ -6278,7 +6414,7 @@ func TestUpdatePodOrphanWithNewLabels(t *testing.T) {
 }
 
 func TestUpdatePodChangeControllerRef(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	_, ctx := ktesting.NewTestContext(t)
 	logger := klog.FromContext(ctx)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
@@ -6306,7 +6442,7 @@ func TestUpdatePodChangeControllerRef(t *testing.T) {
 }
 
 func TestUpdatePodRelease(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	_, ctx := ktesting.NewTestContext(t)
 	logger := klog.FromContext(ctx)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
@@ -6334,7 +6470,7 @@ func TestUpdatePodRelease(t *testing.T) {
 }
 
 func TestDeletePod(t *testing.T) {
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, fastSyncJobBatchPeriod))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, fastSyncJobBatchPeriod))
 	logger, ctx := ktesting.NewTestContext(t)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
 	fakeClock := clocktesting.NewFakeClock(time.Now())
@@ -6379,7 +6515,7 @@ func TestDeletePod(t *testing.T) {
 
 func TestDeletePodOrphan(t *testing.T) {
 	// Disable batching of pod updates to show it does not get requeued at all
-	t.Cleanup(setDurationDuringTest(&syncJobBatchPeriod, 0))
+	t.Cleanup(setDurationDuringTest(&SyncJobBatchPeriod, 0))
 	logger, ctx := ktesting.NewTestContext(t)
 	clientset := clientset.NewForConfigOrDie(&restclient.Config{Host: "", ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
 	jm, informer := newControllerFromClient(ctx, t, clientset, controller.NoResyncPeriodFunc)
@@ -6549,6 +6685,8 @@ func TestWatchPods(t *testing.T) {
 
 func TestWatchOrphanPods(t *testing.T) {
 	_, ctx := ktesting.NewTestContext(t)
+	ctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
 	clientset := fake.NewClientset()
 	sharedInformers := informers.NewSharedInformerFactory(clientset, controller.NoResyncPeriodFunc())
 	manager, err := NewController(ctx, sharedInformers.Core().V1().Pods(), sharedInformers.Batch().V1().Jobs(), clientset)
@@ -6594,19 +6732,19 @@ func TestWatchOrphanPods(t *testing.T) {
 					sharedInformers.Batch().V1().Jobs().Informer().GetIndexer().Delete(tc.job)
 				})
 			}
-
+			_, ctx := ktesting.NewTestContext(t)
 			podBuilder := buildPod().name(name).deletionTimestamp().trackingFinalizer()
 			if tc.job != nil {
 				podBuilder = podBuilder.job(tc.job)
 			}
 			orphanPod := podBuilder.Pod
-			orphanPod, err := clientset.CoreV1().Pods("default").Create(context.Background(), orphanPod, metav1.CreateOptions{})
+			orphanPod, err := clientset.CoreV1().Pods("default").Create(ctx, orphanPod, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatalf("Creating orphan pod: %v", err)
 			}
 
 			if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, wait.ForeverTestTimeout, false, func(ctx context.Context) (bool, error) {
-				p, err := clientset.CoreV1().Pods(orphanPod.Namespace).Get(context.Background(), orphanPod.Name, metav1.GetOptions{})
+				p, err := clientset.CoreV1().Pods(orphanPod.Namespace).Get(ctx, orphanPod.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -6639,6 +6777,7 @@ func TestSyncOrphanPod(t *testing.T) {
 		job                  *batch.Job
 		inCache              bool
 		wantFinalizerRemoved bool
+		podSelector          *metav1.LabelSelector
 	}{
 		"controlled_by_existing_running_job": {
 			owner: &metav1.OwnerReference{
@@ -6741,6 +6880,14 @@ func TestSyncOrphanPod(t *testing.T) {
 			},
 			wantFinalizerRemoved: true,
 		},
+		"orphan_pods_by_label_selector": {
+			podSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "test",
+				},
+			},
+			wantFinalizerRemoved: true,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -6754,19 +6901,35 @@ func TestSyncOrphanPod(t *testing.T) {
 					}
 				})
 			}
-
 			podBuilder := buildPod().name(name).deletionTimestamp().trackingFinalizer()
 			if tc.owner != nil {
 				podBuilder = podBuilder.owner(*tc.owner)
 			}
-			orphanPod := podBuilder.Pod
-			orphanPod, err := clientset.CoreV1().Pods("default").Create(ctx, orphanPod, metav1.CreateOptions{})
+			orphanKey := orphanPodKey{
+				kind:      OrphanPodKeyKindName,
+				namespace: podBuilder.Pod.Namespace,
+				value:     podBuilder.Pod.Name,
+			}
+			if tc.podSelector != nil {
+				podBuilder = podBuilder.labels(tc.podSelector.MatchLabels)
+				selector, err := metav1.LabelSelectorAsSelector(tc.podSelector)
+				if err != nil {
+					t.Fatalf("Error parsing pod label selector: %v", err)
+				}
+				orphanKey = orphanPodKey{
+					kind:      OrphanPodKeyKindSelector,
+					namespace: podBuilder.Pod.Namespace,
+					value:     selector.String(),
+				}
+			}
+			orphanPod, err := clientset.CoreV1().Pods("default").Create(ctx, podBuilder.Pod, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatalf("Creating orphan pod: %v", err)
 			}
-			err = manager.syncOrphanPod(ctx, cache.MetaObjectToName(orphanPod).String())
+			// Sync orphan pod by name or selector
+			err = manager.syncOrphanPod(ctx, orphanKey)
 			if err != nil {
-				t.Fatalf("Failed sync orphan pod: %v", err)
+				t.Fatalf("Failed to sync orphan pod: %v", err)
 			}
 			if tc.wantFinalizerRemoved {
 				if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, wait.ForeverTestTimeout, false, func(ctx context.Context) (bool, error) {
@@ -6784,7 +6947,7 @@ func TestSyncOrphanPod(t *testing.T) {
 				time.Sleep(time.Millisecond)
 				orphanPod, err := clientset.CoreV1().Pods(orphanPod.Namespace).Get(ctx, orphanPod.Name, metav1.GetOptions{})
 				if err != nil {
-					t.Fatalf("Failed to the latest pod: %v", err)
+					t.Fatalf("Failed to retrieve the latest pod: %v", err)
 				}
 				if !hasJobTrackingFinalizer(orphanPod) {
 					t.Errorf("Unexpected removal of the Job's finalizer")
@@ -6874,7 +7037,7 @@ func TestJobBackoff(t *testing.T) {
 		"failure with pod updates batching": {
 			requeues:    0,
 			phase:       v1.PodFailed,
-			wantBackoff: syncJobBatchPeriod,
+			wantBackoff: SyncJobBatchPeriod,
 		},
 	}
 
@@ -7216,6 +7379,10 @@ func TestJobBackoffForOnFailure(t *testing.T) {
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			if !tc.enableJobPodReplacementPolicy {
+				// TODO: this will be removed in 1.37.
+				featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, feature.DefaultFeatureGate, utilversion.MustParse("1.33"))
+			}
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.enableJobPodReplacementPolicy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobManagedBy, tc.enableJobManagedBy)
 			// job manager setup
@@ -7526,11 +7693,11 @@ func TestFinalizersRemovedExpectations(t *testing.T) {
 	pods := append(newPodList(2, v1.PodSucceeded, job), newPodList(2, v1.PodFailed, job)...)
 	podInformer := sharedInformers.Core().V1().Pods().Informer()
 	podIndexer := podInformer.GetIndexer()
-	uids := sets.New[string]()
+	uids := sets.New[types.UID]()
 	for i := range pods {
 		clientset.Tracker().Add(pods[i])
 		podIndexer.Add(pods[i])
-		uids.Insert(string(pods[i].UID))
+		uids.Insert(pods[i].UID)
 	}
 	jobKey := testutil.GetKey(job, t)
 
@@ -7596,7 +7763,7 @@ func TestFinalizersRemovedExpectations(t *testing.T) {
 		t.Errorf("Deleting pod that had finalizer: %v", err)
 	}
 
-	uids = sets.New(string(pods[2].UID))
+	uids = sets.New(pods[2].UID)
 	var diff string
 	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, wait.ForeverTestTimeout, false, func(ctx context.Context) (bool, error) {
 		gotExpectedUIDs = manager.finalizerExpectations.getExpectedUIDs(jobKey)
@@ -7610,7 +7777,7 @@ func TestFinalizersRemovedExpectations(t *testing.T) {
 func TestFinalizerCleanup(t *testing.T) {
 	_, ctx := ktesting.NewTestContext(t)
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	clientset := fake.NewClientset()
 	sharedInformers := informers.NewSharedInformerFactory(clientset, controller.NoResyncPeriodFunc())
@@ -7624,9 +7791,11 @@ func TestFinalizerCleanup(t *testing.T) {
 	// Start the Pod and Job informers.
 	sharedInformers.Start(ctx.Done())
 	sharedInformers.WaitForCacheSync(ctx.Done())
-	// Initialize the controller with 0 workers to make sure the
-	// pod finalizers are not removed by the "syncJob" function.
-	go manager.Run(ctx, 0)
+	// Initialize the controller with 1 worker to make sure the
+	// pod finalizers are removed by the "syncJob" function.
+	go manager.Run(ctx, 1)
+	// Make sure the pod finalizers are removed by the "orphanWorker" function.
+	go wait.UntilWithContext(ctx, manager.orphanWorker, time.Second)
 
 	// Create a simple Job
 	job := newJob(1, 1, 1, batch.NonIndexedCompletion)
@@ -7643,22 +7812,24 @@ func TestFinalizerCleanup(t *testing.T) {
 		t.Fatalf("Waiting for Job object to appear in jobLister: %v", err)
 	}
 
-	// Create a Pod with the job tracking finalizer
-	pod := newPod("test-pod", job)
-	pod.Finalizers = append(pod.Finalizers, batch.JobTrackingFinalizer)
-	pod, err = clientset.CoreV1().Pods(pod.GetNamespace()).Create(ctx, pod, metav1.CreateOptions{})
+	selector, err := metav1.LabelSelectorAsSelector(job.Spec.Selector)
 	if err != nil {
-		t.Fatalf("Creating pod: %v", err)
+		t.Fatalf("Error parsing job selector: %v", err)
 	}
 
-	// Await for the Pod to appear in the podStore to ensure that the pod exists when cleaning up the Job.
-	// In a production environment, there wouldn't be these guarantees, but the Pod would be cleaned up
-	// by the orphan pod worker, when the Pod finishes.
+	var pods []*v1.Pod
+	// Wait for the Pod to be created by the Job controller
 	if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, wait.ForeverTestTimeout, false, func(ctx context.Context) (bool, error) {
-		pod, _ := manager.podStore.Pods(pod.GetNamespace()).Get(pod.Name)
-		return pod != nil, nil
+		pods, err = manager.podStore.Pods(job.Namespace).List(selector)
+		if err != nil {
+			return false, err
+		}
+		if len(pods) > 0 {
+			return true, nil
+		}
+		return false, nil
 	}); err != nil {
-		t.Fatalf("Waiting for Pod to appear in podLister: %v", err)
+		t.Fatalf("Waiting for Pod to be created by Job: %v", err)
 	}
 
 	// Mark Job as complete.
@@ -7671,10 +7842,9 @@ func TestFinalizerCleanup(t *testing.T) {
 		t.Fatalf("Updating job status: %v", err)
 	}
 
-	// Verify the pod finalizer is removed for a finished Job,
-	// even if the jobs pods are not tracked by the main reconciliation loop.
+	// Verify the pod finalizer is removed for a finished Job
 	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, wait.ForeverTestTimeout, true, func(ctx context.Context) (bool, error) {
-		p, err := clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		p, err := clientset.CoreV1().Pods(pods[0].Namespace).Get(ctx, pods[0].Name, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
@@ -7788,6 +7958,11 @@ func (pb podBuilder) ns(n string) podBuilder {
 
 func (pb podBuilder) uid(u string) podBuilder {
 	pb.UID = types.UID(u)
+	return pb
+}
+
+func (pb podBuilder) labels(labels map[string]string) podBuilder {
+	pb.Labels = labels
 	return pb
 }
 

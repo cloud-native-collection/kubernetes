@@ -36,7 +36,6 @@ import (
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/util"
 	volumetypes "k8s.io/kubernetes/pkg/volume/util/types"
-	"k8s.io/mount-utils"
 	utilstrings "k8s.io/utils/strings"
 )
 
@@ -101,7 +100,7 @@ func (c *csiMountMgr) SetUp(mounterArgs volume.MounterArgs) error {
 }
 
 func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
-	klog.V(4).Infof(log("Mounter.SetUpAt(%s)", dir))
+	klog.V(4).Info(log("Mounter.SetUpAt(%s)", dir))
 
 	csi, err := c.csiClientGetter.Get()
 	if err != nil {
@@ -282,23 +281,16 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 	}
 
 	err = saveVolumeData(parentDir, volDataFileName, volData)
-	defer func() {
-		// Only if there was an error and volume operation was considered
-		// finished, we should remove the directory.
-		if err != nil && volumetypes.IsOperationFinishedError(err) {
-			// attempt to cleanup volume mount dir
-			if removeerr := removeMountDir(c.plugin, dir); removeerr != nil {
-				klog.Error(log("mounter.SetUpAt failed to remove mount dir after error [%s]: %v", dir, removeerr))
-			}
-		}
-	}()
 	if err != nil {
 		errorMsg := log("mounter.SetUpAt failed to save volume info data: %v", err)
 		klog.Error(errorMsg)
-		return volumetypes.NewTransientOperationFailure(errorMsg)
+		if removeerr := removeMountDir(c.plugin, dir); removeerr != nil {
+			klog.Error(log("mounter.SetUpAt failed to remove mount dir after error [%s]: %v", dir, removeerr))
+		}
+		return err
 	}
 
-	err = csi.NodePublishVolume(
+	csiRPCError := csi.NodePublishVolume(
 		ctx,
 		volumeHandle,
 		readOnly,
@@ -313,14 +305,14 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 		nodePublishFSGroupArg,
 	)
 
-	if err != nil {
+	if csiRPCError != nil {
 		// If operation finished with error then we can remove the mount directory.
-		if volumetypes.IsOperationFinishedError(err) {
+		if volumetypes.IsOperationFinishedError(csiRPCError) {
 			if removeMountDirErr := removeMountDir(c.plugin, dir); removeMountDirErr != nil {
 				klog.Error(log("mounter.SetupAt failed to remove mount dir after a NodePublish() error [%s]: %v", dir, removeMountDirErr))
 			}
 		}
-		return err
+		return csiRPCError
 	}
 
 	if !selinuxLabelMount {
@@ -333,9 +325,15 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 
 	if !driverSupportsCSIVolumeMountGroup && c.supportsFSGroup(fsType, mounterArgs.FsGroup, fsGroupPolicy) {
 		// Driver doesn't support applying FSGroup. Kubelet must apply it instead.
-
+		var ownershipChanger volume.VolumeOwnershipChanger
+		if mounterArgs.VolumeOwnershipApplicator != nil {
+			ownershipChanger = mounterArgs.VolumeOwnershipApplicator
+		} else {
+			ownershipChanger = volume.NewVolumeOwnership(c, dir, mounterArgs.FsGroup, mounterArgs.FSGroupChangePolicy, util.FSGroupCompleteHook(c.plugin, c.spec))
+		}
 		// fullPluginName helps to distinguish different driver from csi plugin
-		err := volume.SetVolumeOwnership(c, dir, mounterArgs.FsGroup, mounterArgs.FSGroupChangePolicy, util.FSGroupCompleteHook(c.plugin, c.spec))
+		ownershipChanger.AddProgressNotifier(c.pod, mounterArgs.Recorder)
+		err = ownershipChanger.ChangePermissions()
 		if err != nil {
 			// At this point mount operation is successful:
 			//   1. Since volume can not be used by the pod because of invalid permissions, we must return error
@@ -346,7 +344,7 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 		klog.V(4).Info(log("mounter.SetupAt fsGroup [%d] applied successfully to %s", *mounterArgs.FsGroup, c.volumeID))
 	}
 
-	klog.V(4).Infof(log("mounter.SetUp successfully requested NodePublish [%s]", dir))
+	klog.V(4).Info(log("mounter.SetUp successfully requested NodePublish [%s]", dir))
 	return nil
 }
 
@@ -358,7 +356,7 @@ func (c *csiMountMgr) podServiceAccountTokenAttrs() (map[string]string, error) {
 	csiDriver, err := c.plugin.csiDriverLister.Get(string(c.driverName))
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			klog.V(5).Infof(log("CSIDriver %q not found, not adding service account token information", c.driverName))
+			klog.V(5).Info(log("CSIDriver %q not found, not adding service account token information", c.driverName))
 			return nil, nil
 		}
 		return nil, err
@@ -394,7 +392,7 @@ func (c *csiMountMgr) podServiceAccountTokenAttrs() (map[string]string, error) {
 		outputs[audience] = tr.Status
 	}
 
-	klog.V(4).Infof(log("Fetched service account token attrs for CSIDriver %q", c.driverName))
+	klog.V(4).Info(log("Fetched service account token attrs for CSIDriver %q", c.driverName))
 	tokens, _ := json.Marshal(outputs)
 	return map[string]string{
 		"csi.storage.k8s.io/serviceAccount.tokens": string(tokens),
@@ -416,7 +414,7 @@ func (c *csiMountMgr) TearDown() error {
 	return c.TearDownAt(c.GetPath())
 }
 func (c *csiMountMgr) TearDownAt(dir string) error {
-	klog.V(4).Infof(log("Unmounter.TearDownAt(%s)", dir))
+	klog.V(4).Info(log("Unmounter.TearDownAt(%s)", dir))
 
 	volID := c.volumeID
 	csi, err := c.csiClientGetter.Get()
@@ -447,7 +445,7 @@ func (c *csiMountMgr) TearDownAt(dir string) error {
 	if err := removeMountDir(c.plugin, dir); err != nil {
 		return errors.New(log("Unmounter.TearDownAt failed to clean mount dir [%s]: %v", dir, err))
 	}
-	klog.V(4).Infof(log("Unmounter.TearDownAt successfully unmounted dir [%s]", dir))
+	klog.V(4).Info(log("Unmounter.TearDownAt successfully unmounted dir [%s]", dir))
 
 	return nil
 }
@@ -488,10 +486,8 @@ func (c *csiMountMgr) supportsFSGroup(fsType string, fsGroup *int64, driverPolic
 // getFSGroupPolicy returns if the CSI driver supports a volume in the given mode.
 // An error indicates that it isn't supported and explains why.
 func (c *csiMountMgr) getFSGroupPolicy() (storage.FSGroupPolicy, error) {
-	// Retrieve CSIDriver. It's not an error if that isn't
-	// possible (we don't have the lister if CSIDriverRegistry is
-	// disabled) or the driver isn't found (CSIDriver is
-	// optional)
+	// Retrieve CSIDriver. It's not an error if the driver isn't found
+	// (CSIDriver is optional)
 	var csiDriver *storage.CSIDriver
 	driver := string(c.driverName)
 	if c.plugin.csiDriverLister != nil {
@@ -517,10 +513,8 @@ func (c *csiMountMgr) getFSGroupPolicy() (storage.FSGroupPolicy, error) {
 // supportsVolumeMode checks whether the CSI driver supports a volume in the given mode.
 // An error indicates that it isn't supported and explains why.
 func (c *csiMountMgr) supportsVolumeLifecycleMode() error {
-	// Retrieve CSIDriver. It's not an error if that isn't
-	// possible (we don't have the lister if CSIDriverRegistry is
-	// disabled) or the driver isn't found (CSIDriver is
-	// optional), but then only persistent volumes are supported.
+	// Retrieve CSIDriver. It's not an error if the driver isn't found
+	// (CSIDriver is optional), but then only persistent volumes are supported.
 	var csiDriver *storage.CSIDriver
 	driver := string(c.driverName)
 	if c.plugin.csiDriverLister != nil {
@@ -560,18 +554,13 @@ func containsVolumeMode(modes []storage.VolumeLifecycleMode, mode storage.Volume
 
 // isDirMounted returns the !notMounted result from IsLikelyNotMountPoint check
 func isDirMounted(plug *csiPlugin, dir string) (bool, error) {
-	mounter := plug.host.GetMounter(plug.GetPluginName())
+	mounter := plug.host.GetMounter()
 	notMnt, err := mounter.IsLikelyNotMountPoint(dir)
 	if err != nil && !os.IsNotExist(err) {
 		klog.Error(log("isDirMounted IsLikelyNotMountPoint test failed for dir [%v]", dir))
 		return false, err
 	}
 	return !notMnt, nil
-}
-
-func isCorruptedDir(dir string) bool {
-	_, pathErr := mount.PathExists(dir)
-	return pathErr != nil && mount.IsCorruptedMnt(pathErr)
 }
 
 // removeMountDir cleans the mount dir when dir is not mounted and removed the volume data file in dir

@@ -45,10 +45,10 @@ import (
 	e2eresource "k8s.io/kubernetes/test/e2e/framework/resource"
 	e2eservice "k8s.io/kubernetes/test/e2e/framework/service"
 	testutils "k8s.io/kubernetes/test/utils"
-	utilpointer "k8s.io/utils/pointer"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
+	"k8s.io/utils/ptr"
 
 	imageutils "k8s.io/kubernetes/test/utils/image"
 )
@@ -880,6 +880,13 @@ func HPAScalingRuleWithScalingPolicy(policyType autoscalingv2.HPAScalingPolicyTy
 	}
 }
 
+func HPAScalingRuleWithToleranceMilli(toleranceMilli int64) *autoscalingv2.HPAScalingRules {
+	quantity := resource.NewMilliQuantity(toleranceMilli, resource.DecimalSI)
+	return &autoscalingv2.HPAScalingRules{
+		Tolerance: quantity,
+	}
+}
+
 func HPABehaviorWithStabilizationWindows(upscaleStabilization, downscaleStabilization time.Duration) *autoscalingv2.HorizontalPodAutoscalerBehavior {
 	scaleUpRule := HPAScalingRuleWithStabilizationWindow(int32(upscaleStabilization.Seconds()))
 	scaleDownRule := HPAScalingRuleWithStabilizationWindow(int32(downscaleStabilization.Seconds()))
@@ -942,7 +949,7 @@ func CreateCustomResourceDefinition(ctx context.Context, c crdclientset.Interfac
 					Scale: &apiextensionsv1.CustomResourceSubresourceScale{
 						SpecReplicasPath:   ".spec.replicas",
 						StatusReplicasPath: ".status.replicas",
-						LabelSelectorPath:  utilpointer.String(".status.selector"),
+						LabelSelectorPath:  ptr.To(".status.selector"),
 					},
 				},
 			}},

@@ -24,13 +24,10 @@ package v1alpha3
 import (
 	unsafe "unsafe"
 
-	v1 "k8s.io/api/core/v1"
-	v1alpha3 "k8s.io/api/resource/v1alpha3"
-	apiresource "k8s.io/apimachinery/pkg/api/resource"
+	resourcev1alpha3 "k8s.io/api/resource/v1alpha3"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	types "k8s.io/apimachinery/pkg/types"
-	core "k8s.io/kubernetes/pkg/apis/core"
 	resource "k8s.io/kubernetes/pkg/apis/resource"
 )
 
@@ -41,1247 +38,243 @@ func init() {
 // RegisterConversions adds conversion functions to the given scheme.
 // Public to allow building arbitrary schemes.
 func RegisterConversions(s *runtime.Scheme) error {
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.AllocationResult)(nil), (*resource.AllocationResult)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_AllocationResult_To_resource_AllocationResult(a.(*v1alpha3.AllocationResult), b.(*resource.AllocationResult), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.CELDeviceSelector)(nil), (*resource.CELDeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(a.(*resourcev1alpha3.CELDeviceSelector), b.(*resource.CELDeviceSelector), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.AllocationResult)(nil), (*v1alpha3.AllocationResult)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_AllocationResult_To_v1alpha3_AllocationResult(a.(*resource.AllocationResult), b.(*v1alpha3.AllocationResult), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.CELDeviceSelector)(nil), (*resourcev1alpha3.CELDeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(a.(*resource.CELDeviceSelector), b.(*resourcev1alpha3.CELDeviceSelector), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.BasicDevice)(nil), (*resource.BasicDevice)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_BasicDevice_To_resource_BasicDevice(a.(*v1alpha3.BasicDevice), b.(*resource.BasicDevice), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.DeviceSelector)(nil), (*resource.DeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(a.(*resourcev1alpha3.DeviceSelector), b.(*resource.DeviceSelector), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.BasicDevice)(nil), (*v1alpha3.BasicDevice)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_BasicDevice_To_v1alpha3_BasicDevice(a.(*resource.BasicDevice), b.(*v1alpha3.BasicDevice), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.DeviceSelector)(nil), (*resourcev1alpha3.DeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(a.(*resource.DeviceSelector), b.(*resourcev1alpha3.DeviceSelector), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.CELDeviceSelector)(nil), (*resource.CELDeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(a.(*v1alpha3.CELDeviceSelector), b.(*resource.CELDeviceSelector), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.DeviceTaint)(nil), (*resource.DeviceTaint)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_DeviceTaint_To_resource_DeviceTaint(a.(*resourcev1alpha3.DeviceTaint), b.(*resource.DeviceTaint), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.CELDeviceSelector)(nil), (*v1alpha3.CELDeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(a.(*resource.CELDeviceSelector), b.(*v1alpha3.CELDeviceSelector), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.DeviceTaint)(nil), (*resourcev1alpha3.DeviceTaint)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_DeviceTaint_To_v1alpha3_DeviceTaint(a.(*resource.DeviceTaint), b.(*resourcev1alpha3.DeviceTaint), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.Device)(nil), (*resource.Device)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_Device_To_resource_Device(a.(*v1alpha3.Device), b.(*resource.Device), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.DeviceTaintRule)(nil), (*resource.DeviceTaintRule)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_DeviceTaintRule_To_resource_DeviceTaintRule(a.(*resourcev1alpha3.DeviceTaintRule), b.(*resource.DeviceTaintRule), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.Device)(nil), (*v1alpha3.Device)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_Device_To_v1alpha3_Device(a.(*resource.Device), b.(*v1alpha3.Device), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.DeviceTaintRule)(nil), (*resourcev1alpha3.DeviceTaintRule)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_DeviceTaintRule_To_v1alpha3_DeviceTaintRule(a.(*resource.DeviceTaintRule), b.(*resourcev1alpha3.DeviceTaintRule), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceAllocationConfiguration)(nil), (*resource.DeviceAllocationConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceAllocationConfiguration_To_resource_DeviceAllocationConfiguration(a.(*v1alpha3.DeviceAllocationConfiguration), b.(*resource.DeviceAllocationConfiguration), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.DeviceTaintRuleList)(nil), (*resource.DeviceTaintRuleList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_DeviceTaintRuleList_To_resource_DeviceTaintRuleList(a.(*resourcev1alpha3.DeviceTaintRuleList), b.(*resource.DeviceTaintRuleList), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceAllocationConfiguration)(nil), (*v1alpha3.DeviceAllocationConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceAllocationConfiguration_To_v1alpha3_DeviceAllocationConfiguration(a.(*resource.DeviceAllocationConfiguration), b.(*v1alpha3.DeviceAllocationConfiguration), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.DeviceTaintRuleList)(nil), (*resourcev1alpha3.DeviceTaintRuleList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_DeviceTaintRuleList_To_v1alpha3_DeviceTaintRuleList(a.(*resource.DeviceTaintRuleList), b.(*resourcev1alpha3.DeviceTaintRuleList), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceAllocationResult)(nil), (*resource.DeviceAllocationResult)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceAllocationResult_To_resource_DeviceAllocationResult(a.(*v1alpha3.DeviceAllocationResult), b.(*resource.DeviceAllocationResult), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.DeviceTaintRuleSpec)(nil), (*resource.DeviceTaintRuleSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_DeviceTaintRuleSpec_To_resource_DeviceTaintRuleSpec(a.(*resourcev1alpha3.DeviceTaintRuleSpec), b.(*resource.DeviceTaintRuleSpec), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceAllocationResult)(nil), (*v1alpha3.DeviceAllocationResult)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceAllocationResult_To_v1alpha3_DeviceAllocationResult(a.(*resource.DeviceAllocationResult), b.(*v1alpha3.DeviceAllocationResult), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.DeviceTaintRuleSpec)(nil), (*resourcev1alpha3.DeviceTaintRuleSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_DeviceTaintRuleSpec_To_v1alpha3_DeviceTaintRuleSpec(a.(*resource.DeviceTaintRuleSpec), b.(*resourcev1alpha3.DeviceTaintRuleSpec), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceAttribute)(nil), (*resource.DeviceAttribute)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceAttribute_To_resource_DeviceAttribute(a.(*v1alpha3.DeviceAttribute), b.(*resource.DeviceAttribute), scope)
+	if err := s.AddGeneratedConversionFunc((*resourcev1alpha3.DeviceTaintSelector)(nil), (*resource.DeviceTaintSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha3_DeviceTaintSelector_To_resource_DeviceTaintSelector(a.(*resourcev1alpha3.DeviceTaintSelector), b.(*resource.DeviceTaintSelector), scope)
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceAttribute)(nil), (*v1alpha3.DeviceAttribute)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceAttribute_To_v1alpha3_DeviceAttribute(a.(*resource.DeviceAttribute), b.(*v1alpha3.DeviceAttribute), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceClaim)(nil), (*resource.DeviceClaim)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceClaim_To_resource_DeviceClaim(a.(*v1alpha3.DeviceClaim), b.(*resource.DeviceClaim), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceClaim)(nil), (*v1alpha3.DeviceClaim)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceClaim_To_v1alpha3_DeviceClaim(a.(*resource.DeviceClaim), b.(*v1alpha3.DeviceClaim), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceClaimConfiguration)(nil), (*resource.DeviceClaimConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceClaimConfiguration_To_resource_DeviceClaimConfiguration(a.(*v1alpha3.DeviceClaimConfiguration), b.(*resource.DeviceClaimConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceClaimConfiguration)(nil), (*v1alpha3.DeviceClaimConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceClaimConfiguration_To_v1alpha3_DeviceClaimConfiguration(a.(*resource.DeviceClaimConfiguration), b.(*v1alpha3.DeviceClaimConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceClass)(nil), (*resource.DeviceClass)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceClass_To_resource_DeviceClass(a.(*v1alpha3.DeviceClass), b.(*resource.DeviceClass), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceClass)(nil), (*v1alpha3.DeviceClass)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceClass_To_v1alpha3_DeviceClass(a.(*resource.DeviceClass), b.(*v1alpha3.DeviceClass), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceClassConfiguration)(nil), (*resource.DeviceClassConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceClassConfiguration_To_resource_DeviceClassConfiguration(a.(*v1alpha3.DeviceClassConfiguration), b.(*resource.DeviceClassConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceClassConfiguration)(nil), (*v1alpha3.DeviceClassConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceClassConfiguration_To_v1alpha3_DeviceClassConfiguration(a.(*resource.DeviceClassConfiguration), b.(*v1alpha3.DeviceClassConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceClassList)(nil), (*resource.DeviceClassList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceClassList_To_resource_DeviceClassList(a.(*v1alpha3.DeviceClassList), b.(*resource.DeviceClassList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceClassList)(nil), (*v1alpha3.DeviceClassList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceClassList_To_v1alpha3_DeviceClassList(a.(*resource.DeviceClassList), b.(*v1alpha3.DeviceClassList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceClassSpec)(nil), (*resource.DeviceClassSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceClassSpec_To_resource_DeviceClassSpec(a.(*v1alpha3.DeviceClassSpec), b.(*resource.DeviceClassSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceClassSpec)(nil), (*v1alpha3.DeviceClassSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceClassSpec_To_v1alpha3_DeviceClassSpec(a.(*resource.DeviceClassSpec), b.(*v1alpha3.DeviceClassSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceConfiguration)(nil), (*resource.DeviceConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(a.(*v1alpha3.DeviceConfiguration), b.(*resource.DeviceConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceConfiguration)(nil), (*v1alpha3.DeviceConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(a.(*resource.DeviceConfiguration), b.(*v1alpha3.DeviceConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceConstraint)(nil), (*resource.DeviceConstraint)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceConstraint_To_resource_DeviceConstraint(a.(*v1alpha3.DeviceConstraint), b.(*resource.DeviceConstraint), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceConstraint)(nil), (*v1alpha3.DeviceConstraint)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceConstraint_To_v1alpha3_DeviceConstraint(a.(*resource.DeviceConstraint), b.(*v1alpha3.DeviceConstraint), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceRequest)(nil), (*resource.DeviceRequest)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceRequest_To_resource_DeviceRequest(a.(*v1alpha3.DeviceRequest), b.(*resource.DeviceRequest), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceRequest)(nil), (*v1alpha3.DeviceRequest)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceRequest_To_v1alpha3_DeviceRequest(a.(*resource.DeviceRequest), b.(*v1alpha3.DeviceRequest), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceRequestAllocationResult)(nil), (*resource.DeviceRequestAllocationResult)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceRequestAllocationResult_To_resource_DeviceRequestAllocationResult(a.(*v1alpha3.DeviceRequestAllocationResult), b.(*resource.DeviceRequestAllocationResult), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceRequestAllocationResult)(nil), (*v1alpha3.DeviceRequestAllocationResult)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceRequestAllocationResult_To_v1alpha3_DeviceRequestAllocationResult(a.(*resource.DeviceRequestAllocationResult), b.(*v1alpha3.DeviceRequestAllocationResult), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.DeviceSelector)(nil), (*resource.DeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(a.(*v1alpha3.DeviceSelector), b.(*resource.DeviceSelector), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.DeviceSelector)(nil), (*v1alpha3.DeviceSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(a.(*resource.DeviceSelector), b.(*v1alpha3.DeviceSelector), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.OpaqueDeviceConfiguration)(nil), (*resource.OpaqueDeviceConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_OpaqueDeviceConfiguration_To_resource_OpaqueDeviceConfiguration(a.(*v1alpha3.OpaqueDeviceConfiguration), b.(*resource.OpaqueDeviceConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.OpaqueDeviceConfiguration)(nil), (*v1alpha3.OpaqueDeviceConfiguration)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_OpaqueDeviceConfiguration_To_v1alpha3_OpaqueDeviceConfiguration(a.(*resource.OpaqueDeviceConfiguration), b.(*v1alpha3.OpaqueDeviceConfiguration), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.PodSchedulingContext)(nil), (*resource.PodSchedulingContext)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_PodSchedulingContext_To_resource_PodSchedulingContext(a.(*v1alpha3.PodSchedulingContext), b.(*resource.PodSchedulingContext), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.PodSchedulingContext)(nil), (*v1alpha3.PodSchedulingContext)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_PodSchedulingContext_To_v1alpha3_PodSchedulingContext(a.(*resource.PodSchedulingContext), b.(*v1alpha3.PodSchedulingContext), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.PodSchedulingContextList)(nil), (*resource.PodSchedulingContextList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_PodSchedulingContextList_To_resource_PodSchedulingContextList(a.(*v1alpha3.PodSchedulingContextList), b.(*resource.PodSchedulingContextList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.PodSchedulingContextList)(nil), (*v1alpha3.PodSchedulingContextList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_PodSchedulingContextList_To_v1alpha3_PodSchedulingContextList(a.(*resource.PodSchedulingContextList), b.(*v1alpha3.PodSchedulingContextList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.PodSchedulingContextSpec)(nil), (*resource.PodSchedulingContextSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_PodSchedulingContextSpec_To_resource_PodSchedulingContextSpec(a.(*v1alpha3.PodSchedulingContextSpec), b.(*resource.PodSchedulingContextSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.PodSchedulingContextSpec)(nil), (*v1alpha3.PodSchedulingContextSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_PodSchedulingContextSpec_To_v1alpha3_PodSchedulingContextSpec(a.(*resource.PodSchedulingContextSpec), b.(*v1alpha3.PodSchedulingContextSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.PodSchedulingContextStatus)(nil), (*resource.PodSchedulingContextStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_PodSchedulingContextStatus_To_resource_PodSchedulingContextStatus(a.(*v1alpha3.PodSchedulingContextStatus), b.(*resource.PodSchedulingContextStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.PodSchedulingContextStatus)(nil), (*v1alpha3.PodSchedulingContextStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_PodSchedulingContextStatus_To_v1alpha3_PodSchedulingContextStatus(a.(*resource.PodSchedulingContextStatus), b.(*v1alpha3.PodSchedulingContextStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaim)(nil), (*resource.ResourceClaim)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaim_To_resource_ResourceClaim(a.(*v1alpha3.ResourceClaim), b.(*resource.ResourceClaim), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaim)(nil), (*v1alpha3.ResourceClaim)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaim_To_v1alpha3_ResourceClaim(a.(*resource.ResourceClaim), b.(*v1alpha3.ResourceClaim), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimConsumerReference)(nil), (*resource.ResourceClaimConsumerReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimConsumerReference_To_resource_ResourceClaimConsumerReference(a.(*v1alpha3.ResourceClaimConsumerReference), b.(*resource.ResourceClaimConsumerReference), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimConsumerReference)(nil), (*v1alpha3.ResourceClaimConsumerReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimConsumerReference_To_v1alpha3_ResourceClaimConsumerReference(a.(*resource.ResourceClaimConsumerReference), b.(*v1alpha3.ResourceClaimConsumerReference), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimList)(nil), (*resource.ResourceClaimList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimList_To_resource_ResourceClaimList(a.(*v1alpha3.ResourceClaimList), b.(*resource.ResourceClaimList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimList)(nil), (*v1alpha3.ResourceClaimList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimList_To_v1alpha3_ResourceClaimList(a.(*resource.ResourceClaimList), b.(*v1alpha3.ResourceClaimList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimSchedulingStatus)(nil), (*resource.ResourceClaimSchedulingStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimSchedulingStatus_To_resource_ResourceClaimSchedulingStatus(a.(*v1alpha3.ResourceClaimSchedulingStatus), b.(*resource.ResourceClaimSchedulingStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimSchedulingStatus)(nil), (*v1alpha3.ResourceClaimSchedulingStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimSchedulingStatus_To_v1alpha3_ResourceClaimSchedulingStatus(a.(*resource.ResourceClaimSchedulingStatus), b.(*v1alpha3.ResourceClaimSchedulingStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimSpec)(nil), (*resource.ResourceClaimSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec(a.(*v1alpha3.ResourceClaimSpec), b.(*resource.ResourceClaimSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimSpec)(nil), (*v1alpha3.ResourceClaimSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec(a.(*resource.ResourceClaimSpec), b.(*v1alpha3.ResourceClaimSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimStatus)(nil), (*resource.ResourceClaimStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimStatus_To_resource_ResourceClaimStatus(a.(*v1alpha3.ResourceClaimStatus), b.(*resource.ResourceClaimStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimStatus)(nil), (*v1alpha3.ResourceClaimStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimStatus_To_v1alpha3_ResourceClaimStatus(a.(*resource.ResourceClaimStatus), b.(*v1alpha3.ResourceClaimStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimTemplate)(nil), (*resource.ResourceClaimTemplate)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimTemplate_To_resource_ResourceClaimTemplate(a.(*v1alpha3.ResourceClaimTemplate), b.(*resource.ResourceClaimTemplate), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimTemplate)(nil), (*v1alpha3.ResourceClaimTemplate)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimTemplate_To_v1alpha3_ResourceClaimTemplate(a.(*resource.ResourceClaimTemplate), b.(*v1alpha3.ResourceClaimTemplate), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimTemplateList)(nil), (*resource.ResourceClaimTemplateList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimTemplateList_To_resource_ResourceClaimTemplateList(a.(*v1alpha3.ResourceClaimTemplateList), b.(*resource.ResourceClaimTemplateList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimTemplateList)(nil), (*v1alpha3.ResourceClaimTemplateList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimTemplateList_To_v1alpha3_ResourceClaimTemplateList(a.(*resource.ResourceClaimTemplateList), b.(*v1alpha3.ResourceClaimTemplateList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceClaimTemplateSpec)(nil), (*resource.ResourceClaimTemplateSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceClaimTemplateSpec_To_resource_ResourceClaimTemplateSpec(a.(*v1alpha3.ResourceClaimTemplateSpec), b.(*resource.ResourceClaimTemplateSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceClaimTemplateSpec)(nil), (*v1alpha3.ResourceClaimTemplateSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceClaimTemplateSpec_To_v1alpha3_ResourceClaimTemplateSpec(a.(*resource.ResourceClaimTemplateSpec), b.(*v1alpha3.ResourceClaimTemplateSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourcePool)(nil), (*resource.ResourcePool)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourcePool_To_resource_ResourcePool(a.(*v1alpha3.ResourcePool), b.(*resource.ResourcePool), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourcePool)(nil), (*v1alpha3.ResourcePool)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourcePool_To_v1alpha3_ResourcePool(a.(*resource.ResourcePool), b.(*v1alpha3.ResourcePool), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceSlice)(nil), (*resource.ResourceSlice)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceSlice_To_resource_ResourceSlice(a.(*v1alpha3.ResourceSlice), b.(*resource.ResourceSlice), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceSlice)(nil), (*v1alpha3.ResourceSlice)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceSlice_To_v1alpha3_ResourceSlice(a.(*resource.ResourceSlice), b.(*v1alpha3.ResourceSlice), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceSliceList)(nil), (*resource.ResourceSliceList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceSliceList_To_resource_ResourceSliceList(a.(*v1alpha3.ResourceSliceList), b.(*resource.ResourceSliceList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceSliceList)(nil), (*v1alpha3.ResourceSliceList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceSliceList_To_v1alpha3_ResourceSliceList(a.(*resource.ResourceSliceList), b.(*v1alpha3.ResourceSliceList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*v1alpha3.ResourceSliceSpec)(nil), (*resource.ResourceSliceSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha3_ResourceSliceSpec_To_resource_ResourceSliceSpec(a.(*v1alpha3.ResourceSliceSpec), b.(*resource.ResourceSliceSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*resource.ResourceSliceSpec)(nil), (*v1alpha3.ResourceSliceSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_resource_ResourceSliceSpec_To_v1alpha3_ResourceSliceSpec(a.(*resource.ResourceSliceSpec), b.(*v1alpha3.ResourceSliceSpec), scope)
+	if err := s.AddGeneratedConversionFunc((*resource.DeviceTaintSelector)(nil), (*resourcev1alpha3.DeviceTaintSelector)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_resource_DeviceTaintSelector_To_v1alpha3_DeviceTaintSelector(a.(*resource.DeviceTaintSelector), b.(*resourcev1alpha3.DeviceTaintSelector), scope)
 	}); err != nil {
 		return err
 	}
 	return nil
 }
 
-func autoConvert_v1alpha3_AllocationResult_To_resource_AllocationResult(in *v1alpha3.AllocationResult, out *resource.AllocationResult, s conversion.Scope) error {
-	if err := Convert_v1alpha3_DeviceAllocationResult_To_resource_DeviceAllocationResult(&in.Devices, &out.Devices, s); err != nil {
-		return err
-	}
-	out.NodeSelector = (*core.NodeSelector)(unsafe.Pointer(in.NodeSelector))
-	out.Controller = in.Controller
-	return nil
-}
-
-// Convert_v1alpha3_AllocationResult_To_resource_AllocationResult is an autogenerated conversion function.
-func Convert_v1alpha3_AllocationResult_To_resource_AllocationResult(in *v1alpha3.AllocationResult, out *resource.AllocationResult, s conversion.Scope) error {
-	return autoConvert_v1alpha3_AllocationResult_To_resource_AllocationResult(in, out, s)
-}
-
-func autoConvert_resource_AllocationResult_To_v1alpha3_AllocationResult(in *resource.AllocationResult, out *v1alpha3.AllocationResult, s conversion.Scope) error {
-	if err := Convert_resource_DeviceAllocationResult_To_v1alpha3_DeviceAllocationResult(&in.Devices, &out.Devices, s); err != nil {
-		return err
-	}
-	out.NodeSelector = (*v1.NodeSelector)(unsafe.Pointer(in.NodeSelector))
-	out.Controller = in.Controller
-	return nil
-}
-
-// Convert_resource_AllocationResult_To_v1alpha3_AllocationResult is an autogenerated conversion function.
-func Convert_resource_AllocationResult_To_v1alpha3_AllocationResult(in *resource.AllocationResult, out *v1alpha3.AllocationResult, s conversion.Scope) error {
-	return autoConvert_resource_AllocationResult_To_v1alpha3_AllocationResult(in, out, s)
-}
-
-func autoConvert_v1alpha3_BasicDevice_To_resource_BasicDevice(in *v1alpha3.BasicDevice, out *resource.BasicDevice, s conversion.Scope) error {
-	out.Attributes = *(*map[resource.QualifiedName]resource.DeviceAttribute)(unsafe.Pointer(&in.Attributes))
-	out.Capacity = *(*map[resource.QualifiedName]apiresource.Quantity)(unsafe.Pointer(&in.Capacity))
-	return nil
-}
-
-// Convert_v1alpha3_BasicDevice_To_resource_BasicDevice is an autogenerated conversion function.
-func Convert_v1alpha3_BasicDevice_To_resource_BasicDevice(in *v1alpha3.BasicDevice, out *resource.BasicDevice, s conversion.Scope) error {
-	return autoConvert_v1alpha3_BasicDevice_To_resource_BasicDevice(in, out, s)
-}
-
-func autoConvert_resource_BasicDevice_To_v1alpha3_BasicDevice(in *resource.BasicDevice, out *v1alpha3.BasicDevice, s conversion.Scope) error {
-	out.Attributes = *(*map[v1alpha3.QualifiedName]v1alpha3.DeviceAttribute)(unsafe.Pointer(&in.Attributes))
-	out.Capacity = *(*map[v1alpha3.QualifiedName]apiresource.Quantity)(unsafe.Pointer(&in.Capacity))
-	return nil
-}
-
-// Convert_resource_BasicDevice_To_v1alpha3_BasicDevice is an autogenerated conversion function.
-func Convert_resource_BasicDevice_To_v1alpha3_BasicDevice(in *resource.BasicDevice, out *v1alpha3.BasicDevice, s conversion.Scope) error {
-	return autoConvert_resource_BasicDevice_To_v1alpha3_BasicDevice(in, out, s)
-}
-
-func autoConvert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(in *v1alpha3.CELDeviceSelector, out *resource.CELDeviceSelector, s conversion.Scope) error {
+func autoConvert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(in *resourcev1alpha3.CELDeviceSelector, out *resource.CELDeviceSelector, s conversion.Scope) error {
 	out.Expression = in.Expression
 	return nil
 }
 
 // Convert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector is an autogenerated conversion function.
-func Convert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(in *v1alpha3.CELDeviceSelector, out *resource.CELDeviceSelector, s conversion.Scope) error {
+func Convert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(in *resourcev1alpha3.CELDeviceSelector, out *resource.CELDeviceSelector, s conversion.Scope) error {
 	return autoConvert_v1alpha3_CELDeviceSelector_To_resource_CELDeviceSelector(in, out, s)
 }
 
-func autoConvert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(in *resource.CELDeviceSelector, out *v1alpha3.CELDeviceSelector, s conversion.Scope) error {
+func autoConvert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(in *resource.CELDeviceSelector, out *resourcev1alpha3.CELDeviceSelector, s conversion.Scope) error {
 	out.Expression = in.Expression
 	return nil
 }
 
 // Convert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector is an autogenerated conversion function.
-func Convert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(in *resource.CELDeviceSelector, out *v1alpha3.CELDeviceSelector, s conversion.Scope) error {
+func Convert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(in *resource.CELDeviceSelector, out *resourcev1alpha3.CELDeviceSelector, s conversion.Scope) error {
 	return autoConvert_resource_CELDeviceSelector_To_v1alpha3_CELDeviceSelector(in, out, s)
 }
 
-func autoConvert_v1alpha3_Device_To_resource_Device(in *v1alpha3.Device, out *resource.Device, s conversion.Scope) error {
-	out.Name = in.Name
-	out.Basic = (*resource.BasicDevice)(unsafe.Pointer(in.Basic))
-	return nil
-}
-
-// Convert_v1alpha3_Device_To_resource_Device is an autogenerated conversion function.
-func Convert_v1alpha3_Device_To_resource_Device(in *v1alpha3.Device, out *resource.Device, s conversion.Scope) error {
-	return autoConvert_v1alpha3_Device_To_resource_Device(in, out, s)
-}
-
-func autoConvert_resource_Device_To_v1alpha3_Device(in *resource.Device, out *v1alpha3.Device, s conversion.Scope) error {
-	out.Name = in.Name
-	out.Basic = (*v1alpha3.BasicDevice)(unsafe.Pointer(in.Basic))
-	return nil
-}
-
-// Convert_resource_Device_To_v1alpha3_Device is an autogenerated conversion function.
-func Convert_resource_Device_To_v1alpha3_Device(in *resource.Device, out *v1alpha3.Device, s conversion.Scope) error {
-	return autoConvert_resource_Device_To_v1alpha3_Device(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceAllocationConfiguration_To_resource_DeviceAllocationConfiguration(in *v1alpha3.DeviceAllocationConfiguration, out *resource.DeviceAllocationConfiguration, s conversion.Scope) error {
-	out.Source = resource.AllocationConfigSource(in.Source)
-	out.Requests = *(*[]string)(unsafe.Pointer(&in.Requests))
-	if err := Convert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(&in.DeviceConfiguration, &out.DeviceConfiguration, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_DeviceAllocationConfiguration_To_resource_DeviceAllocationConfiguration is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceAllocationConfiguration_To_resource_DeviceAllocationConfiguration(in *v1alpha3.DeviceAllocationConfiguration, out *resource.DeviceAllocationConfiguration, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceAllocationConfiguration_To_resource_DeviceAllocationConfiguration(in, out, s)
-}
-
-func autoConvert_resource_DeviceAllocationConfiguration_To_v1alpha3_DeviceAllocationConfiguration(in *resource.DeviceAllocationConfiguration, out *v1alpha3.DeviceAllocationConfiguration, s conversion.Scope) error {
-	out.Source = v1alpha3.AllocationConfigSource(in.Source)
-	out.Requests = *(*[]string)(unsafe.Pointer(&in.Requests))
-	if err := Convert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(&in.DeviceConfiguration, &out.DeviceConfiguration, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_DeviceAllocationConfiguration_To_v1alpha3_DeviceAllocationConfiguration is an autogenerated conversion function.
-func Convert_resource_DeviceAllocationConfiguration_To_v1alpha3_DeviceAllocationConfiguration(in *resource.DeviceAllocationConfiguration, out *v1alpha3.DeviceAllocationConfiguration, s conversion.Scope) error {
-	return autoConvert_resource_DeviceAllocationConfiguration_To_v1alpha3_DeviceAllocationConfiguration(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceAllocationResult_To_resource_DeviceAllocationResult(in *v1alpha3.DeviceAllocationResult, out *resource.DeviceAllocationResult, s conversion.Scope) error {
-	out.Results = *(*[]resource.DeviceRequestAllocationResult)(unsafe.Pointer(&in.Results))
-	out.Config = *(*[]resource.DeviceAllocationConfiguration)(unsafe.Pointer(&in.Config))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceAllocationResult_To_resource_DeviceAllocationResult is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceAllocationResult_To_resource_DeviceAllocationResult(in *v1alpha3.DeviceAllocationResult, out *resource.DeviceAllocationResult, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceAllocationResult_To_resource_DeviceAllocationResult(in, out, s)
-}
-
-func autoConvert_resource_DeviceAllocationResult_To_v1alpha3_DeviceAllocationResult(in *resource.DeviceAllocationResult, out *v1alpha3.DeviceAllocationResult, s conversion.Scope) error {
-	out.Results = *(*[]v1alpha3.DeviceRequestAllocationResult)(unsafe.Pointer(&in.Results))
-	out.Config = *(*[]v1alpha3.DeviceAllocationConfiguration)(unsafe.Pointer(&in.Config))
-	return nil
-}
-
-// Convert_resource_DeviceAllocationResult_To_v1alpha3_DeviceAllocationResult is an autogenerated conversion function.
-func Convert_resource_DeviceAllocationResult_To_v1alpha3_DeviceAllocationResult(in *resource.DeviceAllocationResult, out *v1alpha3.DeviceAllocationResult, s conversion.Scope) error {
-	return autoConvert_resource_DeviceAllocationResult_To_v1alpha3_DeviceAllocationResult(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceAttribute_To_resource_DeviceAttribute(in *v1alpha3.DeviceAttribute, out *resource.DeviceAttribute, s conversion.Scope) error {
-	out.IntValue = (*int64)(unsafe.Pointer(in.IntValue))
-	out.BoolValue = (*bool)(unsafe.Pointer(in.BoolValue))
-	out.StringValue = (*string)(unsafe.Pointer(in.StringValue))
-	out.VersionValue = (*string)(unsafe.Pointer(in.VersionValue))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceAttribute_To_resource_DeviceAttribute is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceAttribute_To_resource_DeviceAttribute(in *v1alpha3.DeviceAttribute, out *resource.DeviceAttribute, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceAttribute_To_resource_DeviceAttribute(in, out, s)
-}
-
-func autoConvert_resource_DeviceAttribute_To_v1alpha3_DeviceAttribute(in *resource.DeviceAttribute, out *v1alpha3.DeviceAttribute, s conversion.Scope) error {
-	out.IntValue = (*int64)(unsafe.Pointer(in.IntValue))
-	out.BoolValue = (*bool)(unsafe.Pointer(in.BoolValue))
-	out.StringValue = (*string)(unsafe.Pointer(in.StringValue))
-	out.VersionValue = (*string)(unsafe.Pointer(in.VersionValue))
-	return nil
-}
-
-// Convert_resource_DeviceAttribute_To_v1alpha3_DeviceAttribute is an autogenerated conversion function.
-func Convert_resource_DeviceAttribute_To_v1alpha3_DeviceAttribute(in *resource.DeviceAttribute, out *v1alpha3.DeviceAttribute, s conversion.Scope) error {
-	return autoConvert_resource_DeviceAttribute_To_v1alpha3_DeviceAttribute(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceClaim_To_resource_DeviceClaim(in *v1alpha3.DeviceClaim, out *resource.DeviceClaim, s conversion.Scope) error {
-	out.Requests = *(*[]resource.DeviceRequest)(unsafe.Pointer(&in.Requests))
-	out.Constraints = *(*[]resource.DeviceConstraint)(unsafe.Pointer(&in.Constraints))
-	out.Config = *(*[]resource.DeviceClaimConfiguration)(unsafe.Pointer(&in.Config))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceClaim_To_resource_DeviceClaim is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceClaim_To_resource_DeviceClaim(in *v1alpha3.DeviceClaim, out *resource.DeviceClaim, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceClaim_To_resource_DeviceClaim(in, out, s)
-}
-
-func autoConvert_resource_DeviceClaim_To_v1alpha3_DeviceClaim(in *resource.DeviceClaim, out *v1alpha3.DeviceClaim, s conversion.Scope) error {
-	out.Requests = *(*[]v1alpha3.DeviceRequest)(unsafe.Pointer(&in.Requests))
-	out.Constraints = *(*[]v1alpha3.DeviceConstraint)(unsafe.Pointer(&in.Constraints))
-	out.Config = *(*[]v1alpha3.DeviceClaimConfiguration)(unsafe.Pointer(&in.Config))
-	return nil
-}
-
-// Convert_resource_DeviceClaim_To_v1alpha3_DeviceClaim is an autogenerated conversion function.
-func Convert_resource_DeviceClaim_To_v1alpha3_DeviceClaim(in *resource.DeviceClaim, out *v1alpha3.DeviceClaim, s conversion.Scope) error {
-	return autoConvert_resource_DeviceClaim_To_v1alpha3_DeviceClaim(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceClaimConfiguration_To_resource_DeviceClaimConfiguration(in *v1alpha3.DeviceClaimConfiguration, out *resource.DeviceClaimConfiguration, s conversion.Scope) error {
-	out.Requests = *(*[]string)(unsafe.Pointer(&in.Requests))
-	if err := Convert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(&in.DeviceConfiguration, &out.DeviceConfiguration, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_DeviceClaimConfiguration_To_resource_DeviceClaimConfiguration is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceClaimConfiguration_To_resource_DeviceClaimConfiguration(in *v1alpha3.DeviceClaimConfiguration, out *resource.DeviceClaimConfiguration, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceClaimConfiguration_To_resource_DeviceClaimConfiguration(in, out, s)
-}
-
-func autoConvert_resource_DeviceClaimConfiguration_To_v1alpha3_DeviceClaimConfiguration(in *resource.DeviceClaimConfiguration, out *v1alpha3.DeviceClaimConfiguration, s conversion.Scope) error {
-	out.Requests = *(*[]string)(unsafe.Pointer(&in.Requests))
-	if err := Convert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(&in.DeviceConfiguration, &out.DeviceConfiguration, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_DeviceClaimConfiguration_To_v1alpha3_DeviceClaimConfiguration is an autogenerated conversion function.
-func Convert_resource_DeviceClaimConfiguration_To_v1alpha3_DeviceClaimConfiguration(in *resource.DeviceClaimConfiguration, out *v1alpha3.DeviceClaimConfiguration, s conversion.Scope) error {
-	return autoConvert_resource_DeviceClaimConfiguration_To_v1alpha3_DeviceClaimConfiguration(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceClass_To_resource_DeviceClass(in *v1alpha3.DeviceClass, out *resource.DeviceClass, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha3_DeviceClassSpec_To_resource_DeviceClassSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_DeviceClass_To_resource_DeviceClass is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceClass_To_resource_DeviceClass(in *v1alpha3.DeviceClass, out *resource.DeviceClass, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceClass_To_resource_DeviceClass(in, out, s)
-}
-
-func autoConvert_resource_DeviceClass_To_v1alpha3_DeviceClass(in *resource.DeviceClass, out *v1alpha3.DeviceClass, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_resource_DeviceClassSpec_To_v1alpha3_DeviceClassSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_DeviceClass_To_v1alpha3_DeviceClass is an autogenerated conversion function.
-func Convert_resource_DeviceClass_To_v1alpha3_DeviceClass(in *resource.DeviceClass, out *v1alpha3.DeviceClass, s conversion.Scope) error {
-	return autoConvert_resource_DeviceClass_To_v1alpha3_DeviceClass(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceClassConfiguration_To_resource_DeviceClassConfiguration(in *v1alpha3.DeviceClassConfiguration, out *resource.DeviceClassConfiguration, s conversion.Scope) error {
-	if err := Convert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(&in.DeviceConfiguration, &out.DeviceConfiguration, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_DeviceClassConfiguration_To_resource_DeviceClassConfiguration is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceClassConfiguration_To_resource_DeviceClassConfiguration(in *v1alpha3.DeviceClassConfiguration, out *resource.DeviceClassConfiguration, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceClassConfiguration_To_resource_DeviceClassConfiguration(in, out, s)
-}
-
-func autoConvert_resource_DeviceClassConfiguration_To_v1alpha3_DeviceClassConfiguration(in *resource.DeviceClassConfiguration, out *v1alpha3.DeviceClassConfiguration, s conversion.Scope) error {
-	if err := Convert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(&in.DeviceConfiguration, &out.DeviceConfiguration, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_DeviceClassConfiguration_To_v1alpha3_DeviceClassConfiguration is an autogenerated conversion function.
-func Convert_resource_DeviceClassConfiguration_To_v1alpha3_DeviceClassConfiguration(in *resource.DeviceClassConfiguration, out *v1alpha3.DeviceClassConfiguration, s conversion.Scope) error {
-	return autoConvert_resource_DeviceClassConfiguration_To_v1alpha3_DeviceClassConfiguration(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceClassList_To_resource_DeviceClassList(in *v1alpha3.DeviceClassList, out *resource.DeviceClassList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]resource.DeviceClass)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceClassList_To_resource_DeviceClassList is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceClassList_To_resource_DeviceClassList(in *v1alpha3.DeviceClassList, out *resource.DeviceClassList, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceClassList_To_resource_DeviceClassList(in, out, s)
-}
-
-func autoConvert_resource_DeviceClassList_To_v1alpha3_DeviceClassList(in *resource.DeviceClassList, out *v1alpha3.DeviceClassList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1alpha3.DeviceClass)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_resource_DeviceClassList_To_v1alpha3_DeviceClassList is an autogenerated conversion function.
-func Convert_resource_DeviceClassList_To_v1alpha3_DeviceClassList(in *resource.DeviceClassList, out *v1alpha3.DeviceClassList, s conversion.Scope) error {
-	return autoConvert_resource_DeviceClassList_To_v1alpha3_DeviceClassList(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceClassSpec_To_resource_DeviceClassSpec(in *v1alpha3.DeviceClassSpec, out *resource.DeviceClassSpec, s conversion.Scope) error {
-	out.Selectors = *(*[]resource.DeviceSelector)(unsafe.Pointer(&in.Selectors))
-	out.Config = *(*[]resource.DeviceClassConfiguration)(unsafe.Pointer(&in.Config))
-	out.SuitableNodes = (*core.NodeSelector)(unsafe.Pointer(in.SuitableNodes))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceClassSpec_To_resource_DeviceClassSpec is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceClassSpec_To_resource_DeviceClassSpec(in *v1alpha3.DeviceClassSpec, out *resource.DeviceClassSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceClassSpec_To_resource_DeviceClassSpec(in, out, s)
-}
-
-func autoConvert_resource_DeviceClassSpec_To_v1alpha3_DeviceClassSpec(in *resource.DeviceClassSpec, out *v1alpha3.DeviceClassSpec, s conversion.Scope) error {
-	out.Selectors = *(*[]v1alpha3.DeviceSelector)(unsafe.Pointer(&in.Selectors))
-	out.Config = *(*[]v1alpha3.DeviceClassConfiguration)(unsafe.Pointer(&in.Config))
-	out.SuitableNodes = (*v1.NodeSelector)(unsafe.Pointer(in.SuitableNodes))
-	return nil
-}
-
-// Convert_resource_DeviceClassSpec_To_v1alpha3_DeviceClassSpec is an autogenerated conversion function.
-func Convert_resource_DeviceClassSpec_To_v1alpha3_DeviceClassSpec(in *resource.DeviceClassSpec, out *v1alpha3.DeviceClassSpec, s conversion.Scope) error {
-	return autoConvert_resource_DeviceClassSpec_To_v1alpha3_DeviceClassSpec(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(in *v1alpha3.DeviceConfiguration, out *resource.DeviceConfiguration, s conversion.Scope) error {
-	out.Opaque = (*resource.OpaqueDeviceConfiguration)(unsafe.Pointer(in.Opaque))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(in *v1alpha3.DeviceConfiguration, out *resource.DeviceConfiguration, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceConfiguration_To_resource_DeviceConfiguration(in, out, s)
-}
-
-func autoConvert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(in *resource.DeviceConfiguration, out *v1alpha3.DeviceConfiguration, s conversion.Scope) error {
-	out.Opaque = (*v1alpha3.OpaqueDeviceConfiguration)(unsafe.Pointer(in.Opaque))
-	return nil
-}
-
-// Convert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration is an autogenerated conversion function.
-func Convert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(in *resource.DeviceConfiguration, out *v1alpha3.DeviceConfiguration, s conversion.Scope) error {
-	return autoConvert_resource_DeviceConfiguration_To_v1alpha3_DeviceConfiguration(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceConstraint_To_resource_DeviceConstraint(in *v1alpha3.DeviceConstraint, out *resource.DeviceConstraint, s conversion.Scope) error {
-	out.Requests = *(*[]string)(unsafe.Pointer(&in.Requests))
-	out.MatchAttribute = (*resource.FullyQualifiedName)(unsafe.Pointer(in.MatchAttribute))
-	return nil
-}
-
-// Convert_v1alpha3_DeviceConstraint_To_resource_DeviceConstraint is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceConstraint_To_resource_DeviceConstraint(in *v1alpha3.DeviceConstraint, out *resource.DeviceConstraint, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceConstraint_To_resource_DeviceConstraint(in, out, s)
-}
-
-func autoConvert_resource_DeviceConstraint_To_v1alpha3_DeviceConstraint(in *resource.DeviceConstraint, out *v1alpha3.DeviceConstraint, s conversion.Scope) error {
-	out.Requests = *(*[]string)(unsafe.Pointer(&in.Requests))
-	out.MatchAttribute = (*v1alpha3.FullyQualifiedName)(unsafe.Pointer(in.MatchAttribute))
-	return nil
-}
-
-// Convert_resource_DeviceConstraint_To_v1alpha3_DeviceConstraint is an autogenerated conversion function.
-func Convert_resource_DeviceConstraint_To_v1alpha3_DeviceConstraint(in *resource.DeviceConstraint, out *v1alpha3.DeviceConstraint, s conversion.Scope) error {
-	return autoConvert_resource_DeviceConstraint_To_v1alpha3_DeviceConstraint(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceRequest_To_resource_DeviceRequest(in *v1alpha3.DeviceRequest, out *resource.DeviceRequest, s conversion.Scope) error {
-	out.Name = in.Name
-	out.DeviceClassName = in.DeviceClassName
-	out.Selectors = *(*[]resource.DeviceSelector)(unsafe.Pointer(&in.Selectors))
-	out.AllocationMode = resource.DeviceAllocationMode(in.AllocationMode)
-	out.Count = in.Count
-	out.AdminAccess = in.AdminAccess
-	return nil
-}
-
-// Convert_v1alpha3_DeviceRequest_To_resource_DeviceRequest is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceRequest_To_resource_DeviceRequest(in *v1alpha3.DeviceRequest, out *resource.DeviceRequest, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceRequest_To_resource_DeviceRequest(in, out, s)
-}
-
-func autoConvert_resource_DeviceRequest_To_v1alpha3_DeviceRequest(in *resource.DeviceRequest, out *v1alpha3.DeviceRequest, s conversion.Scope) error {
-	out.Name = in.Name
-	out.DeviceClassName = in.DeviceClassName
-	out.Selectors = *(*[]v1alpha3.DeviceSelector)(unsafe.Pointer(&in.Selectors))
-	out.AllocationMode = v1alpha3.DeviceAllocationMode(in.AllocationMode)
-	out.Count = in.Count
-	out.AdminAccess = in.AdminAccess
-	return nil
-}
-
-// Convert_resource_DeviceRequest_To_v1alpha3_DeviceRequest is an autogenerated conversion function.
-func Convert_resource_DeviceRequest_To_v1alpha3_DeviceRequest(in *resource.DeviceRequest, out *v1alpha3.DeviceRequest, s conversion.Scope) error {
-	return autoConvert_resource_DeviceRequest_To_v1alpha3_DeviceRequest(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceRequestAllocationResult_To_resource_DeviceRequestAllocationResult(in *v1alpha3.DeviceRequestAllocationResult, out *resource.DeviceRequestAllocationResult, s conversion.Scope) error {
-	out.Request = in.Request
-	out.Driver = in.Driver
-	out.Pool = in.Pool
-	out.Device = in.Device
-	return nil
-}
-
-// Convert_v1alpha3_DeviceRequestAllocationResult_To_resource_DeviceRequestAllocationResult is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceRequestAllocationResult_To_resource_DeviceRequestAllocationResult(in *v1alpha3.DeviceRequestAllocationResult, out *resource.DeviceRequestAllocationResult, s conversion.Scope) error {
-	return autoConvert_v1alpha3_DeviceRequestAllocationResult_To_resource_DeviceRequestAllocationResult(in, out, s)
-}
-
-func autoConvert_resource_DeviceRequestAllocationResult_To_v1alpha3_DeviceRequestAllocationResult(in *resource.DeviceRequestAllocationResult, out *v1alpha3.DeviceRequestAllocationResult, s conversion.Scope) error {
-	out.Request = in.Request
-	out.Driver = in.Driver
-	out.Pool = in.Pool
-	out.Device = in.Device
-	return nil
-}
-
-// Convert_resource_DeviceRequestAllocationResult_To_v1alpha3_DeviceRequestAllocationResult is an autogenerated conversion function.
-func Convert_resource_DeviceRequestAllocationResult_To_v1alpha3_DeviceRequestAllocationResult(in *resource.DeviceRequestAllocationResult, out *v1alpha3.DeviceRequestAllocationResult, s conversion.Scope) error {
-	return autoConvert_resource_DeviceRequestAllocationResult_To_v1alpha3_DeviceRequestAllocationResult(in, out, s)
-}
-
-func autoConvert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(in *v1alpha3.DeviceSelector, out *resource.DeviceSelector, s conversion.Scope) error {
+func autoConvert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(in *resourcev1alpha3.DeviceSelector, out *resource.DeviceSelector, s conversion.Scope) error {
 	out.CEL = (*resource.CELDeviceSelector)(unsafe.Pointer(in.CEL))
 	return nil
 }
 
 // Convert_v1alpha3_DeviceSelector_To_resource_DeviceSelector is an autogenerated conversion function.
-func Convert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(in *v1alpha3.DeviceSelector, out *resource.DeviceSelector, s conversion.Scope) error {
+func Convert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(in *resourcev1alpha3.DeviceSelector, out *resource.DeviceSelector, s conversion.Scope) error {
 	return autoConvert_v1alpha3_DeviceSelector_To_resource_DeviceSelector(in, out, s)
 }
 
-func autoConvert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(in *resource.DeviceSelector, out *v1alpha3.DeviceSelector, s conversion.Scope) error {
-	out.CEL = (*v1alpha3.CELDeviceSelector)(unsafe.Pointer(in.CEL))
+func autoConvert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(in *resource.DeviceSelector, out *resourcev1alpha3.DeviceSelector, s conversion.Scope) error {
+	out.CEL = (*resourcev1alpha3.CELDeviceSelector)(unsafe.Pointer(in.CEL))
 	return nil
 }
 
 // Convert_resource_DeviceSelector_To_v1alpha3_DeviceSelector is an autogenerated conversion function.
-func Convert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(in *resource.DeviceSelector, out *v1alpha3.DeviceSelector, s conversion.Scope) error {
+func Convert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(in *resource.DeviceSelector, out *resourcev1alpha3.DeviceSelector, s conversion.Scope) error {
 	return autoConvert_resource_DeviceSelector_To_v1alpha3_DeviceSelector(in, out, s)
 }
 
-func autoConvert_v1alpha3_OpaqueDeviceConfiguration_To_resource_OpaqueDeviceConfiguration(in *v1alpha3.OpaqueDeviceConfiguration, out *resource.OpaqueDeviceConfiguration, s conversion.Scope) error {
-	out.Driver = in.Driver
-	out.Parameters = in.Parameters
+func autoConvert_v1alpha3_DeviceTaint_To_resource_DeviceTaint(in *resourcev1alpha3.DeviceTaint, out *resource.DeviceTaint, s conversion.Scope) error {
+	out.Key = in.Key
+	out.Value = in.Value
+	out.Effect = resource.DeviceTaintEffect(in.Effect)
+	out.TimeAdded = (*v1.Time)(unsafe.Pointer(in.TimeAdded))
 	return nil
 }
 
-// Convert_v1alpha3_OpaqueDeviceConfiguration_To_resource_OpaqueDeviceConfiguration is an autogenerated conversion function.
-func Convert_v1alpha3_OpaqueDeviceConfiguration_To_resource_OpaqueDeviceConfiguration(in *v1alpha3.OpaqueDeviceConfiguration, out *resource.OpaqueDeviceConfiguration, s conversion.Scope) error {
-	return autoConvert_v1alpha3_OpaqueDeviceConfiguration_To_resource_OpaqueDeviceConfiguration(in, out, s)
+// Convert_v1alpha3_DeviceTaint_To_resource_DeviceTaint is an autogenerated conversion function.
+func Convert_v1alpha3_DeviceTaint_To_resource_DeviceTaint(in *resourcev1alpha3.DeviceTaint, out *resource.DeviceTaint, s conversion.Scope) error {
+	return autoConvert_v1alpha3_DeviceTaint_To_resource_DeviceTaint(in, out, s)
 }
 
-func autoConvert_resource_OpaqueDeviceConfiguration_To_v1alpha3_OpaqueDeviceConfiguration(in *resource.OpaqueDeviceConfiguration, out *v1alpha3.OpaqueDeviceConfiguration, s conversion.Scope) error {
-	out.Driver = in.Driver
-	out.Parameters = in.Parameters
+func autoConvert_resource_DeviceTaint_To_v1alpha3_DeviceTaint(in *resource.DeviceTaint, out *resourcev1alpha3.DeviceTaint, s conversion.Scope) error {
+	out.Key = in.Key
+	out.Value = in.Value
+	out.Effect = resourcev1alpha3.DeviceTaintEffect(in.Effect)
+	out.TimeAdded = (*v1.Time)(unsafe.Pointer(in.TimeAdded))
 	return nil
 }
 
-// Convert_resource_OpaqueDeviceConfiguration_To_v1alpha3_OpaqueDeviceConfiguration is an autogenerated conversion function.
-func Convert_resource_OpaqueDeviceConfiguration_To_v1alpha3_OpaqueDeviceConfiguration(in *resource.OpaqueDeviceConfiguration, out *v1alpha3.OpaqueDeviceConfiguration, s conversion.Scope) error {
-	return autoConvert_resource_OpaqueDeviceConfiguration_To_v1alpha3_OpaqueDeviceConfiguration(in, out, s)
+// Convert_resource_DeviceTaint_To_v1alpha3_DeviceTaint is an autogenerated conversion function.
+func Convert_resource_DeviceTaint_To_v1alpha3_DeviceTaint(in *resource.DeviceTaint, out *resourcev1alpha3.DeviceTaint, s conversion.Scope) error {
+	return autoConvert_resource_DeviceTaint_To_v1alpha3_DeviceTaint(in, out, s)
 }
 
-func autoConvert_v1alpha3_PodSchedulingContext_To_resource_PodSchedulingContext(in *v1alpha3.PodSchedulingContext, out *resource.PodSchedulingContext, s conversion.Scope) error {
+func autoConvert_v1alpha3_DeviceTaintRule_To_resource_DeviceTaintRule(in *resourcev1alpha3.DeviceTaintRule, out *resource.DeviceTaintRule, s conversion.Scope) error {
 	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha3_PodSchedulingContextSpec_To_resource_PodSchedulingContextSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_v1alpha3_PodSchedulingContextStatus_To_resource_PodSchedulingContextStatus(&in.Status, &out.Status, s); err != nil {
+	if err := Convert_v1alpha3_DeviceTaintRuleSpec_To_resource_DeviceTaintRuleSpec(&in.Spec, &out.Spec, s); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Convert_v1alpha3_PodSchedulingContext_To_resource_PodSchedulingContext is an autogenerated conversion function.
-func Convert_v1alpha3_PodSchedulingContext_To_resource_PodSchedulingContext(in *v1alpha3.PodSchedulingContext, out *resource.PodSchedulingContext, s conversion.Scope) error {
-	return autoConvert_v1alpha3_PodSchedulingContext_To_resource_PodSchedulingContext(in, out, s)
+// Convert_v1alpha3_DeviceTaintRule_To_resource_DeviceTaintRule is an autogenerated conversion function.
+func Convert_v1alpha3_DeviceTaintRule_To_resource_DeviceTaintRule(in *resourcev1alpha3.DeviceTaintRule, out *resource.DeviceTaintRule, s conversion.Scope) error {
+	return autoConvert_v1alpha3_DeviceTaintRule_To_resource_DeviceTaintRule(in, out, s)
 }
 
-func autoConvert_resource_PodSchedulingContext_To_v1alpha3_PodSchedulingContext(in *resource.PodSchedulingContext, out *v1alpha3.PodSchedulingContext, s conversion.Scope) error {
+func autoConvert_resource_DeviceTaintRule_To_v1alpha3_DeviceTaintRule(in *resource.DeviceTaintRule, out *resourcev1alpha3.DeviceTaintRule, s conversion.Scope) error {
 	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_resource_PodSchedulingContextSpec_To_v1alpha3_PodSchedulingContextSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_resource_PodSchedulingContextStatus_To_v1alpha3_PodSchedulingContextStatus(&in.Status, &out.Status, s); err != nil {
+	if err := Convert_resource_DeviceTaintRuleSpec_To_v1alpha3_DeviceTaintRuleSpec(&in.Spec, &out.Spec, s); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Convert_resource_PodSchedulingContext_To_v1alpha3_PodSchedulingContext is an autogenerated conversion function.
-func Convert_resource_PodSchedulingContext_To_v1alpha3_PodSchedulingContext(in *resource.PodSchedulingContext, out *v1alpha3.PodSchedulingContext, s conversion.Scope) error {
-	return autoConvert_resource_PodSchedulingContext_To_v1alpha3_PodSchedulingContext(in, out, s)
+// Convert_resource_DeviceTaintRule_To_v1alpha3_DeviceTaintRule is an autogenerated conversion function.
+func Convert_resource_DeviceTaintRule_To_v1alpha3_DeviceTaintRule(in *resource.DeviceTaintRule, out *resourcev1alpha3.DeviceTaintRule, s conversion.Scope) error {
+	return autoConvert_resource_DeviceTaintRule_To_v1alpha3_DeviceTaintRule(in, out, s)
 }
 
-func autoConvert_v1alpha3_PodSchedulingContextList_To_resource_PodSchedulingContextList(in *v1alpha3.PodSchedulingContextList, out *resource.PodSchedulingContextList, s conversion.Scope) error {
+func autoConvert_v1alpha3_DeviceTaintRuleList_To_resource_DeviceTaintRuleList(in *resourcev1alpha3.DeviceTaintRuleList, out *resource.DeviceTaintRuleList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]resource.PodSchedulingContext)(unsafe.Pointer(&in.Items))
+	out.Items = *(*[]resource.DeviceTaintRule)(unsafe.Pointer(&in.Items))
 	return nil
 }
 
-// Convert_v1alpha3_PodSchedulingContextList_To_resource_PodSchedulingContextList is an autogenerated conversion function.
-func Convert_v1alpha3_PodSchedulingContextList_To_resource_PodSchedulingContextList(in *v1alpha3.PodSchedulingContextList, out *resource.PodSchedulingContextList, s conversion.Scope) error {
-	return autoConvert_v1alpha3_PodSchedulingContextList_To_resource_PodSchedulingContextList(in, out, s)
+// Convert_v1alpha3_DeviceTaintRuleList_To_resource_DeviceTaintRuleList is an autogenerated conversion function.
+func Convert_v1alpha3_DeviceTaintRuleList_To_resource_DeviceTaintRuleList(in *resourcev1alpha3.DeviceTaintRuleList, out *resource.DeviceTaintRuleList, s conversion.Scope) error {
+	return autoConvert_v1alpha3_DeviceTaintRuleList_To_resource_DeviceTaintRuleList(in, out, s)
 }
 
-func autoConvert_resource_PodSchedulingContextList_To_v1alpha3_PodSchedulingContextList(in *resource.PodSchedulingContextList, out *v1alpha3.PodSchedulingContextList, s conversion.Scope) error {
+func autoConvert_resource_DeviceTaintRuleList_To_v1alpha3_DeviceTaintRuleList(in *resource.DeviceTaintRuleList, out *resourcev1alpha3.DeviceTaintRuleList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1alpha3.PodSchedulingContext)(unsafe.Pointer(&in.Items))
+	out.Items = *(*[]resourcev1alpha3.DeviceTaintRule)(unsafe.Pointer(&in.Items))
 	return nil
 }
 
-// Convert_resource_PodSchedulingContextList_To_v1alpha3_PodSchedulingContextList is an autogenerated conversion function.
-func Convert_resource_PodSchedulingContextList_To_v1alpha3_PodSchedulingContextList(in *resource.PodSchedulingContextList, out *v1alpha3.PodSchedulingContextList, s conversion.Scope) error {
-	return autoConvert_resource_PodSchedulingContextList_To_v1alpha3_PodSchedulingContextList(in, out, s)
+// Convert_resource_DeviceTaintRuleList_To_v1alpha3_DeviceTaintRuleList is an autogenerated conversion function.
+func Convert_resource_DeviceTaintRuleList_To_v1alpha3_DeviceTaintRuleList(in *resource.DeviceTaintRuleList, out *resourcev1alpha3.DeviceTaintRuleList, s conversion.Scope) error {
+	return autoConvert_resource_DeviceTaintRuleList_To_v1alpha3_DeviceTaintRuleList(in, out, s)
 }
 
-func autoConvert_v1alpha3_PodSchedulingContextSpec_To_resource_PodSchedulingContextSpec(in *v1alpha3.PodSchedulingContextSpec, out *resource.PodSchedulingContextSpec, s conversion.Scope) error {
-	out.SelectedNode = in.SelectedNode
-	out.PotentialNodes = *(*[]string)(unsafe.Pointer(&in.PotentialNodes))
-	return nil
-}
-
-// Convert_v1alpha3_PodSchedulingContextSpec_To_resource_PodSchedulingContextSpec is an autogenerated conversion function.
-func Convert_v1alpha3_PodSchedulingContextSpec_To_resource_PodSchedulingContextSpec(in *v1alpha3.PodSchedulingContextSpec, out *resource.PodSchedulingContextSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha3_PodSchedulingContextSpec_To_resource_PodSchedulingContextSpec(in, out, s)
-}
-
-func autoConvert_resource_PodSchedulingContextSpec_To_v1alpha3_PodSchedulingContextSpec(in *resource.PodSchedulingContextSpec, out *v1alpha3.PodSchedulingContextSpec, s conversion.Scope) error {
-	out.SelectedNode = in.SelectedNode
-	out.PotentialNodes = *(*[]string)(unsafe.Pointer(&in.PotentialNodes))
-	return nil
-}
-
-// Convert_resource_PodSchedulingContextSpec_To_v1alpha3_PodSchedulingContextSpec is an autogenerated conversion function.
-func Convert_resource_PodSchedulingContextSpec_To_v1alpha3_PodSchedulingContextSpec(in *resource.PodSchedulingContextSpec, out *v1alpha3.PodSchedulingContextSpec, s conversion.Scope) error {
-	return autoConvert_resource_PodSchedulingContextSpec_To_v1alpha3_PodSchedulingContextSpec(in, out, s)
-}
-
-func autoConvert_v1alpha3_PodSchedulingContextStatus_To_resource_PodSchedulingContextStatus(in *v1alpha3.PodSchedulingContextStatus, out *resource.PodSchedulingContextStatus, s conversion.Scope) error {
-	out.ResourceClaims = *(*[]resource.ResourceClaimSchedulingStatus)(unsafe.Pointer(&in.ResourceClaims))
-	return nil
-}
-
-// Convert_v1alpha3_PodSchedulingContextStatus_To_resource_PodSchedulingContextStatus is an autogenerated conversion function.
-func Convert_v1alpha3_PodSchedulingContextStatus_To_resource_PodSchedulingContextStatus(in *v1alpha3.PodSchedulingContextStatus, out *resource.PodSchedulingContextStatus, s conversion.Scope) error {
-	return autoConvert_v1alpha3_PodSchedulingContextStatus_To_resource_PodSchedulingContextStatus(in, out, s)
-}
-
-func autoConvert_resource_PodSchedulingContextStatus_To_v1alpha3_PodSchedulingContextStatus(in *resource.PodSchedulingContextStatus, out *v1alpha3.PodSchedulingContextStatus, s conversion.Scope) error {
-	out.ResourceClaims = *(*[]v1alpha3.ResourceClaimSchedulingStatus)(unsafe.Pointer(&in.ResourceClaims))
-	return nil
-}
-
-// Convert_resource_PodSchedulingContextStatus_To_v1alpha3_PodSchedulingContextStatus is an autogenerated conversion function.
-func Convert_resource_PodSchedulingContextStatus_To_v1alpha3_PodSchedulingContextStatus(in *resource.PodSchedulingContextStatus, out *v1alpha3.PodSchedulingContextStatus, s conversion.Scope) error {
-	return autoConvert_resource_PodSchedulingContextStatus_To_v1alpha3_PodSchedulingContextStatus(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaim_To_resource_ResourceClaim(in *v1alpha3.ResourceClaim, out *resource.ResourceClaim, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_v1alpha3_ResourceClaimStatus_To_resource_ResourceClaimStatus(&in.Status, &out.Status, s); err != nil {
+func autoConvert_v1alpha3_DeviceTaintRuleSpec_To_resource_DeviceTaintRuleSpec(in *resourcev1alpha3.DeviceTaintRuleSpec, out *resource.DeviceTaintRuleSpec, s conversion.Scope) error {
+	out.DeviceSelector = (*resource.DeviceTaintSelector)(unsafe.Pointer(in.DeviceSelector))
+	if err := Convert_v1alpha3_DeviceTaint_To_resource_DeviceTaint(&in.Taint, &out.Taint, s); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Convert_v1alpha3_ResourceClaim_To_resource_ResourceClaim is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaim_To_resource_ResourceClaim(in *v1alpha3.ResourceClaim, out *resource.ResourceClaim, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaim_To_resource_ResourceClaim(in, out, s)
+// Convert_v1alpha3_DeviceTaintRuleSpec_To_resource_DeviceTaintRuleSpec is an autogenerated conversion function.
+func Convert_v1alpha3_DeviceTaintRuleSpec_To_resource_DeviceTaintRuleSpec(in *resourcev1alpha3.DeviceTaintRuleSpec, out *resource.DeviceTaintRuleSpec, s conversion.Scope) error {
+	return autoConvert_v1alpha3_DeviceTaintRuleSpec_To_resource_DeviceTaintRuleSpec(in, out, s)
 }
 
-func autoConvert_resource_ResourceClaim_To_v1alpha3_ResourceClaim(in *resource.ResourceClaim, out *v1alpha3.ResourceClaim, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_resource_ResourceClaimStatus_To_v1alpha3_ResourceClaimStatus(&in.Status, &out.Status, s); err != nil {
+func autoConvert_resource_DeviceTaintRuleSpec_To_v1alpha3_DeviceTaintRuleSpec(in *resource.DeviceTaintRuleSpec, out *resourcev1alpha3.DeviceTaintRuleSpec, s conversion.Scope) error {
+	out.DeviceSelector = (*resourcev1alpha3.DeviceTaintSelector)(unsafe.Pointer(in.DeviceSelector))
+	if err := Convert_resource_DeviceTaint_To_v1alpha3_DeviceTaint(&in.Taint, &out.Taint, s); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Convert_resource_ResourceClaim_To_v1alpha3_ResourceClaim is an autogenerated conversion function.
-func Convert_resource_ResourceClaim_To_v1alpha3_ResourceClaim(in *resource.ResourceClaim, out *v1alpha3.ResourceClaim, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaim_To_v1alpha3_ResourceClaim(in, out, s)
+// Convert_resource_DeviceTaintRuleSpec_To_v1alpha3_DeviceTaintRuleSpec is an autogenerated conversion function.
+func Convert_resource_DeviceTaintRuleSpec_To_v1alpha3_DeviceTaintRuleSpec(in *resource.DeviceTaintRuleSpec, out *resourcev1alpha3.DeviceTaintRuleSpec, s conversion.Scope) error {
+	return autoConvert_resource_DeviceTaintRuleSpec_To_v1alpha3_DeviceTaintRuleSpec(in, out, s)
 }
 
-func autoConvert_v1alpha3_ResourceClaimConsumerReference_To_resource_ResourceClaimConsumerReference(in *v1alpha3.ResourceClaimConsumerReference, out *resource.ResourceClaimConsumerReference, s conversion.Scope) error {
-	out.APIGroup = in.APIGroup
-	out.Resource = in.Resource
-	out.Name = in.Name
-	out.UID = types.UID(in.UID)
+func autoConvert_v1alpha3_DeviceTaintSelector_To_resource_DeviceTaintSelector(in *resourcev1alpha3.DeviceTaintSelector, out *resource.DeviceTaintSelector, s conversion.Scope) error {
+	out.DeviceClassName = (*string)(unsafe.Pointer(in.DeviceClassName))
+	out.Driver = (*string)(unsafe.Pointer(in.Driver))
+	out.Pool = (*string)(unsafe.Pointer(in.Pool))
+	out.Device = (*string)(unsafe.Pointer(in.Device))
+	out.Selectors = *(*[]resource.DeviceSelector)(unsafe.Pointer(&in.Selectors))
 	return nil
 }
 
-// Convert_v1alpha3_ResourceClaimConsumerReference_To_resource_ResourceClaimConsumerReference is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimConsumerReference_To_resource_ResourceClaimConsumerReference(in *v1alpha3.ResourceClaimConsumerReference, out *resource.ResourceClaimConsumerReference, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimConsumerReference_To_resource_ResourceClaimConsumerReference(in, out, s)
+// Convert_v1alpha3_DeviceTaintSelector_To_resource_DeviceTaintSelector is an autogenerated conversion function.
+func Convert_v1alpha3_DeviceTaintSelector_To_resource_DeviceTaintSelector(in *resourcev1alpha3.DeviceTaintSelector, out *resource.DeviceTaintSelector, s conversion.Scope) error {
+	return autoConvert_v1alpha3_DeviceTaintSelector_To_resource_DeviceTaintSelector(in, out, s)
 }
 
-func autoConvert_resource_ResourceClaimConsumerReference_To_v1alpha3_ResourceClaimConsumerReference(in *resource.ResourceClaimConsumerReference, out *v1alpha3.ResourceClaimConsumerReference, s conversion.Scope) error {
-	out.APIGroup = in.APIGroup
-	out.Resource = in.Resource
-	out.Name = in.Name
-	out.UID = types.UID(in.UID)
+func autoConvert_resource_DeviceTaintSelector_To_v1alpha3_DeviceTaintSelector(in *resource.DeviceTaintSelector, out *resourcev1alpha3.DeviceTaintSelector, s conversion.Scope) error {
+	out.DeviceClassName = (*string)(unsafe.Pointer(in.DeviceClassName))
+	out.Driver = (*string)(unsafe.Pointer(in.Driver))
+	out.Pool = (*string)(unsafe.Pointer(in.Pool))
+	out.Device = (*string)(unsafe.Pointer(in.Device))
+	out.Selectors = *(*[]resourcev1alpha3.DeviceSelector)(unsafe.Pointer(&in.Selectors))
 	return nil
 }
 
-// Convert_resource_ResourceClaimConsumerReference_To_v1alpha3_ResourceClaimConsumerReference is an autogenerated conversion function.
-func Convert_resource_ResourceClaimConsumerReference_To_v1alpha3_ResourceClaimConsumerReference(in *resource.ResourceClaimConsumerReference, out *v1alpha3.ResourceClaimConsumerReference, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimConsumerReference_To_v1alpha3_ResourceClaimConsumerReference(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimList_To_resource_ResourceClaimList(in *v1alpha3.ResourceClaimList, out *resource.ResourceClaimList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]resource.ResourceClaim)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimList_To_resource_ResourceClaimList is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimList_To_resource_ResourceClaimList(in *v1alpha3.ResourceClaimList, out *resource.ResourceClaimList, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimList_To_resource_ResourceClaimList(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimList_To_v1alpha3_ResourceClaimList(in *resource.ResourceClaimList, out *v1alpha3.ResourceClaimList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1alpha3.ResourceClaim)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_resource_ResourceClaimList_To_v1alpha3_ResourceClaimList is an autogenerated conversion function.
-func Convert_resource_ResourceClaimList_To_v1alpha3_ResourceClaimList(in *resource.ResourceClaimList, out *v1alpha3.ResourceClaimList, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimList_To_v1alpha3_ResourceClaimList(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimSchedulingStatus_To_resource_ResourceClaimSchedulingStatus(in *v1alpha3.ResourceClaimSchedulingStatus, out *resource.ResourceClaimSchedulingStatus, s conversion.Scope) error {
-	out.Name = in.Name
-	out.UnsuitableNodes = *(*[]string)(unsafe.Pointer(&in.UnsuitableNodes))
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimSchedulingStatus_To_resource_ResourceClaimSchedulingStatus is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimSchedulingStatus_To_resource_ResourceClaimSchedulingStatus(in *v1alpha3.ResourceClaimSchedulingStatus, out *resource.ResourceClaimSchedulingStatus, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimSchedulingStatus_To_resource_ResourceClaimSchedulingStatus(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimSchedulingStatus_To_v1alpha3_ResourceClaimSchedulingStatus(in *resource.ResourceClaimSchedulingStatus, out *v1alpha3.ResourceClaimSchedulingStatus, s conversion.Scope) error {
-	out.Name = in.Name
-	out.UnsuitableNodes = *(*[]string)(unsafe.Pointer(&in.UnsuitableNodes))
-	return nil
-}
-
-// Convert_resource_ResourceClaimSchedulingStatus_To_v1alpha3_ResourceClaimSchedulingStatus is an autogenerated conversion function.
-func Convert_resource_ResourceClaimSchedulingStatus_To_v1alpha3_ResourceClaimSchedulingStatus(in *resource.ResourceClaimSchedulingStatus, out *v1alpha3.ResourceClaimSchedulingStatus, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimSchedulingStatus_To_v1alpha3_ResourceClaimSchedulingStatus(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec(in *v1alpha3.ResourceClaimSpec, out *resource.ResourceClaimSpec, s conversion.Scope) error {
-	if err := Convert_v1alpha3_DeviceClaim_To_resource_DeviceClaim(&in.Devices, &out.Devices, s); err != nil {
-		return err
-	}
-	out.Controller = in.Controller
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec(in *v1alpha3.ResourceClaimSpec, out *resource.ResourceClaimSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec(in *resource.ResourceClaimSpec, out *v1alpha3.ResourceClaimSpec, s conversion.Scope) error {
-	if err := Convert_resource_DeviceClaim_To_v1alpha3_DeviceClaim(&in.Devices, &out.Devices, s); err != nil {
-		return err
-	}
-	out.Controller = in.Controller
-	return nil
-}
-
-// Convert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec is an autogenerated conversion function.
-func Convert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec(in *resource.ResourceClaimSpec, out *v1alpha3.ResourceClaimSpec, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimStatus_To_resource_ResourceClaimStatus(in *v1alpha3.ResourceClaimStatus, out *resource.ResourceClaimStatus, s conversion.Scope) error {
-	out.Allocation = (*resource.AllocationResult)(unsafe.Pointer(in.Allocation))
-	out.ReservedFor = *(*[]resource.ResourceClaimConsumerReference)(unsafe.Pointer(&in.ReservedFor))
-	out.DeallocationRequested = in.DeallocationRequested
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimStatus_To_resource_ResourceClaimStatus is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimStatus_To_resource_ResourceClaimStatus(in *v1alpha3.ResourceClaimStatus, out *resource.ResourceClaimStatus, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimStatus_To_resource_ResourceClaimStatus(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimStatus_To_v1alpha3_ResourceClaimStatus(in *resource.ResourceClaimStatus, out *v1alpha3.ResourceClaimStatus, s conversion.Scope) error {
-	out.Allocation = (*v1alpha3.AllocationResult)(unsafe.Pointer(in.Allocation))
-	out.ReservedFor = *(*[]v1alpha3.ResourceClaimConsumerReference)(unsafe.Pointer(&in.ReservedFor))
-	out.DeallocationRequested = in.DeallocationRequested
-	return nil
-}
-
-// Convert_resource_ResourceClaimStatus_To_v1alpha3_ResourceClaimStatus is an autogenerated conversion function.
-func Convert_resource_ResourceClaimStatus_To_v1alpha3_ResourceClaimStatus(in *resource.ResourceClaimStatus, out *v1alpha3.ResourceClaimStatus, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimStatus_To_v1alpha3_ResourceClaimStatus(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimTemplate_To_resource_ResourceClaimTemplate(in *v1alpha3.ResourceClaimTemplate, out *resource.ResourceClaimTemplate, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha3_ResourceClaimTemplateSpec_To_resource_ResourceClaimTemplateSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimTemplate_To_resource_ResourceClaimTemplate is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimTemplate_To_resource_ResourceClaimTemplate(in *v1alpha3.ResourceClaimTemplate, out *resource.ResourceClaimTemplate, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimTemplate_To_resource_ResourceClaimTemplate(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimTemplate_To_v1alpha3_ResourceClaimTemplate(in *resource.ResourceClaimTemplate, out *v1alpha3.ResourceClaimTemplate, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_resource_ResourceClaimTemplateSpec_To_v1alpha3_ResourceClaimTemplateSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_ResourceClaimTemplate_To_v1alpha3_ResourceClaimTemplate is an autogenerated conversion function.
-func Convert_resource_ResourceClaimTemplate_To_v1alpha3_ResourceClaimTemplate(in *resource.ResourceClaimTemplate, out *v1alpha3.ResourceClaimTemplate, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimTemplate_To_v1alpha3_ResourceClaimTemplate(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimTemplateList_To_resource_ResourceClaimTemplateList(in *v1alpha3.ResourceClaimTemplateList, out *resource.ResourceClaimTemplateList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]resource.ResourceClaimTemplate)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimTemplateList_To_resource_ResourceClaimTemplateList is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimTemplateList_To_resource_ResourceClaimTemplateList(in *v1alpha3.ResourceClaimTemplateList, out *resource.ResourceClaimTemplateList, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimTemplateList_To_resource_ResourceClaimTemplateList(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimTemplateList_To_v1alpha3_ResourceClaimTemplateList(in *resource.ResourceClaimTemplateList, out *v1alpha3.ResourceClaimTemplateList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1alpha3.ResourceClaimTemplate)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_resource_ResourceClaimTemplateList_To_v1alpha3_ResourceClaimTemplateList is an autogenerated conversion function.
-func Convert_resource_ResourceClaimTemplateList_To_v1alpha3_ResourceClaimTemplateList(in *resource.ResourceClaimTemplateList, out *v1alpha3.ResourceClaimTemplateList, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimTemplateList_To_v1alpha3_ResourceClaimTemplateList(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceClaimTemplateSpec_To_resource_ResourceClaimTemplateSpec(in *v1alpha3.ResourceClaimTemplateSpec, out *resource.ResourceClaimTemplateSpec, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha3_ResourceClaimSpec_To_resource_ResourceClaimSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_ResourceClaimTemplateSpec_To_resource_ResourceClaimTemplateSpec is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceClaimTemplateSpec_To_resource_ResourceClaimTemplateSpec(in *v1alpha3.ResourceClaimTemplateSpec, out *resource.ResourceClaimTemplateSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceClaimTemplateSpec_To_resource_ResourceClaimTemplateSpec(in, out, s)
-}
-
-func autoConvert_resource_ResourceClaimTemplateSpec_To_v1alpha3_ResourceClaimTemplateSpec(in *resource.ResourceClaimTemplateSpec, out *v1alpha3.ResourceClaimTemplateSpec, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_resource_ResourceClaimSpec_To_v1alpha3_ResourceClaimSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_ResourceClaimTemplateSpec_To_v1alpha3_ResourceClaimTemplateSpec is an autogenerated conversion function.
-func Convert_resource_ResourceClaimTemplateSpec_To_v1alpha3_ResourceClaimTemplateSpec(in *resource.ResourceClaimTemplateSpec, out *v1alpha3.ResourceClaimTemplateSpec, s conversion.Scope) error {
-	return autoConvert_resource_ResourceClaimTemplateSpec_To_v1alpha3_ResourceClaimTemplateSpec(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourcePool_To_resource_ResourcePool(in *v1alpha3.ResourcePool, out *resource.ResourcePool, s conversion.Scope) error {
-	out.Name = in.Name
-	out.Generation = in.Generation
-	out.ResourceSliceCount = in.ResourceSliceCount
-	return nil
-}
-
-// Convert_v1alpha3_ResourcePool_To_resource_ResourcePool is an autogenerated conversion function.
-func Convert_v1alpha3_ResourcePool_To_resource_ResourcePool(in *v1alpha3.ResourcePool, out *resource.ResourcePool, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourcePool_To_resource_ResourcePool(in, out, s)
-}
-
-func autoConvert_resource_ResourcePool_To_v1alpha3_ResourcePool(in *resource.ResourcePool, out *v1alpha3.ResourcePool, s conversion.Scope) error {
-	out.Name = in.Name
-	out.Generation = in.Generation
-	out.ResourceSliceCount = in.ResourceSliceCount
-	return nil
-}
-
-// Convert_resource_ResourcePool_To_v1alpha3_ResourcePool is an autogenerated conversion function.
-func Convert_resource_ResourcePool_To_v1alpha3_ResourcePool(in *resource.ResourcePool, out *v1alpha3.ResourcePool, s conversion.Scope) error {
-	return autoConvert_resource_ResourcePool_To_v1alpha3_ResourcePool(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceSlice_To_resource_ResourceSlice(in *v1alpha3.ResourceSlice, out *resource.ResourceSlice, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha3_ResourceSliceSpec_To_resource_ResourceSliceSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha3_ResourceSlice_To_resource_ResourceSlice is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceSlice_To_resource_ResourceSlice(in *v1alpha3.ResourceSlice, out *resource.ResourceSlice, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceSlice_To_resource_ResourceSlice(in, out, s)
-}
-
-func autoConvert_resource_ResourceSlice_To_v1alpha3_ResourceSlice(in *resource.ResourceSlice, out *v1alpha3.ResourceSlice, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_resource_ResourceSliceSpec_To_v1alpha3_ResourceSliceSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_resource_ResourceSlice_To_v1alpha3_ResourceSlice is an autogenerated conversion function.
-func Convert_resource_ResourceSlice_To_v1alpha3_ResourceSlice(in *resource.ResourceSlice, out *v1alpha3.ResourceSlice, s conversion.Scope) error {
-	return autoConvert_resource_ResourceSlice_To_v1alpha3_ResourceSlice(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceSliceList_To_resource_ResourceSliceList(in *v1alpha3.ResourceSliceList, out *resource.ResourceSliceList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]resource.ResourceSlice)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha3_ResourceSliceList_To_resource_ResourceSliceList is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceSliceList_To_resource_ResourceSliceList(in *v1alpha3.ResourceSliceList, out *resource.ResourceSliceList, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceSliceList_To_resource_ResourceSliceList(in, out, s)
-}
-
-func autoConvert_resource_ResourceSliceList_To_v1alpha3_ResourceSliceList(in *resource.ResourceSliceList, out *v1alpha3.ResourceSliceList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1alpha3.ResourceSlice)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_resource_ResourceSliceList_To_v1alpha3_ResourceSliceList is an autogenerated conversion function.
-func Convert_resource_ResourceSliceList_To_v1alpha3_ResourceSliceList(in *resource.ResourceSliceList, out *v1alpha3.ResourceSliceList, s conversion.Scope) error {
-	return autoConvert_resource_ResourceSliceList_To_v1alpha3_ResourceSliceList(in, out, s)
-}
-
-func autoConvert_v1alpha3_ResourceSliceSpec_To_resource_ResourceSliceSpec(in *v1alpha3.ResourceSliceSpec, out *resource.ResourceSliceSpec, s conversion.Scope) error {
-	out.Driver = in.Driver
-	if err := Convert_v1alpha3_ResourcePool_To_resource_ResourcePool(&in.Pool, &out.Pool, s); err != nil {
-		return err
-	}
-	out.NodeName = in.NodeName
-	out.NodeSelector = (*core.NodeSelector)(unsafe.Pointer(in.NodeSelector))
-	out.AllNodes = in.AllNodes
-	out.Devices = *(*[]resource.Device)(unsafe.Pointer(&in.Devices))
-	return nil
-}
-
-// Convert_v1alpha3_ResourceSliceSpec_To_resource_ResourceSliceSpec is an autogenerated conversion function.
-func Convert_v1alpha3_ResourceSliceSpec_To_resource_ResourceSliceSpec(in *v1alpha3.ResourceSliceSpec, out *resource.ResourceSliceSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha3_ResourceSliceSpec_To_resource_ResourceSliceSpec(in, out, s)
-}
-
-func autoConvert_resource_ResourceSliceSpec_To_v1alpha3_ResourceSliceSpec(in *resource.ResourceSliceSpec, out *v1alpha3.ResourceSliceSpec, s conversion.Scope) error {
-	out.Driver = in.Driver
-	if err := Convert_resource_ResourcePool_To_v1alpha3_ResourcePool(&in.Pool, &out.Pool, s); err != nil {
-		return err
-	}
-	out.NodeName = in.NodeName
-	out.NodeSelector = (*v1.NodeSelector)(unsafe.Pointer(in.NodeSelector))
-	out.AllNodes = in.AllNodes
-	out.Devices = *(*[]v1alpha3.Device)(unsafe.Pointer(&in.Devices))
-	return nil
-}
-
-// Convert_resource_ResourceSliceSpec_To_v1alpha3_ResourceSliceSpec is an autogenerated conversion function.
-func Convert_resource_ResourceSliceSpec_To_v1alpha3_ResourceSliceSpec(in *resource.ResourceSliceSpec, out *v1alpha3.ResourceSliceSpec, s conversion.Scope) error {
-	return autoConvert_resource_ResourceSliceSpec_To_v1alpha3_ResourceSliceSpec(in, out, s)
+// Convert_resource_DeviceTaintSelector_To_v1alpha3_DeviceTaintSelector is an autogenerated conversion function.
+func Convert_resource_DeviceTaintSelector_To_v1alpha3_DeviceTaintSelector(in *resource.DeviceTaintSelector, out *resourcev1alpha3.DeviceTaintSelector, s conversion.Scope) error {
+	return autoConvert_resource_DeviceTaintSelector_To_v1alpha3_DeviceTaintSelector(in, out, s)
 }

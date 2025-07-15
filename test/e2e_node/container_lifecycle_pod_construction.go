@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -179,24 +180,6 @@ func (o containerOutputList) StartsBefore(lhs, rhs string) error {
 	return nil
 }
 
-// DoesntStartAfter returns an error if lhs started after rhs
-func (o containerOutputList) DoesntStartAfter(lhs, rhs string) error {
-	rhsStart := o.findIndex(rhs, "Starting", 0)
-
-	if rhsStart == -1 {
-		return fmt.Errorf("couldn't find that %s ever started, got\n%v", rhs, o)
-	}
-
-	// this works even for the same names (restart case)
-	lhsStart := o.findIndex(lhs, "Started", rhsStart+1)
-
-	if lhsStart != -1 {
-		return fmt.Errorf("expected %s to not start after %s, got\n%v", lhs, rhs, o)
-	}
-
-	return nil
-}
-
 // ExitsBefore returns an error if lhs did not end before rhs
 func (o containerOutputList) ExitsBefore(lhs, rhs string) error {
 	lhsExit := o.findIndex(lhs, "Exiting", 0)
@@ -326,6 +309,8 @@ func (o containerOutputList) TimeOfLastLoop(name string) (int64, error) {
 	return o[idx].timestamp.UnixMilli(), nil
 }
 
+var logRe = regexp.MustCompile(`unable to retrieve container logs for (cri-o|containerd)://[0-9a-f]{64}`)
+
 // parseOutput combines the container log from all of the init and regular
 // containers and parses/sorts the outputs to produce an execution log
 func parseOutput(ctx context.Context, f *framework.Framework, pod *v1.Pod) containerOutputList {
@@ -352,7 +337,11 @@ func parseOutput(ctx context.Context, f *framework.Framework, pod *v1.Pod) conta
 	var res containerOutputList
 	for sc.Scan() {
 		log := sc.Text()
-		fields := strings.Fields(sc.Text())
+
+		// Trim possible prefixed output if the container logs are not available for the time being
+		log = logRe.ReplaceAllString(log, "")
+
+		fields := strings.Fields(log)
 		if len(fields) < 3 {
 			framework.ExpectNoError(fmt.Errorf("%v should have at least length 3", fields))
 		}

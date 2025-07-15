@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/transport"
@@ -42,6 +41,7 @@ import (
 
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/errors"
 )
 
 const etcdTimeout = 2 * time.Second
@@ -71,7 +71,7 @@ type etcdClient interface {
 	Endpoints() []string
 
 	// MemberList lists the current cluster membership.
-	MemberList(ctx context.Context) (*clientv3.MemberListResponse, error)
+	MemberList(ctx context.Context, opts ...clientv3.OpOption) (*clientv3.MemberListResponse, error)
 
 	// MemberAdd adds a new member into the cluster.
 	MemberAdd(ctx context.Context, peerAddrs []string) (*clientv3.MemberAddResponse, error)
@@ -249,7 +249,7 @@ func (c *Client) Sync() error {
 	// Syncs the list of endpoints
 	var cli etcdClient
 	var lastError error
-	err := wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, constants.EtcdAPICallTimeout,
+	err := wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, kubeadmapi.GetActiveTimeouts().EtcdAPICall.Duration,
 		true, func(_ context.Context) (bool, error) {
 			var err error
 			cli, err = c.newEtcdClient(c.Endpoints)
@@ -289,7 +289,7 @@ func (c *Client) listMembers(timeout time.Duration) (*clientv3.MemberListRespons
 	var lastError error
 	var resp *clientv3.MemberListResponse
 	if timeout == 0 {
-		timeout = constants.EtcdAPICallTimeout
+		timeout = kubeadmapi.GetActiveTimeouts().EtcdAPICall.Duration
 	}
 	err := wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, timeout,
 		true, func(_ context.Context) (bool, error) {
@@ -347,27 +347,54 @@ func (c *Client) ListMembers() ([]Member, error) {
 
 // RemoveMember notifies an etcd cluster to remove an existing member
 func (c *Client) RemoveMember(id uint64) ([]Member, error) {
+	cli, err := c.newEtcdClient(c.Endpoints)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cli.Close() }()
+
 	// Remove an existing member from the cluster
-	var lastError error
-	var resp *clientv3.MemberRemoveResponse
-	err := wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, constants.EtcdAPICallTimeout,
+	var (
+		lastError   error
+		respMembers []*etcdserverpb.Member
+	)
+	err = wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, kubeadmapi.GetActiveTimeouts().EtcdAPICall.Duration,
 		true, func(_ context.Context) (bool, error) {
-			cli, err := c.newEtcdClient(c.Endpoints)
+			ctx, cancel := context.WithTimeout(context.Background(), etcdTimeout)
+			defer cancel()
+
+			// List members and quickly return if the member does not exist.
+			listResp, err := cli.MemberList(ctx)
 			if err != nil {
+				klog.V(5).Infof("Failed to check whether the member %s exists: %v", strconv.FormatUint(id, 16), err)
 				lastError = err
 				return false, nil
 			}
-			defer func() { _ = cli.Close() }()
+			found := false
+			for _, member := range listResp.Members {
+				if member.GetID() == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				klog.V(5).Infof("Member %s was not found; assuming it was already removed", strconv.FormatUint(id, 16))
+				respMembers = listResp.Members
+				return true, nil
+			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), etcdTimeout)
-			resp, err = cli.MemberRemove(ctx, id)
-			cancel()
+			resp, err := cli.MemberRemove(ctx, id)
 			if err == nil {
+				respMembers = resp.Members
 				return true, nil
 			}
 			if errors.Is(rpctypes.ErrMemberNotFound, err) {
 				klog.V(5).Infof("Member was already removed, because member %s was not found", strconv.FormatUint(id, 16))
-				return true, nil
+				listResp, err = cli.MemberList(ctx)
+				if err == nil {
+					respMembers = listResp.Members
+					return true, nil
+				}
 			}
 			klog.V(5).Infof("Failed to remove etcd member: %v", err)
 			lastError = err
@@ -379,11 +406,8 @@ func (c *Client) RemoveMember(id uint64) ([]Member, error) {
 
 	// Returns the updated list of etcd members
 	ret := []Member{}
-	if resp != nil {
-		for _, m := range resp.Members {
-			ret = append(ret, Member{Name: m.Name, PeerURL: m.PeerURLs[0]})
-		}
-
+	for _, m := range respMembers {
+		ret = append(ret, Member{Name: m.Name, PeerURL: m.PeerURLs[0]})
 	}
 
 	return ret, nil
@@ -421,29 +445,40 @@ func (c *Client) addMember(name string, peerAddrs string, isLearner bool) ([]Mem
 	var (
 		lastError   error
 		respMembers []*etcdserverpb.Member
-		learnerID   uint64
 		resp        *clientv3.MemberAddResponse
 	)
-	err = wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, constants.EtcdAPICallTimeout,
+	err = wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, kubeadmapi.GetActiveTimeouts().EtcdAPICall.Duration,
 		true, func(_ context.Context) (bool, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), etcdTimeout)
 			defer cancel()
-			if isLearner {
-				// if learnerID is set, it means the etcd member is already added successfully.
-				if learnerID == 0 {
-					klog.V(1).Info("[etcd] Adding etcd member as learner")
-					resp, err = cli.MemberAddAsLearner(ctx, []string{peerAddrs})
-					if err != nil {
-						lastError = err
-						return false, nil
-					}
-					learnerID = resp.Member.ID
+
+			// List members and quickly return if the member already exists.
+			listResp, err := cli.MemberList(ctx)
+			if err != nil {
+				klog.V(5).Infof("Failed to check whether the member %q exists: %v", peerAddrs, err)
+				lastError = err
+				return false, nil
+			}
+			found := false
+			for _, member := range listResp.Members {
+				if member.GetPeerURLs()[0] == peerAddrs {
+					found = true
+					break
 				}
-				respMembers = resp.Members
+			}
+			if found {
+				klog.V(5).Infof("The peer URL %q for the added etcd member already exists. Skipping etcd member addition", peerAddrs)
+				respMembers = listResp.Members
 				return true, nil
 			}
 
-			resp, err = cli.MemberAdd(ctx, []string{peerAddrs})
+			if isLearner {
+				klog.V(1).Infof("[etcd] Adding etcd member %q as learner", peerAddrs)
+				resp, err = cli.MemberAddAsLearner(ctx, []string{peerAddrs})
+			} else {
+				klog.V(1).Infof("[etcd] Adding etcd member %q", peerAddrs)
+				resp, err = cli.MemberAdd(ctx, []string{peerAddrs})
+			}
 			if err == nil {
 				respMembers = resp.Members
 				return true, nil
@@ -453,7 +488,6 @@ func (c *Client) addMember(name string, peerAddrs string, isLearner bool) ([]Mem
 			// call out to MemberList to fetch all the members before returning.
 			if errors.Is(err, rpctypes.ErrPeerURLExist) {
 				klog.V(5).Info("The peer URL for the added etcd member already exists. Fetching the existing etcd members")
-				var listResp *clientv3.MemberListResponse
 				listResp, err = cli.MemberList(ctx)
 				if err == nil {
 					respMembers = listResp.Members
@@ -537,10 +571,19 @@ func (c *Client) MemberPromote(learnerID uint64) error {
 	var (
 		lastError error
 	)
-	err = wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, constants.EtcdAPICallTimeout,
+	err = wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, kubeadmapi.GetActiveTimeouts().EtcdAPICall.Duration,
 		true, func(_ context.Context) (bool, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), etcdTimeout)
 			defer cancel()
+
+			isLearner, err := c.isLearner(learnerID)
+			if err != nil {
+				return false, err
+			}
+			if !isLearner {
+				klog.V(1).Infof("[etcd] Member %s was already promoted.", strconv.FormatUint(learnerID, 16))
+				return true, nil
+			}
 
 			_, err = cli.MemberPromote(ctx, learnerID)
 			if err == nil {
@@ -570,7 +613,7 @@ func (c *Client) getClusterStatus() (map[string]*clientv3.StatusResponse, error)
 		// Gets the member status
 		var lastError error
 		var resp *clientv3.StatusResponse
-		err := wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, constants.EtcdAPICallTimeout,
+		err := wait.PollUntilContextTimeout(context.Background(), constants.EtcdAPICallRetryInterval, kubeadmapi.GetActiveTimeouts().EtcdAPICall.Duration,
 			true, func(_ context.Context) (bool, error) {
 				cli, err := c.newEtcdClient(c.Endpoints)
 				if err != nil {

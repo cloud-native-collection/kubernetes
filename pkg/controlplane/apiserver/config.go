@@ -89,9 +89,10 @@ type Extra struct {
 	// version skew. If unset, AdvertiseAddress/BindAddress will be used.
 	PeerAdvertiseAddress peerreconcilers.PeerAdvertiseAddress
 
-	ServiceAccountIssuer        serviceaccount.TokenGenerator
-	ServiceAccountMaxExpiration time.Duration
-	ExtendExpiration            bool
+	ServiceAccountIssuer                serviceaccount.TokenGenerator
+	ServiceAccountMaxExpiration         time.Duration
+	ServiceAccountExtendedMaxExpiration time.Duration
+	ExtendExpiration                    bool
 
 	// ServiceAccountIssuerDiscovery
 	ServiceAccountIssuerURL        string
@@ -101,6 +102,11 @@ type Extra struct {
 	SystemNamespaces []string
 
 	VersionedInformers clientgoinformers.SharedInformerFactory
+
+	// Coordinated Leader Election timers
+	CoordinatedLeadershipLeaseDuration time.Duration
+	CoordinatedLeadershipRenewDeadline time.Duration
+	CoordinatedLeadershipRetryPeriod   time.Duration
 }
 
 // BuildGenericConfig takes the generic controlplane apiserver options and produces
@@ -118,6 +124,7 @@ func BuildGenericConfig(
 	lastErr error,
 ) {
 	genericConfig = genericapiserver.NewConfig(legacyscheme.Codecs)
+	genericConfig.Flagz = s.Flagz
 	genericConfig.MergedResourceConfig = resourceConfig
 
 	if lastErr = s.GenericServerRunOptions.ApplyTo(genericConfig); lastErr != nil {
@@ -187,8 +194,7 @@ func BuildGenericConfig(
 		s.Etcd.StorageConfig.Transport.TracerProvider = noopoteltrace.NewTracerProvider()
 	}
 
-	storageFactoryConfig := kubeapiserver.NewStorageFactoryConfig()
-	storageFactoryConfig.CurrentVersion = genericConfig.EffectiveVersion
+	storageFactoryConfig := kubeapiserver.NewStorageFactoryConfigEffectiveVersion(genericConfig.EffectiveVersion)
 	storageFactoryConfig.APIResourceConfig = genericConfig.MergedResourceConfig
 	storageFactoryConfig.DefaultResourceEncoding.SetEffectiveVersion(genericConfig.EffectiveVersion)
 	storageFactory, lastErr = storageFactoryConfig.Complete(s.Etcd).New()
@@ -230,9 +236,7 @@ func BuildGenericConfig(
 		return
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.AggregatedDiscoveryEndpoint) {
-		genericConfig.AggregatedDiscoveryGroupManager = aggregated.NewResourceManager("apis")
-	}
+	genericConfig.AggregatedDiscoveryGroupManager = aggregated.NewResourceManager("apis")
 
 	return
 }
@@ -297,11 +301,16 @@ func CreateConfig(
 			ProxyTransport:          proxyTransport,
 			SystemNamespaces:        opts.SystemNamespaces,
 
-			ServiceAccountIssuer:        opts.ServiceAccountIssuer,
-			ServiceAccountMaxExpiration: opts.ServiceAccountTokenMaxExpiration,
-			ExtendExpiration:            opts.Authentication.ServiceAccounts.ExtendExpiration,
+			ServiceAccountIssuer:                opts.ServiceAccountIssuer,
+			ServiceAccountMaxExpiration:         opts.ServiceAccountTokenMaxExpiration,
+			ServiceAccountExtendedMaxExpiration: opts.Authentication.ServiceAccounts.MaxExtendedExpiration,
+			ExtendExpiration:                    opts.Authentication.ServiceAccounts.ExtendExpiration,
 
 			VersionedInformers: versionedInformers,
+
+			CoordinatedLeadershipLeaseDuration: opts.CoordinatedLeadershipLeaseDuration,
+			CoordinatedLeadershipRenewDeadline: opts.CoordinatedLeadershipRenewDeadline,
+			CoordinatedLeadershipRetryPeriod:   opts.CoordinatedLeadershipRetryPeriod,
 		},
 	}
 
@@ -311,10 +320,17 @@ func CreateConfig(
 		if err != nil {
 			return nil, nil, err
 		}
-		// build peer proxy config only if peer ca file exists
 		if opts.PeerCAFile != "" {
-			config.PeerProxy, err = BuildPeerProxy(versionedInformers, genericConfig.StorageVersionManager, opts.ProxyClientCertFile,
-				opts.ProxyClientKeyFile, opts.PeerCAFile, opts.PeerAdvertiseAddress, genericConfig.APIServerID, config.Extra.PeerEndpointLeaseReconciler, config.Generic.Serializer)
+			leaseInformer := versionedInformers.Coordination().V1().Leases()
+			config.PeerProxy, err = BuildPeerProxy(
+				leaseInformer,
+				genericConfig.LoopbackClientConfig,
+				opts.ProxyClientCertFile,
+				opts.ProxyClientKeyFile, opts.PeerCAFile,
+				opts.PeerAdvertiseAddress,
+				genericConfig.APIServerID,
+				config.Extra.PeerEndpointLeaseReconciler,
+				config.Generic.Serializer)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -337,6 +353,7 @@ func CreateConfig(
 		config.ClusterAuthenticationInfo.RequestHeaderExtraHeaderPrefixes = requestHeaderConfig.ExtraHeaderPrefixes
 		config.ClusterAuthenticationInfo.RequestHeaderGroupHeaders = requestHeaderConfig.GroupHeaders
 		config.ClusterAuthenticationInfo.RequestHeaderUsernameHeaders = requestHeaderConfig.UsernameHeaders
+		config.ClusterAuthenticationInfo.RequestHeaderUIDHeaders = requestHeaderConfig.UIDHeaders
 	}
 
 	// setup admission
@@ -370,7 +387,7 @@ func CreateConfig(
 
 	if len(opts.Authentication.ServiceAccounts.KeyFiles) > 0 {
 		// Load and set the public keys.
-		var pubKeys []interface{}
+		var pubKeys []any
 		for _, f := range opts.Authentication.ServiceAccounts.KeyFiles {
 			keys, err := keyutil.PublicKeysFromFile(f)
 			if err != nil {
@@ -383,7 +400,10 @@ func CreateConfig(
 			return nil, nil, fmt.Errorf("failed to set up public service account keys: %w", err)
 		}
 		config.ServiceAccountPublicKeysGetter = keysGetter
+	} else if opts.Authentication.ServiceAccounts.ExternalPublicKeysGetter != nil {
+		config.ServiceAccountPublicKeysGetter = opts.Authentication.ServiceAccounts.ExternalPublicKeysGetter
 	}
+
 	config.ServiceAccountIssuerURL = opts.Authentication.ServiceAccounts.Issuers[0]
 	config.ServiceAccountJWKSURI = opts.Authentication.ServiceAccounts.JWKSURI
 

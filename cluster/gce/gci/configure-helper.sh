@@ -66,6 +66,24 @@ function setup-os-params {
   # /sbin/crash_reporter which is more restrictive in saving crash dumps. So for
   # now, set a generic core_pattern that users can work with.
   echo "/core.%e.%p.%t" > /proc/sys/kernel/core_pattern
+  echo "Default max_user_watches / max_user_instances:"
+  # ensure we have enough inotify watches for many pods, versus the OS defaults
+  # debug before & after / defaults for comparison
+  sysctl fs.inotify.max_user_watches
+  sysctl fs.inotify.max_user_instances
+  cat <<EOF > /etc/sysctl.d/inotify.conf
+fs.inotify.max_user_watches=65536
+fs.inotify.max_user_instances=8192
+EOF
+  # Ubuntu vs COS, load sysctl settings now
+  if [[ -e "/usr/lib/systemd/systemd-sysctl" ]]; then
+    /usr/lib/systemd/systemd-sysctl
+  else
+    /lib/systemd/systemd-sysctl
+  fi
+  echo "Updated max_user_watches / max_user_instances:"
+  sysctl fs.inotify.max_user_watches
+  sysctl fs.inotify.max_user_instances
 }
 
 # secure_random generates a secure random string of bytes. This function accepts
@@ -1658,6 +1676,7 @@ After=network-online.target
 [Service]
 Restart=always
 RestartSec=10
+WatchdogSec=30s
 EnvironmentFile=${kubelet_env_file}
 ExecStart=${kubelet_bin} \$KUBELET_OPTS
 
@@ -1806,15 +1825,6 @@ function prepare-kube-proxy-manifest-variables {
     kube_watchlist_inconsistency_detector_env_name="- name: KUBE_WATCHLIST_INCONSISTENCY_DETECTOR"
     kube_watchlist_inconsistency_detector_env_value="value: \"${ENABLE_KUBE_WATCHLIST_INCONSISTENCY_DETECTOR}\""
   fi
-  local kube_list_from_cache_inconsistency_detector_env_name=""
-  local kube_list_from_cache_inconsistency_detector_env_value=""
-  if [[ -n "${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR:-}" ]]; then
-    if [[ -z "${container_env}" ]]; then
-      container_env="env:"
-    fi
-    kube_list_from_cache_inconsistency_detector_env_name="- name: KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR"
-    kube_list_from_cache_inconsistency_detector_env_value="value: \"${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR}\""
-  fi
   sed -i -e "s@{{kubeconfig}}@${kubeconfig}@g" "${src_file}"
   sed -i -e "s@{{pillar\['kube_docker_registry'\]}}@${kube_docker_registry}@g" "${src_file}"
   sed -i -e "s@{{pillar\['kube-proxy_docker_tag'\]}}@${kube_proxy_docker_tag}@g" "${src_file}"
@@ -1826,8 +1836,6 @@ function prepare-kube-proxy-manifest-variables {
   sed -i -e "s@{{kube_cache_mutation_detector_env_value}}@${kube_cache_mutation_detector_env_value}@g" "${src_file}"
   sed -i -e "s@{{kube_watchlist_inconsistency_detector_env_name}}@${kube_watchlist_inconsistency_detector_env_name}@g" "${src_file}"
   sed -i -e "s@{{kube_watchlist_inconsistency_detector_env_value}}@${kube_watchlist_inconsistency_detector_env_value}@g" "${src_file}"
-  sed -i -e "s@{{kube_list_from_cache_inconsistency_detector_env_name}}@${kube_list_from_cache_inconsistency_detector_env_name}@g" "${src_file}"
-  sed -i -e "s@{{kube_list_from_cache_inconsistency_detector_env_value}}@${kube_list_from_cache_inconsistency_detector_env_value}@g" "${src_file}"
   sed -i -e "s@{{ cpurequest }}@${KUBE_PROXY_CPU_REQUEST:-100m}@g" "${src_file}"
   sed -i -e "s@{{ memoryrequest }}@${KUBE_PROXY_MEMORY_REQUEST:-50Mi}@g" "${src_file}"
   sed -i -e "s@{{api_servers_with_port}}@${api_servers}@g" "${src_file}"
@@ -2223,9 +2231,6 @@ function start-kube-controller-manager {
   if [[ -n "${SERVICE_CLUSTER_IP_RANGE:-}" ]]; then
     params+=("--service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE}")
   fi
-  if [[ -n "${CONCURRENT_SERVICE_SYNCS:-}" ]]; then
-    params+=("--concurrent-service-syncs=${CONCURRENT_SERVICE_SYNCS}")
-  fi
   if [[ "${NETWORK_PROVIDER:-}" == "kubenet" ]]; then
     params+=("--allocate-node-cidrs=true")
   elif [[ -n "${ALLOCATE_NODE_CIDRS:-}" ]]; then
@@ -2233,10 +2238,6 @@ function start-kube-controller-manager {
   fi
   if [[ -n "${TERMINATED_POD_GC_THRESHOLD:-}" ]]; then
     params+=("--terminated-pod-gc-threshold=${TERMINATED_POD_GC_THRESHOLD}")
-  fi
-  if [[ "${ENABLE_IP_ALIASES:-}" == 'true' ]]; then
-    params+=("--cidr-allocator-type=${NODE_IPAM_MODE}")
-    params+=("--configure-cloud-routes=false")
   fi
   if [[ -n "${FEATURE_GATES:-}" ]]; then
     params+=("--feature-gates=${FEATURE_GATES}")
@@ -2268,12 +2269,6 @@ function start-kube-controller-manager {
       container_env="${container_env}, "
     fi
     container_env+="{\"name\": \"KUBE_WATCHLIST_INCONSISTENCY_DETECTOR\", \"value\": \"${ENABLE_KUBE_WATCHLIST_INCONSISTENCY_DETECTOR}\"}"
-  fi
-  if [[ -n "${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR:-}" ]]; then
-    if [[ -n "${container_env}" ]]; then
-      container_env="${container_env}, "
-    fi
-    container_env+="{\"name\": \"KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR\", \"value\": \"${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR}\"}"
   fi
   if [[ -n "${container_env}" ]]; then
     container_env="\"env\":[${container_env}],"
@@ -2388,12 +2383,6 @@ function start-cloud-controller-manager {
       container_env="${container_env}, "
     fi
     container_env+="{\"name\": \"KUBE_WATCHLIST_INCONSISTENCY_DETECTOR\", \"value\": \"${ENABLE_KUBE_WATCHLIST_INCONSISTENCY_DETECTOR}\"}"
-  fi
-  if [[ -n "${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR:-}" ]]; then
-    if [[ -n "${container_env}" ]]; then
-      container_env="${container_env}, "
-    fi
-    container_env+="{\"name\": \"KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR\", \"value\": \"${ENABLE_KUBE_LIST_FROM_CACHE_INCONSISTENCY_DETECTOR}\"}"
   fi
   if [[ -n "${container_env}" ]]; then
     container_env="\"env\":[${container_env}],"
@@ -2943,9 +2932,6 @@ EOF
     sed -i -e "s@{{ metrics_server_memory_per_node }}@${metrics_server_memory_per_node}@g" "${metrics_server_yaml}"
     sed -i -e "s@{{ metrics_server_min_cluster_size }}@${metrics_server_min_cluster_size}@g" "${metrics_server_yaml}"
   fi
-  if [[ "${ENABLE_NVIDIA_GPU_DEVICE_PLUGIN:-}" == "true" ]]; then
-    setup-addon-manifests "addons" "device-plugins/nvidia-gpu"
-  fi
   # Setting up the konnectivity-agent daemonset
   if [[ "${RUN_KONNECTIVITY_PODS:-false}" == "true" ]]; then
     setup-addon-manifests "addons" "konnectivity-agent"
@@ -3214,7 +3200,7 @@ spec:
   - name: vol
   containers:
   - name: pv-recycler
-    image: registry.k8s.io/build-image/debian-base:bookworm-v1.0.3
+    image: registry.k8s.io/build-image/debian-base:bookworm-v1.0.4
     command:
     - /bin/sh
     args:

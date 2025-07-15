@@ -28,6 +28,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,7 +52,7 @@ import (
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
 	samplev1alpha1 "k8s.io/sample-apiserver/pkg/apis/wardle/v1alpha1"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
@@ -361,7 +362,7 @@ func SetUpSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclien
 			Service: &apiregistrationv1.ServiceReference{
 				Namespace: n.namespace,
 				Name:      "sample-api",
-				Port:      pointer.Int32(aggregatorServicePort),
+				Port:      ptr.To[int32](aggregatorServicePort),
 			},
 			Group:                apiServiceGroupName,
 			Version:              apiServiceVersion,
@@ -553,13 +554,13 @@ func TestSampleAPIServer(ctx context.Context, f *framework.Framework, aggrclient
 	locatedWardle := false
 	for _, item := range list.Items {
 		if item.Name == apiServiceName {
-			framework.Logf("Found " + apiServiceName + " in APIServiceList")
+			framework.Logf("Found %s in APIServiceList", apiServiceName)
 			locatedWardle = true
 			break
 		}
 	}
 	if !locatedWardle {
-		framework.Failf("Unable to find " + apiServiceName + " in APIServiceList")
+		framework.Failf("Unable to find %s in APIServiceList", apiServiceName)
 	}
 
 	// As the APIService doesn't have any labels currently set we need to
@@ -763,9 +764,9 @@ func validateErrorWithDebugInfo(ctx context.Context, f *framework.Framework, err
 		msg := fmt.Sprintf(msg, fields...)
 		msg += fmt.Sprintf(" but received unexpected error:\n%v", err)
 		client := f.ClientSet
-		ep, err := client.CoreV1().Endpoints(namespace).Get(ctx, "sample-api", metav1.GetOptions{})
+		slices, err := client.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", discoveryv1.LabelServiceName, "sample-api")})
 		if err == nil {
-			msg += fmt.Sprintf("\nFound endpoints for sample-api:\n%v", ep)
+			msg += fmt.Sprintf("\nFound endpoint slices for sample-api:\n%v", slices)
 		}
 		pds, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 		if err == nil {
@@ -773,7 +774,7 @@ func validateErrorWithDebugInfo(ctx context.Context, f *framework.Framework, err
 			msg += fmt.Sprintf("\nOriginal pods in %s:\n%v", namespace, pods)
 		}
 
-		framework.Failf(msg)
+		framework.Fail(msg)
 	}
 }
 

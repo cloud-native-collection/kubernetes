@@ -17,7 +17,6 @@ limitations under the License.
 package prober
 
 import (
-	"os"
 	"reflect"
 	"sync"
 
@@ -44,6 +43,10 @@ var testContainerID = kubecontainer.ContainerID{Type: "test", ID: "cOnTaInEr_Id"
 
 func getTestRunningStatus() v1.PodStatus {
 	return getTestRunningStatusWithStarted(true)
+}
+
+func getTestNotRunningStatus() v1.PodStatus {
+	return getTestRunningStatusWithStarted(false)
 }
 
 func getTestRunningStatusWithStarted(started bool) v1.PodStatus {
@@ -110,14 +113,8 @@ func newTestManager() *manager {
 	podStartupLatencyTracker := kubeletutil.NewPodStartupLatencyTracker()
 	// Add test pod to pod manager, so that status manager can get the pod from pod manager if needed.
 	podManager.AddPod(getTestPod())
-	testRootDir := ""
-	if tempDir, err := os.MkdirTemp("", "kubelet_test."); err != nil {
-		return nil
-	} else {
-		testRootDir = tempDir
-	}
 	m := NewManager(
-		status.NewManager(&fake.Clientset{}, podManager, &statustest.FakePodDeletionSafetyProvider{}, podStartupLatencyTracker, testRootDir),
+		status.NewManager(&fake.Clientset{}, podManager, &statustest.FakePodDeletionSafetyProvider{}, podStartupLatencyTracker),
 		results.NewManager(),
 		results.NewManager(),
 		results.NewManager(),

@@ -57,8 +57,8 @@ $GCE_METADATA_SERVER = "169.254.169.254"
 # exist until an initial HNS network has been created on the Windows node - see
 # Add_InitialHnsNetwork().
 $MGMT_ADAPTER_NAME = "vEthernet (Ethernet*"
-$CRICTL_VERSION = 'v1.30.0'
-$CRICTL_SHA256 = '43d37d94c0dc03830c0988049537fc22fe4b0ad4273ec9066e03586dc8920eb0'
+$CRICTL_VERSION = 'v1.33.0'
+$CRICTL_SHA512 = '81c91c76bb9059837e62b33b7df9f1503013a30525fceb248ca379b57c7ad8ba043dbb0432870224ebc42853c740caa422ddd62989b4a58829b66505f8e11969'
 
 Import-Module -Force C:\common.psm1
 
@@ -1160,15 +1160,13 @@ function DownloadAndInstall-Crictl {
   if (-not (ShouldWrite-File ${env:NODE_DIR}\crictl.exe)) {
     return
   }
-  $CRI_TOOLS_GCS_BUCKET = 'k8s-artifacts-cri-tools'
-  $url = ('https://storage.googleapis.com/' + $CRI_TOOLS_GCS_BUCKET +
-          '/release/' + $CRICTL_VERSION + '/crictl-' + $CRICTL_VERSION +
-          '-windows-amd64.tar.gz')
+  $url = ('https://github.com/kubernetes-sigs/cri-tools/releases/download/' +
+          $CRICTL_VERSION + '/crictl-' + $CRICTL_VERSION + '-windows-amd64.tar.gz')
   MustDownload-File `
       -URLs $url `
       -OutFile ${env:NODE_DIR}\crictl.tar.gz `
-      -Hash $CRICTL_SHA256 `
-      -Algorithm SHA256
+      -Hash $CRICTL_SHA512 `
+      -Algorithm SHA512
   tar xzvf ${env:NODE_DIR}\crictl.tar.gz -C ${env:NODE_DIR}
 }
 

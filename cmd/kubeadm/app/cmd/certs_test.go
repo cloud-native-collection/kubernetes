@@ -104,8 +104,7 @@ func TestCommandsGenerated(t *testing.T) {
 }
 
 func TestRunRenewCommands(t *testing.T) {
-	tmpDir := testutil.SetupTempDir(t)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	cfg := testutil.GetDefaultInternalConfig(t)
 	cfg.CertificatesDir = tmpDir
@@ -312,8 +311,7 @@ func TestRunRenewCommands(t *testing.T) {
 }
 
 func TestRunGenCSR(t *testing.T) {
-	tmpDir := testutil.SetupTempDir(t)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	kubeConfigDir := filepath.Join(tmpDir, "kubernetes")
 	certDir := kubeConfigDir + "/pki"
@@ -359,18 +357,12 @@ func TestRunGenCSR(t *testing.T) {
 	for _, name := range expectedCertificates {
 		_, err = pkiutil.TryLoadKeyFromDisk(certDir, name)
 		assert.NoErrorf(t, err, "failed to load key file: %s", name)
-
-		_, err = pkiutil.TryLoadCSRFromDisk(certDir, name)
-		assert.NoError(t, err, "failed to load CSR file: %s", name)
 	}
 
 	t.Log("The command generates kubeconfig files in the configured --kubeconfig-dir")
 	for _, name := range expectedKubeConfigs {
 		_, err = clientcmd.LoadFromFile(kubeConfigDir + "/" + name + ".conf")
 		assert.NoErrorf(t, err, "failed to load kubeconfig file: %s", name)
-
-		_, err = pkiutil.TryLoadCSRFromDisk(kubeConfigDir, name+".conf")
-		assert.NoError(t, err, "failed to load kubeconfig CSR file: %s", name)
 	}
 }
 
@@ -410,8 +402,7 @@ kubernetesVersion: %s`,
 		kubeadmapiv1.SchemeGroupVersion.String(),
 		kubeadmconstants.MinimumControlPlaneVersion.String())
 
-	tmpDir := testutil.SetupTempDir(t)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	customConfigPath := tmpDir + "/kubeadm.conf"
 
@@ -495,11 +486,8 @@ kubernetesVersion: %s`,
 }
 
 func TestRunCmdCertsExpiration(t *testing.T) {
-	kdir := testutil.SetupTempDir(t)
+	kdir := t.TempDir()
 	defer func() {
-		if err := os.RemoveAll(kdir); err != nil {
-			t.Fatalf("Failed to teardown: %s", err)
-		}
 		clientSetFromFile = kubeconfigutil.ClientSetFromFile
 	}()
 

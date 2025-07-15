@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/lithammer/dedent"
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -47,6 +46,7 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/phases/copycerts"
 	kubeconfigphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/kubeconfig"
 	configutil "k8s.io/kubernetes/cmd/kubeadm/app/util/config"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/errors"
 	kubeconfigutil "k8s.io/kubernetes/cmd/kubeadm/app/util/kubeconfig"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/output"
 )
@@ -104,9 +104,9 @@ func newCmdCertsUtility(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "certs",
 		Aliases: []string{"certificates"},
-		Short:   "Commands related to handling kubernetes certificates",
-		Run:     cmdutil.SubCmdRun(),
+		Short:   "Commands related to handling Kubernetes certificates",
 	}
+	cmdutil.RequireSubcommand(cmd)
 
 	cmd.AddCommand(newCmdCertsRenewal(out))
 	cmd.AddCommand(newCmdCertsExpiration(out, kubeadmconstants.KubernetesDir))
@@ -215,9 +215,8 @@ func newCmdCertsRenewal(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "renew",
 		Short: "Renew certificates for a Kubernetes cluster",
-		Long:  cmdutil.MacroCommandLongDescription,
-		Run:   cmdutil.SubCmdRun(),
 	}
+	cmdutil.RequireSubcommand(cmd)
 
 	cmd.AddCommand(getRenewSubCommands(out, kubeadmconstants.KubernetesDir)...)
 

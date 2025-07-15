@@ -117,9 +117,9 @@ while true; do sleep 1; done
 					gomega.Eventually(ctx, terminateContainer.GetPhase, ContainerStatusRetryTimeout, ContainerStatusPollInterval).Should(gomega.Equal(testCase.Phase))
 
 					ginkgo.By(fmt.Sprintf("Container '%s': should get the expected 'Ready' condition", testContainer.Name))
-					isReady, err := terminateContainer.IsReady(ctx)
-					gomega.Expect(isReady).To(gomega.Equal(testCase.Ready))
-					framework.ExpectNoError(err)
+					gomega.Eventually(ctx, func() (bool, error) {
+						return terminateContainer.IsReady(ctx)
+					}, ContainerStatusRetryTimeout, ContainerStatusPollInterval).Should(gomega.Equal(testCase.Ready))
 
 					status, err := terminateContainer.GetStatus(ctx)
 					framework.ExpectNoError(err)
@@ -129,7 +129,7 @@ while true; do sleep 1; done
 
 					ginkgo.By(fmt.Sprintf("Container '%s': should be possible to delete", testContainer.Name))
 					gomega.Expect(terminateContainer.Delete(ctx)).To(gomega.Succeed())
-					gomega.Eventually(ctx, terminateContainer.Present, ContainerStatusRetryTimeout, ContainerStatusPollInterval).Should(gomega.BeFalse())
+					gomega.Eventually(ctx, terminateContainer.Present, ContainerStatusRetryTimeout, ContainerStatusPollInterval).Should(gomega.BeFalseBecause("container '%s': should have been terminated by now.", testContainer.Name))
 				}
 			})
 		})

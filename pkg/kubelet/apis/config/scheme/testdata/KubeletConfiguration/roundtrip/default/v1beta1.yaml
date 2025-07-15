@@ -25,6 +25,7 @@ cpuCFSQuota: true
 cpuCFSQuotaPeriod: 100ms
 cpuManagerPolicy: none
 cpuManagerReconcilePeriod: 10s
+crashLoopBackOff: {}
 enableControllerAttachDetach: true
 enableDebugFlagsHandler: true
 enableDebuggingHandlers: true
@@ -69,6 +70,7 @@ maxPods: 110
 memoryManagerPolicy: None
 memorySwap: {}
 memoryThrottlingFactor: 0.9
+mergeDefaultEvictionSettings: false
 nodeLeaseDurationSeconds: 40
 nodeStatusMaxImages: 50
 nodeStatusReportFrequency: 5m0s

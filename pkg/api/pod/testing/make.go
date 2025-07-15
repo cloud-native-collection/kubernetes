@@ -27,6 +27,7 @@ import (
 // Tweak is a function that modifies a Pod.
 type Tweak func(*api.Pod)
 type TweakContainer func(*api.Container)
+type TweakPodStatus func(*api.PodStatus)
 
 // MakePod helps construct Pod objects (which pass API validation) more
 // legibly and tersely than a Go struct definition.  By default this produces
@@ -68,6 +69,12 @@ func SetNamespace(ns string) Tweak {
 func SetResourceVersion(rv string) Tweak {
 	return func(pod *api.Pod) {
 		pod.ResourceVersion = rv
+	}
+}
+
+func SetPodResources(resources *api.ResourceRequirements) Tweak {
+	return func(pod *api.Pod) {
+		pod.Spec.Resources = resources
 	}
 }
 
@@ -165,6 +172,12 @@ func SetDNSPolicy(policy api.DNSPolicy) Tweak {
 	}
 }
 
+func SetDNSConfig(config *api.PodDNSConfig) Tweak {
+	return func(pod *api.Pod) {
+		pod.Spec.DNSConfig = config
+	}
+}
+
 func SetRestartPolicy(policy api.RestartPolicy) Tweak {
 	return func(pod *api.Pod) {
 		pod.Spec.RestartPolicy = policy
@@ -186,6 +199,12 @@ func SetAnnotations(annos map[string]string) Tweak {
 func SetLabels(annos map[string]string) Tweak {
 	return func(pod *api.Pod) {
 		pod.Labels = annos
+	}
+}
+
+func SetGeneration(gen int64) Tweak {
+	return func(pod *api.Pod) {
+		pod.Generation = gen
 	}
 }
 
@@ -251,6 +270,12 @@ func SetContainerImage(image string) TweakContainer {
 	}
 }
 
+func SetContainerLifecycle(lifecycle api.Lifecycle) TweakContainer {
+	return func(cnr *api.Container) {
+		cnr.Lifecycle = &lifecycle
+	}
+}
+
 func MakeResourceRequirements(requests, limits map[string]string) api.ResourceRequirements {
 	rr := api.ResourceRequirements{Requests: api.ResourceList{}, Limits: api.ResourceList{}}
 	for k, v := range requests {
@@ -289,5 +314,59 @@ func SetContainerSecurityContext(ctx api.SecurityContext) TweakContainer {
 func SetContainerRestartPolicy(policy api.ContainerRestartPolicy) TweakContainer {
 	return func(cnr *api.Container) {
 		cnr.RestartPolicy = &policy
+	}
+}
+
+func MakePodStatus(tweaks ...TweakPodStatus) api.PodStatus {
+	ps := api.PodStatus{}
+
+	for _, tweak := range tweaks {
+		tweak(&ps)
+	}
+
+	return ps
+}
+
+func SetContainerStatuses(containerStatuses ...api.ContainerStatus) TweakPodStatus {
+	return func(podstatus *api.PodStatus) {
+		podstatus.ContainerStatuses = containerStatuses
+	}
+}
+
+func SetInitContainerStatuses(containerStatuses ...api.ContainerStatus) TweakPodStatus {
+	return func(podstatus *api.PodStatus) {
+		podstatus.InitContainerStatuses = containerStatuses
+	}
+}
+
+func SetEphemeralContainerStatuses(containerStatuses ...api.ContainerStatus) TweakPodStatus {
+	return func(podstatus *api.PodStatus) {
+		podstatus.EphemeralContainerStatuses = containerStatuses
+	}
+}
+
+func MakeContainerStatus(name string, allocatedResources api.ResourceList) api.ContainerStatus {
+	cs := api.ContainerStatus{
+		Name:               name,
+		AllocatedResources: allocatedResources,
+	}
+
+	return cs
+}
+
+// TweakContainers applies the container tweaks to all containers (regular & init) in the pod.
+// Note: this should typically be added to pod tweaks after all containers have been added.
+func TweakContainers(tweaks ...TweakContainer) Tweak {
+	return func(pod *api.Pod) {
+		for i := range pod.Spec.InitContainers {
+			for _, tweak := range tweaks {
+				tweak(&pod.Spec.InitContainers[i])
+			}
+		}
+		for i := range pod.Spec.Containers {
+			for _, tweak := range tweaks {
+				tweak(&pod.Spec.Containers[i])
+			}
+		}
 	}
 }

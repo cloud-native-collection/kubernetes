@@ -37,18 +37,21 @@ import (
 	batchapiv1 "k8s.io/api/batch/v1"
 	certificatesapiv1 "k8s.io/api/certificates/v1"
 	certificatesv1alpha1 "k8s.io/api/certificates/v1alpha1"
+	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
 	coordinationapiv1 "k8s.io/api/coordination/v1"
-	coordinationv1alpha1 "k8s.io/api/coordination/v1alpha1"
+	coordinationv1alpha2 "k8s.io/api/coordination/v1alpha2"
+	coordinationv1beta1 "k8s.io/api/coordination/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	eventsv1 "k8s.io/api/events/v1"
 	networkingapiv1 "k8s.io/api/networking/v1"
-	networkingapiv1alpha1 "k8s.io/api/networking/v1alpha1"
 	networkingapiv1beta1 "k8s.io/api/networking/v1beta1"
 	nodev1 "k8s.io/api/node/v1"
 	policyapiv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	resourceapi "k8s.io/api/resource/v1alpha3"
+	resourcev1alpha3 "k8s.io/api/resource/v1alpha3"
+	resourcev1beta1 "k8s.io/api/resource/v1beta1"
+	resourcev1beta2 "k8s.io/api/resource/v1beta2"
 	schedulingapiv1 "k8s.io/api/scheduling/v1"
 	storageapiv1 "k8s.io/api/storage/v1"
 	storageapiv1alpha1 "k8s.io/api/storage/v1alpha1"
@@ -60,7 +63,6 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	clientdiscovery "k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	discoveryclient "k8s.io/client-go/kubernetes/typed/discovery/v1"
@@ -114,8 +116,6 @@ const (
 	//   2. which component owns this lease
 	// TODO(sttts): remove this indirection
 	IdentityLeaseComponentLabelKey = controlplaneapiserver.IdentityLeaseComponentLabelKey
-	// KubeAPIServer defines variable used internally when referring to kube-apiserver component
-	KubeAPIServer = "kube-apiserver"
 	// repairLoopInterval defines the interval used to run the Services ClusterIP and NodePort repair loops
 	repairLoopInterval = 3 * time.Minute
 )
@@ -311,7 +311,7 @@ func (c CompletedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil, fmt.Errorf("Master.New() called with empty config.KubeletClientConfig")
 	}
 
-	cp, err := c.ControlPlane.New(KubeAPIServer, delegationTarget)
+	cp, err := c.ControlPlane.New(controlplaneapiserver.KubeAPIServer, delegationTarget)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func (c CompletedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil, err
 	}
 
-	restStorageProviders, err := c.StorageProviders(client.Discovery())
+	restStorageProviders, err := c.StorageProviders(client)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +376,7 @@ func (c CompletedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 
 }
 
-func (c CompletedConfig) StorageProviders(discovery clientdiscovery.DiscoveryInterface) ([]controlplaneapiserver.RESTStorageProvider, error) {
+func (c CompletedConfig) StorageProviders(client *kubernetes.Clientset) ([]controlplaneapiserver.RESTStorageProvider, error) {
 	legacyRESTStorageProvider, err := corerest.New(corerest.Config{
 		GenericConfig: *c.ControlPlane.NewCoreGenericConfig(),
 		Proxy: corerest.ProxyConfig{
@@ -422,9 +422,9 @@ func (c CompletedConfig) StorageProviders(discovery clientdiscovery.DiscoveryInt
 		// keep apps after extensions so legacy clients resolve the extensions versions of shared resource names.
 		// See https://github.com/kubernetes/kubernetes/issues/42392
 		appsrest.StorageProvider{},
-		admissionregistrationrest.RESTStorageProvider{Authorizer: c.ControlPlane.Generic.Authorization.Authorizer, DiscoveryClient: discovery},
+		admissionregistrationrest.RESTStorageProvider{Authorizer: c.ControlPlane.Generic.Authorization.Authorizer, DiscoveryClient: client.Discovery()},
 		eventsrest.RESTStorageProvider{TTL: c.ControlPlane.EventTTL},
-		resourcerest.RESTStorageProvider{},
+		resourcerest.RESTStorageProvider{NamespaceClient: client.CoreV1().Namespaces()},
 	}, nil
 }
 
@@ -452,23 +452,19 @@ var (
 		flowcontrolv1.SchemeGroupVersion,
 	}
 
-	// legacyBetaEnabledByDefaultResources is the list of beta resources we enable.  You may only add to this list
-	// if your resource is already enabled by default in a beta level we still serve AND there is no stable API for it.
-	// see https://github.com/kubernetes/enhancements/tree/master/keps/sig-architecture/3136-beta-apis-off-by-default
-	// for more details.
-	legacyBetaEnabledByDefaultResources = []schema.GroupVersionResource{
-		flowcontrolv1beta3.SchemeGroupVersion.WithResource("flowschemas"),                 // deprecate in 1.29, remove in 1.32
-		flowcontrolv1beta3.SchemeGroupVersion.WithResource("prioritylevelconfigurations"), // deprecate in 1.29, remove in 1.32
-	}
 	// betaAPIGroupVersionsDisabledByDefault is for all future beta groupVersions.
 	betaAPIGroupVersionsDisabledByDefault = []schema.GroupVersion{
 		admissionregistrationv1beta1.SchemeGroupVersion,
 		authenticationv1beta1.SchemeGroupVersion,
+		certificatesv1beta1.SchemeGroupVersion,
+		coordinationv1beta1.SchemeGroupVersion,
 		storageapiv1beta1.SchemeGroupVersion,
 		flowcontrolv1beta1.SchemeGroupVersion,
 		flowcontrolv1beta2.SchemeGroupVersion,
 		flowcontrolv1beta3.SchemeGroupVersion,
 		networkingapiv1beta1.SchemeGroupVersion,
+		resourcev1beta1.SchemeGroupVersion,
+		resourcev1beta2.SchemeGroupVersion,
 	}
 
 	// alphaAPIGroupVersionsDisabledByDefault holds the alpha APIs we have.  They are always disabled by default.
@@ -477,10 +473,9 @@ var (
 		apiserverinternalv1alpha1.SchemeGroupVersion,
 		authenticationv1alpha1.SchemeGroupVersion,
 		apiserverinternalv1alpha1.SchemeGroupVersion,
-		coordinationv1alpha1.SchemeGroupVersion,
-		resourceapi.SchemeGroupVersion,
+		coordinationv1alpha2.SchemeGroupVersion,
+		resourcev1alpha3.SchemeGroupVersion,
 		certificatesv1alpha1.SchemeGroupVersion,
-		networkingapiv1alpha1.SchemeGroupVersion,
 		storageapiv1alpha1.SchemeGroupVersion,
 		svmv1alpha1.SchemeGroupVersion,
 	}
@@ -495,9 +490,6 @@ func DefaultAPIResourceConfigSource() *serverstorage.ResourceConfig {
 	// disable alpha and beta versions explicitly so we have a full list of what's possible to serve
 	ret.DisableVersions(betaAPIGroupVersionsDisabledByDefault...)
 	ret.DisableVersions(alphaAPIGroupVersionsDisabledByDefault...)
-
-	// enable the legacy beta resources that were present before stopped serving new beta APIs by default.
-	ret.EnableResources(legacyBetaEnabledByDefaultResources...)
 
 	return ret
 }

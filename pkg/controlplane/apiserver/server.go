@@ -36,6 +36,9 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientgoinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	zpagesfeatures "k8s.io/component-base/zpages/features"
+	"k8s.io/component-base/zpages/flagz"
+	"k8s.io/component-base/zpages/statusz"
 	"k8s.io/component-helpers/apimachinery/lease"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
@@ -71,6 +74,8 @@ const (
 	//   1. the lease is an identity lease (different from leader election leases)
 	//   2. which component owns this lease
 	IdentityLeaseComponentLabelKey = "apiserver.kubernetes.io/identity"
+	// KubeAPIServer defines variable used internally when referring to kube-apiserver component
+	KubeAPIServer = "kube-apiserver"
 )
 
 // Server is a struct that contains a generic control plane apiserver instance
@@ -151,9 +156,19 @@ func (c completedConfig) New(name string, delegationTarget genericapiserver.Dele
 		return nil, fmt.Errorf("failed to get listener address: %w", err)
 	}
 
+	if utilfeature.DefaultFeatureGate.Enabled(zpagesfeatures.ComponentFlagz) {
+		if c.Generic.Flagz != nil {
+			flagz.Install(s.GenericAPIServer.Handler.NonGoRestfulMux, name, c.Generic.Flagz)
+		}
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(zpagesfeatures.ComponentStatusz) {
+		statusz.Install(s.GenericAPIServer.Handler.NonGoRestfulMux, name, statusz.NewRegistry(c.Generic.EffectiveVersion))
+	}
+
 	if utilfeature.DefaultFeatureGate.Enabled(apiserverfeatures.CoordinatedLeaderElection) {
 		leaseInformer := s.VersionedInformers.Coordination().V1().Leases()
-		lcInformer := s.VersionedInformers.Coordination().V1alpha1().LeaseCandidates()
+		lcInformer := s.VersionedInformers.Coordination().V1beta1().LeaseCandidates()
 		// Ensure that informers are registered before starting. Coordinated Leader Election leader-elected
 		// and may register informer handlers after they are started.
 		_ = leaseInformer.Informer()
@@ -164,7 +179,7 @@ func (c completedConfig) New(name string, delegationTarget genericapiserver.Dele
 					leaseInformer,
 					lcInformer,
 					client.CoordinationV1(),
-					client.CoordinationV1alpha1(),
+					client.CoordinationV1beta1(),
 				)
 				gccontroller := leaderelection.NewLeaseCandidateGC(
 					client,
@@ -175,6 +190,10 @@ func (c completedConfig) New(name string, delegationTarget genericapiserver.Dele
 					go controller.Run(ctx, workers)
 					go gccontroller.Run(ctx)
 				}, err
+			}, leaderelection.LeaderElectionTimers{
+				LeaseDuration: c.CoordinatedLeadershipLeaseDuration,
+				RenewDeadline: c.CoordinatedLeadershipRenewDeadline,
+				RetryPeriod:   c.CoordinatedLeadershipRetryPeriod,
 			})
 			return nil
 		})
@@ -199,7 +218,20 @@ func (c completedConfig) New(name string, delegationTarget genericapiserver.Dele
 				return nil
 			})
 		if c.Extra.PeerProxy != nil {
-			s.GenericAPIServer.AddPostStartHookOrDie("unknown-version-proxy-filter", func(context genericapiserver.PostStartHookContext) error {
+			// Run local-discovery sync loop
+			s.GenericAPIServer.AddPostStartHookOrDie("local-discovery-cache-sync", func(context genericapiserver.PostStartHookContext) error {
+				err := c.Extra.PeerProxy.RunLocalDiscoveryCacheSync(context.Done())
+				return err
+			})
+
+			// Run peer-discovery sync loop.
+			s.GenericAPIServer.AddPostStartHookOrDie("peer-discovery-cache-sync", func(context genericapiserver.PostStartHookContext) error {
+				go c.Extra.PeerProxy.RunPeerDiscoveryCacheSync(context, 1)
+				return nil
+			})
+
+			// Wait for handler to be ready.
+			s.GenericAPIServer.AddPostStartHookOrDie("mixed-version-proxy-handler", func(context genericapiserver.PostStartHookContext) error {
 				err := c.Extra.PeerProxy.WaitForCacheSync(context.Done())
 				return err
 			})

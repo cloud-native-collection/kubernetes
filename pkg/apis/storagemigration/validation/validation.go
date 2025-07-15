@@ -171,11 +171,11 @@ func validateCondition(condition storagemigration.MigrationCondition, fldPath *f
 	}
 
 	if condition.LastUpdateTime.IsZero() {
-		allErrs = append(allErrs, field.Required(fldPath.Child("lastTransitionTime"), "must be set"))
+		allErrs = append(allErrs, field.Required(fldPath.Child("lastTransitionTime"), ""))
 	}
 
 	if len(condition.Reason) == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("reason"), "must be set"))
+		allErrs = append(allErrs, field.Required(fldPath.Child("reason"), ""))
 	} else {
 		for _, currErr := range isValidConditionReason(condition.Reason) {
 			allErrs = append(allErrs, field.Invalid(fldPath.Child("reason"), condition.Reason, currErr))
@@ -183,13 +183,13 @@ func validateCondition(condition storagemigration.MigrationCondition, fldPath *f
 
 		const maxReasonLen int = 1 * 1024 // 1024
 		if len(condition.Reason) > maxReasonLen {
-			allErrs = append(allErrs, field.TooLong(fldPath.Child("reason"), condition.Reason, maxReasonLen))
+			allErrs = append(allErrs, field.TooLong(fldPath.Child("reason"), "" /*unused*/, maxReasonLen))
 		}
 	}
 
 	const maxMessageLen int = 32 * 1024 // 32768
 	if len(condition.Message) > maxMessageLen {
-		allErrs = append(allErrs, field.TooLong(fldPath.Child("message"), condition.Message, maxMessageLen))
+		allErrs = append(allErrs, field.TooLong(fldPath.Child("message"), "" /*unused*/, maxMessageLen))
 	}
 
 	return allErrs

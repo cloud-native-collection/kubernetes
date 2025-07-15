@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/cluster/ports"
 	"k8s.io/kubernetes/pkg/proxy/apis/config"
+	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2emetrics "k8s.io/kubernetes/test/e2e/framework/metrics"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
@@ -253,6 +254,11 @@ var _ = common.SIGDescribe("KubeProxy", func() {
 			framework.Failf("no valid conntrack entry for port %d on node %s: %v", testDaemonTCPPort, serverNodeInfo.nodeIP, err)
 		}
 	})
+})
+
+var _ = common.SIGDescribe("KubeProxyNFAcct", feature.KubeProxyNFAcct, func() {
+	fr := framework.NewDefaultFramework("kube-proxy-nfacct")
+	fr.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
 	ginkgo.It("should update metric for tracking accepted packets destined for localhost nodeports", func(ctx context.Context) {
 		if framework.TestContext.ClusterIsIPv6() {
@@ -284,7 +290,9 @@ var _ = common.SIGDescribe("KubeProxy", func() {
 
 		// get proxyMode
 		stdout, err := e2epodoutput.RunHostCmd(fr.Namespace.Name, hostExecPodName, fmt.Sprintf("curl --silent 127.0.0.1:%d/proxyMode", ports.ProxyStatusPort))
-		framework.ExpectNoError(err)
+		if err != nil {
+			framework.Failf("failed to get proxy mode: err: %v; stdout: %s", stdout, err)
+		}
 		proxyMode := strings.TrimSpace(stdout)
 
 		// get value of route_localnet
@@ -352,19 +360,26 @@ var _ = common.SIGDescribe("KubeProxy", func() {
 				}
 				return true, nil
 			}); err != nil {
-				e2eskipper.Skipf("skipping test as localhost nodeports are not acceesible in this environment")
+				framework.ExpectNoError(err, "failed to access nodeport service on localhost")
 			}
 		}
 
 		// our target metric should be updated by now
 		if err := wait.PollUntilContextTimeout(ctx, 10*time.Second, 2*time.Minute, true, func(_ context.Context) (bool, error) {
 			metrics, err := metricsGrabber.GrabFromKubeProxy(ctx, nodeName)
-			framework.ExpectNoError(err)
+			if err != nil {
+				return false, fmt.Errorf("failed to fetch metrics: %w", err)
+			}
 			targetMetricAfter, err := metrics.GetCounterMetricValue(metricName)
-			framework.ExpectNoError(err)
+			if err != nil {
+				return false, fmt.Errorf("failed to fetch metric: %w", err)
+			}
 			return targetMetricAfter > targetMetricBefore, nil
 		}); err != nil {
-			framework.Failf("expected %s metric to be updated after accessing endpoints via localhost nodeports", metricName)
+			if wait.Interrupted(err) {
+				framework.Failf("expected %s metric to be updated after accessing endpoints via localhost nodeports", metricName)
+			}
+			framework.ExpectNoError(err)
 		}
 	})
 })

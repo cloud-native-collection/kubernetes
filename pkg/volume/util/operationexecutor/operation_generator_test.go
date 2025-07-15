@@ -176,7 +176,7 @@ func TestOperationGenerator_GenerateExpandAndRecoverVolumeFunc(t *testing.T) {
 			}
 			updatedPVC := expansionResponse.pvc
 			actualResizeStatus := updatedPVC.Status.AllocatedResourceStatuses[v1.ResourceStorage]
-			assert.Equal(t, actualResizeStatus, test.expectedResizeStatus)
+			assert.Equal(t, test.expectedResizeStatus, actualResizeStatus)
 			actualAllocatedSize := updatedPVC.Status.AllocatedResources.Storage()
 			if test.expectedAllocatedSize.Cmp(*actualAllocatedSize) != 0 {
 				t.Fatalf("GenerateExpandAndRecoverVolumeFunc failed: expected allocated size %s, got %s", test.expectedAllocatedSize.String(), actualAllocatedSize.String())
@@ -255,7 +255,7 @@ func TestOperationGenerator_nodeExpandVolume(t *testing.T) {
 			actualSize:  getSizeFunc("1G"),
 
 			expectedResizeStatus: "",
-			resizeCallCount:      1,
+			resizeCallCount:      0,
 			expectedStatusSize:   resource.MustParse("2G"),
 		},
 		{
@@ -305,7 +305,7 @@ func TestOperationGenerator_nodeExpandVolume(t *testing.T) {
 			asow := newFakeActualStateOfWorld()
 
 			ogInstance, _ := og.(*operationGenerator)
-			_, err := ogInstance.nodeExpandVolume(vmt, asow, pluginResizeOpts)
+			_, _, err := ogInstance.nodeExpandVolume(vmt, asow, pluginResizeOpts)
 
 			if !test.expectError && err != nil {
 				t.Errorf("For test %s, expected no error got: %v", test.name, err)
@@ -402,6 +402,109 @@ func TestExpandDuringMount(t *testing.T) {
 		})
 	}
 }
+func TestCheckForRecoveryFromExpansion(t *testing.T) {
+	tests := []struct {
+		name                  string
+		pvc                   *v1.PersistentVolumeClaim
+		featureGateEnabled    bool
+		expectedRecoveryCheck bool
+	}{
+		{
+			name: "feature gate disabled, no resize status or allocated resources",
+			pvc: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pvc-1",
+				},
+				Status: v1.PersistentVolumeClaimStatus{
+					AllocatedResourceStatuses: nil,
+					AllocatedResources:        nil,
+				},
+			},
+			featureGateEnabled:    false,
+			expectedRecoveryCheck: false,
+		},
+		{
+			name: "feature gate disabled, resize status set",
+			pvc: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pvc-2",
+				},
+				Status: v1.PersistentVolumeClaimStatus{
+					AllocatedResourceStatuses: map[v1.ResourceName]v1.ClaimResourceStatus{
+						v1.ResourceStorage: v1.PersistentVolumeClaimNodeResizePending,
+					},
+				},
+			},
+			featureGateEnabled:    false,
+			expectedRecoveryCheck: true,
+		},
+		{
+			name: "feature gate enabled, resize status and allocated resources set",
+			pvc: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pvc-3",
+				},
+				Status: v1.PersistentVolumeClaimStatus{
+					AllocatedResourceStatuses: map[v1.ResourceName]v1.ClaimResourceStatus{
+						v1.ResourceStorage: v1.PersistentVolumeClaimNodeResizePending,
+					},
+					AllocatedResources: v1.ResourceList{
+						v1.ResourceStorage: resource.MustParse("10Gi"),
+					},
+				},
+			},
+			featureGateEnabled:    true,
+			expectedRecoveryCheck: true,
+		},
+		{
+			name: "feature gate enabled, no resize status or allocated resources",
+			pvc: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pvc-4",
+				},
+				Status: v1.PersistentVolumeClaimStatus{
+					AllocatedResourceStatuses: nil,
+					AllocatedResources:        nil,
+				},
+			},
+			featureGateEnabled:    true,
+			expectedRecoveryCheck: false,
+		},
+		{
+			name: "feature gate enabled, older external resize controller",
+			pvc: &v1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pvc-5",
+				},
+				Status: v1.PersistentVolumeClaimStatus{
+					AllocatedResourceStatuses: nil,
+					AllocatedResources:        nil,
+				},
+			},
+			featureGateEnabled:    true,
+			expectedRecoveryCheck: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.RecoverVolumeExpansionFailure, test.featureGateEnabled)
+
+			pod := getTestPod("test-pod", test.pvc.Name)
+			pv := getTestPV("test-vol0", "2G")
+			og := &operationGenerator{}
+
+			vmt := VolumeToMount{
+				Pod:        pod,
+				VolumeName: v1.UniqueVolumeName(pv.Name),
+				VolumeSpec: volume.NewSpecFromPersistentVolume(pv, false),
+			}
+			result := og.checkForRecoveryFromExpansion(test.pvc, vmt)
+
+			assert.Equal(t, test.expectedRecoveryCheck, result, "unexpected recovery check result for test: %s", test.name)
+		})
+	}
+}
 
 func getTestPod(podName, pvcName string) *v1.Pod {
 	return &v1.Pod{
@@ -452,6 +555,19 @@ func getTestPVC(volumeName string, specSize, statusSize, allocatedSize string, r
 			v1.ResourceStorage: *resizeStatus,
 		}
 	}
+	return pvc
+}
+
+func addAccessMode(pvc *v1.PersistentVolumeClaim, mode v1.PersistentVolumeAccessMode) *v1.PersistentVolumeClaim {
+	pvc.Spec.AccessModes = append(pvc.Spec.AccessModes, mode)
+	return pvc
+}
+
+func addAnnotation(pvc *v1.PersistentVolumeClaim, key, value string) *v1.PersistentVolumeClaim {
+	if pvc.Annotations == nil {
+		pvc.Annotations = make(map[string]string)
+	}
+	pvc.Annotations[key] = value
 	return pvc
 }
 

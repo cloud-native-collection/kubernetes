@@ -20,8 +20,9 @@ limitations under the License.
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,18 +31,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
-	clientsetfake "k8s.io/client-go/kubernetes/fake"
-	clientgotesting "k8s.io/client-go/testing"
 	proxyconfigapi "k8s.io/kubernetes/pkg/proxy/apis/config"
 	proxyutil "k8s.io/kubernetes/pkg/proxy/util"
 	"k8s.io/kubernetes/test/utils/ktesting"
-	netutils "k8s.io/utils/net"
 	"k8s.io/utils/ptr"
 )
 
@@ -443,18 +439,6 @@ func Test_getLocalDetectors(t *testing.T) {
 	}
 }
 
-func makeNodeWithPodCIDRs(cidrs ...string) *v1.Node {
-	if len(cidrs) == 0 {
-		return &v1.Node{}
-	}
-	return &v1.Node{
-		Spec: v1.NodeSpec{
-			PodCIDR:  cidrs[0],
-			PodCIDRs: cidrs,
-		},
-	}
-}
-
 func TestConfigChange(t *testing.T) {
 	setUp := func() (*os.File, string, error) {
 		tempDir, err := os.MkdirTemp("", "kubeproxy-config-change")
@@ -572,56 +556,6 @@ detectLocalMode: "BridgeInterface"`)
 	}
 }
 
-func Test_waitForPodCIDR(t *testing.T) {
-	_, ctx := ktesting.NewTestContext(t)
-	expected := []string{"192.168.0.0/24", "fd00:1:2::/64"}
-	nodeName := "test-node"
-	oldNode := &v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            nodeName,
-			ResourceVersion: "1000",
-		},
-		Spec: v1.NodeSpec{
-			PodCIDR:  "10.0.0.0/24",
-			PodCIDRs: []string{"10.0.0.0/24", "2001:db2:1/64"},
-		},
-	}
-	node := &v1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            nodeName,
-			ResourceVersion: "1",
-		},
-	}
-	updatedNode := node.DeepCopy()
-	updatedNode.Spec.PodCIDRs = expected
-	updatedNode.Spec.PodCIDR = expected[0]
-
-	// start with the new node
-	client := clientsetfake.NewSimpleClientset()
-	client.AddReactor("list", "nodes", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
-		obj := &v1.NodeList{}
-		return true, obj, nil
-	})
-	fakeWatch := watch.NewFake()
-	client.PrependWatchReactor("nodes", clientgotesting.DefaultWatchReactor(fakeWatch, nil))
-
-	go func() {
-		fakeWatch.Add(node)
-		// receive a delete event for the old node
-		fakeWatch.Delete(oldNode)
-		// set the PodCIDRs on the new node
-		fakeWatch.Modify(updatedNode)
-	}()
-	got, err := waitForPodCIDR(ctx, client, node.Name)
-	if err != nil {
-		t.Errorf("waitForPodCIDR() unexpected error %v", err)
-		return
-	}
-	if !reflect.DeepEqual(got.Spec.PodCIDRs, expected) {
-		t.Errorf("waitForPodCIDR() got %v expected to be %v ", got.Spec.PodCIDRs, expected)
-	}
-}
-
 func TestGetConntrackMax(t *testing.T) {
 	ncores := goruntime.NumCPU()
 	testCases := []struct {
@@ -669,53 +603,166 @@ func TestGetConntrackMax(t *testing.T) {
 	}
 }
 
-func TestProxyServer_platformSetup(t *testing.T) {
+type fakeConntracker struct {
+	called []string
+	err    error
+}
+
+// SetMax value is calculated based on the number of CPUs by getConntrackMax()
+func (fc *fakeConntracker) SetMax(ctx context.Context, max int) error {
+	fc.called = append(fc.called, "SetMax")
+	return fc.err
+}
+func (fc *fakeConntracker) SetTCPEstablishedTimeout(ctx context.Context, seconds int) error {
+	fc.called = append(fc.called, fmt.Sprintf("SetTCPEstablishedTimeout(%d)", seconds))
+	return fc.err
+}
+func (fc *fakeConntracker) SetTCPCloseWaitTimeout(ctx context.Context, seconds int) error {
+	fc.called = append(fc.called, fmt.Sprintf("SetTCPCloseWaitTimeout(%d)", seconds))
+	return fc.err
+}
+func (fc *fakeConntracker) SetTCPBeLiberal(ctx context.Context, value int) error {
+	fc.called = append(fc.called, fmt.Sprintf("SetTCPBeLiberal(%d)", value))
+	return fc.err
+}
+func (fc *fakeConntracker) SetUDPTimeout(ctx context.Context, seconds int) error {
+	fc.called = append(fc.called, fmt.Sprintf("SetUDPTimeout(%d)", seconds))
+	return fc.err
+}
+func (fc *fakeConntracker) SetUDPStreamTimeout(ctx context.Context, seconds int) error {
+	fc.called = append(fc.called, fmt.Sprintf("SetUDPStreamTimeout(%d)", seconds))
+	return fc.err
+}
+
+func TestSetupConntrack(t *testing.T) {
+	_, ctx := ktesting.NewTestContext(t)
 	tests := []struct {
 		name         string
-		node         *v1.Node
-		config       *proxyconfigapi.KubeProxyConfiguration
-		wantPodCIDRs []string
+		config       proxyconfigapi.KubeProxyConntrackConfiguration
+		expect       []string
+		conntrackErr error
+		wantErr      bool
 	}{
 		{
-			name:         "LocalModeNodeCIDR store the node PodCIDRs obtained",
-			node:         makeNodeWithPodCIDRs("10.0.0.0/24"),
-			config:       &proxyconfigapi.KubeProxyConfiguration{DetectLocalMode: proxyconfigapi.LocalModeNodeCIDR},
-			wantPodCIDRs: []string{"10.0.0.0/24"},
+			name:   "do nothing if conntrack config is empty",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{},
+			expect: nil,
 		},
 		{
-			name:         "LocalModeNodeCIDR store the node PodCIDRs obtained dual stack",
-			node:         makeNodeWithPodCIDRs("10.0.0.0/24", "2001:db2:1/64"),
-			config:       &proxyconfigapi.KubeProxyConfiguration{DetectLocalMode: proxyconfigapi.LocalModeNodeCIDR},
-			wantPodCIDRs: []string{"10.0.0.0/24", "2001:db2:1/64"},
+			name: "SetMax is called if conntrack.maxPerCore is specified",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				MaxPerCore: ptr.To(int32(12)),
+			},
+			expect: []string{"SetMax"},
 		},
 		{
-			name:   "LocalModeClusterCIDR does not get the node PodCIDRs",
-			node:   makeNodeWithPodCIDRs("10.0.0.0/24", "2001:db2:1/64"),
-			config: &proxyconfigapi.KubeProxyConfiguration{DetectLocalMode: proxyconfigapi.LocalModeClusterCIDR},
+			name: "SetMax is not called if conntrack.maxPerCore is 0",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				MaxPerCore: ptr.To(int32(0)),
+			},
+			expect: nil,
+		},
+		{
+			name: "SetTCPEstablishedTimeout is called if conntrack.tcpEstablishedTimeout is specified",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPEstablishedTimeout: &metav1.Duration{Duration: 5 * time.Second},
+			},
+			expect: []string{"SetTCPEstablishedTimeout(5)"},
+		},
+		{
+			name: "SetTCPEstablishedTimeout is not called if conntrack.tcpEstablishedTimeout is 0",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPEstablishedTimeout: &metav1.Duration{Duration: 0 * time.Second},
+			},
+			expect: nil,
+		},
+		{
+			name: "SetTCPCloseWaitTimeout is called if conntrack.tcpCloseWaitTimeout is specified",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPCloseWaitTimeout: &metav1.Duration{Duration: 5 * time.Second},
+			},
+			expect: []string{"SetTCPCloseWaitTimeout(5)"},
+		},
+		{
+			name: "SetTCPCloseWaitTimeout is not called if conntrack.tcpCloseWaitTimeout is 0",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPCloseWaitTimeout: &metav1.Duration{Duration: 0 * time.Second},
+			},
+			expect: nil,
+		},
+		{
+			name: "SetTCPBeLiberal is called if conntrack.tcpBeLiberal is true",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPBeLiberal: true,
+			},
+			expect: []string{"SetTCPBeLiberal(1)"},
+		},
+		{
+			name: "SetTCPBeLiberal is not called if conntrack.tcpBeLiberal is false",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPBeLiberal: false,
+			},
+			expect: nil,
+		},
+		{
+			name: "SetUDPTimeout is called if conntrack.udpTimeout is specified",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				UDPTimeout: metav1.Duration{Duration: 5 * time.Second},
+			},
+			expect: []string{"SetUDPTimeout(5)"},
+		},
+		{
+			name: "SetUDPTimeout is called if conntrack.udpTimeout is zero",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				UDPTimeout: metav1.Duration{Duration: 0 * time.Second},
+			},
+			expect: nil,
+		},
+		{
+			name: "SetUDPStreamTimeout is called if conntrack.udpStreamTimeout is specified",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				UDPStreamTimeout: metav1.Duration{Duration: 5 * time.Second},
+			},
+			expect: []string{"SetUDPStreamTimeout(5)"},
+		},
+		{
+			name: "SetUDPStreamTimeout is called if conntrack.udpStreamTimeout is zero",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				UDPStreamTimeout: metav1.Duration{Duration: 0 * time.Second},
+			},
+			expect: nil,
+		},
+		{
+			name: "an error is returned if conntrack.SetTCPEstablishedTimeout fails",
+			config: proxyconfigapi.KubeProxyConntrackConfiguration{
+				TCPEstablishedTimeout: &metav1.Duration{Duration: 5 * time.Second},
+			},
+			expect:       []string{"SetTCPEstablishedTimeout(5)"},
+			conntrackErr: errors.New("random error"),
+			wantErr:      true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, ctx := ktesting.NewTestContext(t)
-			client := clientsetfake.NewSimpleClientset(tt.node)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fc := &fakeConntracker{err: test.conntrackErr}
 			s := &ProxyServer{
-				Config:   tt.config,
-				Client:   client,
-				Hostname: "nodename",
-				NodeIPs: map[v1.IPFamily]net.IP{
-					v1.IPv4Protocol: netutils.ParseIPSloppy("127.0.0.1"),
-					v1.IPv6Protocol: net.IPv6zero,
+				Config: &proxyconfigapi.KubeProxyConfiguration{
+					Linux: proxyconfigapi.KubeProxyLinuxConfiguration{
+						Conntrack: test.config,
+					},
 				},
 			}
-			err := s.platformSetup(ctx)
-			if err != nil {
-				t.Errorf("ProxyServer.createProxier() error = %v", err)
-				return
+			err := s.setupConntrack(ctx, fc)
+			if test.wantErr && err == nil {
+				t.Errorf("Test %q: Expected error, got nil", test.name)
 			}
-			if !reflect.DeepEqual(s.podCIDRs, tt.wantPodCIDRs) {
-				t.Errorf("Expected PodCIDRs %v got %v", tt.wantPodCIDRs, s.podCIDRs)
+			if !test.wantErr && err != nil {
+				t.Errorf("Test %q: Expected no error, got %v", test.name, err)
 			}
-
+			if !cmp.Equal(fc.called, test.expect) {
+				t.Errorf("Test %q: Expected conntrack calls: %v, got: %v", test.name, test.expect, fc.called)
+			}
 		})
 	}
 }

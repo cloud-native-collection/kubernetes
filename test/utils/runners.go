@@ -44,7 +44,7 @@ import (
 	scaleclient "k8s.io/client-go/scale"
 	"k8s.io/client-go/util/workqueue"
 	imageutils "k8s.io/kubernetes/test/utils/image"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	"k8s.io/klog/v2"
 )
@@ -302,7 +302,7 @@ func (config *DeploymentConfig) create() error {
 			Name: config.Name,
 		},
 		Spec: apps.DeploymentSpec{
-			Replicas: pointer.Int32(int32(config.Replicas)),
+			Replicas: ptr.To[int32](int32(config.Replicas)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"name": config.Name,
@@ -373,7 +373,7 @@ func (config *ReplicaSetConfig) create() error {
 			Name: config.Name,
 		},
 		Spec: apps.ReplicaSetSpec{
-			Replicas: pointer.Int32(int32(config.Replicas)),
+			Replicas: ptr.To[int32](int32(config.Replicas)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"name": config.Name,
@@ -445,7 +445,7 @@ func (config *RCConfig) create() error {
 			Name: config.Name,
 		},
 		Spec: v1.ReplicationControllerSpec{
-			Replicas: pointer.Int32(int32(config.Replicas)),
+			Replicas: ptr.To[int32](int32(config.Replicas)),
 			Selector: map[string]string{
 				"name": config.Name,
 			},
@@ -664,7 +664,7 @@ func (config *RCConfig) start(ctx context.Context) error {
 			*config.CreatedPods = startupStatus.Created
 		}
 		if !config.Silent {
-			config.RCConfigLog(startupStatus.String(config.Name))
+			config.RCConfigLog("%s", startupStatus.String(config.Name))
 		}
 
 		if config.PodStatusFile != nil {
@@ -688,8 +688,8 @@ func (config *RCConfig) start(ctx context.Context) error {
 		if podDeletionsCount > config.MaxAllowedPodDeletions {
 			// Number of pods which disappeared is over threshold
 			err := fmt.Errorf("%d pods disappeared for %s: %v", podDeletionsCount, config.Name, strings.Join(deletedPods, ", "))
-			config.RCConfigLog(err.Error())
-			config.RCConfigLog(diff.String(sets.NewString()))
+			config.RCConfigLog("%s", err.Error())
+			config.RCConfigLog("%s", diff.String(sets.NewString()))
 			return err
 		}
 
@@ -1194,6 +1194,10 @@ func CreatePodWithPersistentVolume(ctx context.Context, client clientset.Interfa
 		// PVs are cluster-wide resources.
 		// Prepend a namespace to make the name globally unique.
 		pv.Name = fmt.Sprintf("%s-%s", namespace, pv.Name)
+		pvs := pv.Spec.PersistentVolumeSource
+		if pvs.CSI != nil {
+			pvs.CSI.VolumeHandle = pv.Name
+		}
 		if bindVolume {
 			// bind pv to "pvc-$i"
 			pv.Spec.ClaimRef = &v1.ObjectReference{

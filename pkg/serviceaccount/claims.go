@@ -23,10 +23,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gopkg.in/square/go-jose.v2/jwt"
+	"gopkg.in/go-jose/go-jose.v2/jwt"
 
 	"k8s.io/apiserver/pkg/audit"
 	apiserverserviceaccount "k8s.io/apiserver/pkg/authentication/serviceaccount"
+	authenticationtokenjwt "k8s.io/apiserver/pkg/authentication/token/jwt"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/apis/core"
@@ -286,6 +287,6 @@ func (v *validator) Validate(ctx context.Context, _ string, public *jwt.Claims, 
 		PodUID:       podUID,
 		NodeName:     nodeName,
 		NodeUID:      nodeUID,
-		CredentialID: apiserverserviceaccount.CredentialIDForJTI(jti),
+		CredentialID: authenticationtokenjwt.CredentialIDForJTI(jti),
 	}, nil
 }

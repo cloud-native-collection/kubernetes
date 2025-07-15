@@ -23,12 +23,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
-	resourceapi "k8s.io/api/resource/v1alpha3"
+	resourceapi "k8s.io/api/resource/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/kubelet/cm/dra/state"
+	"k8s.io/kubernetes/test/utils/ktesting"
+	"k8s.io/kubernetes/test/utils/ktesting/initoption"
 )
 
 // ClaimInfo test cases
@@ -307,7 +310,7 @@ func TestClaimInfoHasPodReference(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			assert.Equal(t, test.claimInfo.hasPodReference(podUID), test.expectedResult)
+			assert.Equal(t, test.expectedResult, test.claimInfo.hasPodReference(podUID))
 		})
 	}
 }
@@ -401,7 +404,7 @@ func TestClaimInfoIsPrepared(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			assert.Equal(t, test.claimInfo.isPrepared(), test.expectedResult)
+			assert.Equal(t, test.expectedResult, test.claimInfo.isPrepared())
 		})
 	}
 }
@@ -435,12 +438,13 @@ func TestNewClaimInfoCache(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			result, err := newClaimInfoCache(test.stateDir, test.checkpointName)
+			tCtx := ktesting.Init(t)
+			result, err := newClaimInfoCache(tCtx.Logger(), test.stateDir, test.checkpointName)
 			if test.wantErr {
 				assert.Error(t, err)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.NotNil(t, result)
 		})
 	}
@@ -493,8 +497,9 @@ func TestClaimInfoCacheWithLock(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(t.TempDir(), "test-checkpoint")
-			assert.NoError(t, err)
+			tCtx := ktesting.Init(t)
+			cache, err := newClaimInfoCache(tCtx.Logger(), t.TempDir(), "test-checkpoint")
+			require.NoError(t, err)
 			assert.NotNil(t, cache)
 			err = cache.withLock(test.funcGen(cache))
 			if test.wantErr {
@@ -553,8 +558,9 @@ func TestClaimInfoCacheWithRLock(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(t.TempDir(), "test-checkpoint")
-			assert.NoError(t, err)
+			tCtx := ktesting.Init(t)
+			cache, err := newClaimInfoCache(tCtx.Logger(), t.TempDir(), "test-checkpoint")
+			require.NoError(t, err)
 			assert.NotNil(t, cache)
 			err = cache.withRLock(test.funcGen(cache))
 			if test.wantErr {
@@ -568,8 +574,11 @@ func TestClaimInfoCacheWithRLock(t *testing.T) {
 
 func TestClaimInfoCacheAdd(t *testing.T) {
 	for _, test := range []struct {
-		description string
-		claimInfo   *ClaimInfo
+		description      string
+		initialClaimInfo []*ClaimInfo
+		claimInfo        *ClaimInfo
+		expectMetrics    string
+		expectLog        string
 	}{
 		{
 			description: "claimInfo successfully added",
@@ -579,14 +588,90 @@ func TestClaimInfoCacheAdd(t *testing.T) {
 					Namespace: namespace,
 				},
 			},
+			expectMetrics: `# HELP dra_resource_claims_in_use [ALPHA] The number of ResourceClaims that are currently in use on the node, by driver name (driver_name label value) and across all drivers (special value <any> for driver_name). Note that the sum of all by-driver counts is not the total number of in-use ResourceClaims because the same ResourceClaim might use devices from different drivers. Instead, use the count for the <any> driver_name.
+# TYPE dra_resource_claims_in_use gauge
+dra_resource_claims_in_use{driver_name="<any>"} 0
+`,
+		},
+		{
+			description: "prepared claimInfo",
+			claimInfo: &ClaimInfo{
+				ClaimInfoState: state.ClaimInfoState{
+					ClaimName: claimName,
+					Namespace: namespace,
+					DriverState: map[string]state.DriverState{
+						"test-driver":       {},
+						"other-test-driver": {},
+					},
+				},
+				prepared: true,
+			},
+			expectMetrics: `# HELP dra_resource_claims_in_use [ALPHA] The number of ResourceClaims that are currently in use on the node, by driver name (driver_name label value) and across all drivers (special value <any> for driver_name). Note that the sum of all by-driver counts is not the total number of in-use ResourceClaims because the same ResourceClaim might use devices from different drivers. Instead, use the count for the <any> driver_name.
+# TYPE dra_resource_claims_in_use gauge
+dra_resource_claims_in_use{driver_name="<any>"} 1
+dra_resource_claims_in_use{driver_name="other-test-driver"} 1
+dra_resource_claims_in_use{driver_name="test-driver"} 1
+`,
+			expectLog: `INFO ResourceClaim usage changed claimsInUse=<
+	<any>: 1 (+1)
+	other-test-driver: 1 (+1)
+	test-driver: 1 (+1)
+ >
+`,
+		},
+		{
+			description: "add more prepared claimInfo",
+			initialClaimInfo: []*ClaimInfo{{
+				ClaimInfoState: state.ClaimInfoState{
+					ClaimName: claimName + "-old",
+					Namespace: namespace,
+					DriverState: map[string]state.DriverState{
+						"test-driver": {},
+					},
+				},
+				prepared: true,
+			}},
+			claimInfo: &ClaimInfo{
+				ClaimInfoState: state.ClaimInfoState{
+					ClaimName: claimName,
+					Namespace: namespace,
+					DriverState: map[string]state.DriverState{
+						"test-driver":       {},
+						"other-test-driver": {},
+					},
+				},
+				prepared: true,
+			},
+			expectMetrics: `# HELP dra_resource_claims_in_use [ALPHA] The number of ResourceClaims that are currently in use on the node, by driver name (driver_name label value) and across all drivers (special value <any> for driver_name). Note that the sum of all by-driver counts is not the total number of in-use ResourceClaims because the same ResourceClaim might use devices from different drivers. Instead, use the count for the <any> driver_name.
+# TYPE dra_resource_claims_in_use gauge
+dra_resource_claims_in_use{driver_name="<any>"} 2
+dra_resource_claims_in_use{driver_name="other-test-driver"} 1
+dra_resource_claims_in_use{driver_name="test-driver"} 2
+`,
+			expectLog: `INFO ResourceClaim usage changed claimsInUse=<
+	<any>: 2 (+1)
+	other-test-driver: 1 (+1)
+	test-driver: 2 (+1)
+ >
+`,
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(t.TempDir(), "test-checkpoint")
-			assert.NoError(t, err)
+			tCtx := ktesting.Init(t, initoption.BufferLogs(true))
+			cache, err := newClaimInfoCache(tCtx.Logger(), t.TempDir(), "test-checkpoint")
+			for _, claimInfo := range test.initialClaimInfo {
+				cache.add(claimInfo)
+			}
+			require.NoError(t, err)
 			assert.NotNil(t, cache)
-			cache.add(test.claimInfo)
+			_ = cache.withLock(func() error {
+				cache.add(test.claimInfo)
+				return nil
+			})
 			assert.True(t, cache.contains(test.claimInfo.ClaimName, test.claimInfo.Namespace))
+			testClaimsInUseMetric(tCtx, cache, test.expectMetrics)
+			logOutput := tCtx.Logger().GetSink().(ktesting.Underlier).GetBuffer()
+			assert.Equal(t, test.expectLog, logOutput.String())
 		})
 	}
 }
@@ -681,28 +766,69 @@ func TestClaimInfoCacheDelete(t *testing.T) {
 	for _, test := range []struct {
 		description    string
 		claimInfoCache *claimInfoCache
+		expectMetrics  string
+		expectLog      string
 	}{
 		{
 			description: "item in cache",
 			claimInfoCache: &claimInfoCache{
 				claimInfo: map[string]*ClaimInfo{
-					claimName + namespace: {
+					namespace + "/" + claimName: {
 						ClaimInfoState: state.ClaimInfoState{
 							ClaimName: claimName,
 							Namespace: namespace,
+							DriverState: map[string]state.DriverState{
+								"test-driver": {},
+							},
 						},
+						prepared: true,
+					},
+					namespace + "/" + claimName + "-old": {
+						ClaimInfoState: state.ClaimInfoState{
+							ClaimName: claimName,
+							Namespace: namespace,
+							DriverState: map[string]state.DriverState{
+								"test-driver":       {},
+								"other-test-driver": {},
+							},
+						},
+						prepared: true,
 					},
 				},
 			},
+			expectMetrics: `# HELP dra_resource_claims_in_use [ALPHA] The number of ResourceClaims that are currently in use on the node, by driver name (driver_name label value) and across all drivers (special value <any> for driver_name). Note that the sum of all by-driver counts is not the total number of in-use ResourceClaims because the same ResourceClaim might use devices from different drivers. Instead, use the count for the <any> driver_name.
+# TYPE dra_resource_claims_in_use gauge
+dra_resource_claims_in_use{driver_name="<any>"} 1
+dra_resource_claims_in_use{driver_name="test-driver"} 1
+dra_resource_claims_in_use{driver_name="other-test-driver"} 1
+`,
+			expectLog: `INFO ResourceClaim usage changed claimsInUse=<
+	<any>: 1 (-1)
+	other-test-driver: 1 (+0)
+	test-driver: 1 (-1)
+ >
+`,
 		},
 		{
 			description:    "item not in cache",
 			claimInfoCache: &claimInfoCache{},
+			expectMetrics: `# HELP dra_resource_claims_in_use [ALPHA] The number of ResourceClaims that are currently in use on the node, by driver name (driver_name label value) and across all drivers (special value <any> for driver_name). Note that the sum of all by-driver counts is not the total number of in-use ResourceClaims because the same ResourceClaim might use devices from different drivers. Instead, use the count for the <any> driver_name.
+# TYPE dra_resource_claims_in_use gauge
+dra_resource_claims_in_use{driver_name="<any>"} 0
+`,
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			test.claimInfoCache.delete(claimName, namespace)
+			tCtx := ktesting.Init(t, initoption.BufferLogs(true))
+			test.claimInfoCache.logger = tCtx.Logger()
+			_ = test.claimInfoCache.withLock(func() error {
+				test.claimInfoCache.delete(claimName, namespace)
+				return nil
+			})
 			assert.False(t, test.claimInfoCache.contains(claimName, namespace))
+			testClaimsInUseMetric(tCtx, test.claimInfoCache, test.expectMetrics)
+			logOutput := tCtx.Logger().GetSink().(ktesting.Underlier).GetBuffer()
+			assert.Equal(t, test.expectLog, logOutput.String())
 		})
 	}
 }
@@ -717,7 +843,7 @@ func TestClaimInfoCacheHasPodReference(t *testing.T) {
 			description: "uid is referenced",
 			claimInfoCache: &claimInfoCache{
 				claimInfo: map[string]*ClaimInfo{
-					claimName + namespace: {
+					namespace + "/" + claimName: {
 						ClaimInfoState: state.ClaimInfoState{
 							ClaimName: claimName,
 							Namespace: namespace,
@@ -753,14 +879,15 @@ func TestSyncToCheckpoint(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(test.stateDir, test.checkpointName)
-			assert.NoError(t, err)
+			tCtx := ktesting.Init(t)
+			cache, err := newClaimInfoCache(tCtx.Logger(), test.stateDir, test.checkpointName)
+			require.NoError(t, err)
 			err = cache.syncToCheckpoint()
 			if test.wantErr {
 				assert.Error(t, err)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 	}
 }

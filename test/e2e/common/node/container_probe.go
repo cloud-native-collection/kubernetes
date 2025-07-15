@@ -34,12 +34,12 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eevents "k8s.io/kubernetes/test/e2e/framework/events"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
-	"k8s.io/kubernetes/test/e2e/nodefeature"
 	testutils "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
@@ -113,7 +113,7 @@ var _ = SIGDescribe("Probing container", func() {
 				return false, err
 			}
 			return podutil.IsPodReady(p), nil
-		}, 1*time.Minute, 1*time.Second).ShouldNot(gomega.BeTrue(), "pod should not be ready")
+		}, 1*time.Minute, 1*time.Second).ShouldNot(gomega.BeTrueBecause("pod should not be ready"))
 
 		p, err := podClient.Get(ctx, p.Name, metav1.GetOptions{})
 		framework.ExpectNoError(err)
@@ -726,11 +726,11 @@ done
 				}
 			}
 			return false, nil
-		}, 1*time.Minute, framework.Poll).ShouldNot(gomega.BeTrue(), "should not see liveness probes")
+		}, 1*time.Minute, framework.Poll).ShouldNot(gomega.BeTrueBecause("should not see liveness probes"))
 	})
 })
 
-var _ = SIGDescribe(nodefeature.SidecarContainers, feature.SidecarContainers, "Probing restartable init container", func() {
+var _ = SIGDescribe(feature.SidecarContainers, framework.WithFeatureGate(features.SidecarContainers), "Probing restartable init container", func() {
 	f := framework.NewDefaultFramework("container-probe")
 	f.NamespacePodSecurityLevel = admissionapi.LevelBaseline
 	var podClient *e2epod.PodClient
@@ -792,7 +792,7 @@ var _ = SIGDescribe(nodefeature.SidecarContainers, feature.SidecarContainers, "P
 				return false, err
 			}
 			return podutil.IsPodReady(p), nil
-		}, 1*time.Minute, 1*time.Second).ShouldNot(gomega.BeTrue(), "pod should not be ready")
+		}, 1*time.Minute, 1*time.Second).ShouldNot(gomega.BeTrueBecause("pod should not be ready"))
 
 		p, err := podClient.Get(ctx, p.Name, metav1.GetOptions{})
 		framework.ExpectNoError(err)
@@ -1484,7 +1484,7 @@ done
 				}
 			}
 			return false, nil
-		}, 1*time.Minute, framework.Poll).ShouldNot(gomega.BeTrue(), "should not see liveness probes")
+		}, 1*time.Minute, framework.Poll).ShouldNot(gomega.BeTrueBecause("should not see liveness probes"))
 	})
 })
 

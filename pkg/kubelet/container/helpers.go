@@ -62,10 +62,13 @@ type RuntimeHelper interface {
 	GetOrCreateUserNamespaceMappings(pod *v1.Pod, runtimeHandler string) (*runtimeapi.UserNamespace, error)
 
 	// PrepareDynamicResources prepares resources for a pod.
-	PrepareDynamicResources(pod *v1.Pod) error
+	PrepareDynamicResources(ctx context.Context, pod *v1.Pod) error
 
 	// UnprepareDynamicResources unprepares resources for a a pod.
-	UnprepareDynamicResources(pod *v1.Pod) error
+	UnprepareDynamicResources(ctx context.Context, pod *v1.Pod) error
+
+	// SetPodWatchCondition flags a pod to be inspected until the condition is met.
+	SetPodWatchCondition(types.UID, string, func(*PodStatus) bool)
 }
 
 // ShouldContainerBeRestarted checks whether a container needs to be restarted.
@@ -148,7 +151,8 @@ func v1EnvVarsToMap(envs []v1.EnvVar) map[string]string {
 }
 
 // ExpandContainerCommandOnlyStatic substitutes only static environment variable values from the
-// container environment definitions. This does *not* include valueFrom substitutions.
+// container environment definitions. This does *not* include valueFrom substitutions. Note any unbound
+// variables will not be expanded or empty substituted, i.e. "echo $(MISSING) => echo $(MISSING)".
 // TODO: callers should use ExpandContainerCommandAndArgs with a fully resolved list of environment.
 func ExpandContainerCommandOnlyStatic(containerCommand []string, envs []v1.EnvVar) (command []string) {
 	mapping := expansion.MappingFuncFor(v1EnvVarsToMap(envs))
@@ -393,6 +397,8 @@ func MakePortMappings(container *v1.Container) (ports []PortMapping) {
 
 // HasAnyRegularContainerStarted returns true if any regular container has
 // started, which indicates all init containers have been initialized.
+// Deprecated: This function is not accurate when its pod sandbox is recreated.
+// Use HasAnyActiveRegularContainerStarted instead.
 func HasAnyRegularContainerStarted(spec *v1.PodSpec, statuses []v1.ContainerStatus) bool {
 	if len(statuses) == 0 {
 		return false
@@ -410,6 +416,29 @@ func HasAnyRegularContainerStarted(spec *v1.PodSpec, statuses []v1.ContainerStat
 		if status.State.Running != nil || status.State.Terminated != nil {
 			return true
 		}
+	}
+
+	return false
+}
+
+// HasAnyActiveRegularContainerStarted returns true if any regular container of
+// the current pod sandbox has started, which indicates all init containers
+// have been initialized.
+func HasAnyActiveRegularContainerStarted(spec *v1.PodSpec, podStatus *PodStatus) bool {
+	if podStatus == nil {
+		return false
+	}
+
+	containerNames := sets.New[string]()
+	for _, c := range spec.Containers {
+		containerNames.Insert(c.Name)
+	}
+
+	for _, status := range podStatus.ActiveContainerStatuses {
+		if !containerNames.Has(status.Name) {
+			continue
+		}
+		return true
 	}
 
 	return false

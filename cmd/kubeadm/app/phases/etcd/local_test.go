@@ -32,6 +32,7 @@ import (
 	"github.com/lithammer/dedent"
 
 	v1 "k8s.io/api/core/v1"
+
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	etcdutil "k8s.io/kubernetes/cmd/kubeadm/app/util/etcd"
@@ -71,8 +72,7 @@ func TestGetEtcdPodSpec(t *testing.T) {
 
 func TestCreateLocalEtcdStaticPodManifestFile(t *testing.T) {
 	// Create temp folder for the test case
-	tmpdir := testutil.SetupTempDir(t)
-	defer os.RemoveAll(tmpdir)
+	tmpdir := t.TempDir()
 
 	var tests = []struct {
 		cfg              *kubeadmapi.ClusterConfiguration
@@ -81,7 +81,7 @@ func TestCreateLocalEtcdStaticPodManifestFile(t *testing.T) {
 	}{
 		{
 			cfg: &kubeadmapi.ClusterConfiguration{
-				KubernetesVersion: "v1.7.0",
+				KubernetesVersion: "v1.99.0",
 				Etcd: kubeadmapi.Etcd{
 					Local: &kubeadmapi.LocalEtcd{
 						DataDir: tmpdir + "/etcd",
@@ -94,7 +94,6 @@ kind: Pod
 metadata:
   annotations:
     kubeadm.kubernetes.io/etcd.advertise-client-urls: https://:2379
-  creationTimestamp: null
   labels:
     component: etcd
     tier: control-plane
@@ -230,8 +229,7 @@ status: {}
 
 func TestCreateLocalEtcdStaticPodManifestFileWithPatches(t *testing.T) {
 	// Create temp folder for the test case
-	tmpdir := testutil.SetupTempDir(t)
-	defer os.RemoveAll(tmpdir)
+	tmpdir := t.TempDir()
 
 	// Creates a Cluster Configuration
 	cfg := &kubeadmapi.ClusterConfiguration{

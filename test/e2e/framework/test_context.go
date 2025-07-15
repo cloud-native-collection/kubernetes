@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -277,6 +278,8 @@ type NodeTestContextType struct {
 	ExtraEnvs map[string]string
 	// StandaloneMode indicates whether the test is running kubelet in a standalone mode.
 	StandaloneMode bool
+	// CriProxyEnabled indicates whether enable CRI API proxy for failure injection.
+	CriProxyEnabled bool
 }
 
 // CloudConfig holds the cloud configuration for e2e test suites.
@@ -508,6 +511,7 @@ func AfterReadingAllFlags(t *TestContextType) {
 	gomega.SetDefaultConsistentlyPollingInterval(t.timeouts.Poll)
 	gomega.SetDefaultEventuallyTimeout(t.timeouts.PodStart)
 	gomega.SetDefaultConsistentlyDuration(t.timeouts.PodStartShort)
+	gomega.EnforceDefaultTimeoutsWhenUsingContexts()
 
 	// ginkgo.PreviewSpecs will expand all nodes and thus may find new bugs.
 	report := ginkgo.PreviewSpecs("Kubernetes e2e test statistics")
@@ -610,6 +614,19 @@ func AfterReadingAllFlags(t *TestContextType) {
 		}
 
 		ginkgo.ReportAfterSuite("Kubernetes e2e JUnit report", func(report ginkgo.Report) {
+			// Sort specs by full name. The default is by start (or completion?) time,
+			// which is less useful in spyglass because those times are not shown
+			// and thus tests seem to be listed with no apparent order.
+			slices.SortFunc(report.SpecReports, func(a, b types.SpecReport) int {
+				res := strings.Compare(a.FullText(), b.FullText())
+				if res == 0 {
+					// Use start time as tie-breaker in the unlikely
+					// case that two specs have the same full name.
+					return a.StartTime.Compare(b.StartTime)
+				}
+				return res
+			})
+
 			// With Ginkgo v1, we used to write one file per
 			// parallel node. Now Ginkgo v2 automatically merges
 			// all results into a report for us. The 01 suffix is

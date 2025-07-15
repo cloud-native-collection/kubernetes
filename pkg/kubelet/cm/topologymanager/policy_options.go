@@ -34,10 +34,11 @@ const (
 var (
 	alphaOptions = sets.New[string]()
 	betaOptions  = sets.New[string](
-		PreferClosestNUMANodes,
 		MaxAllowableNUMANodes,
 	)
-	stableOptions = sets.New[string]()
+	stableOptions = sets.New[string](
+		PreferClosestNUMANodes,
+	)
 )
 
 func CheckPolicyOptionAvailable(option string) error {
@@ -46,11 +47,11 @@ func CheckPolicyOptionAvailable(option string) error {
 	}
 
 	if alphaOptions.Has(option) && !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.TopologyManagerPolicyAlphaOptions) {
-		return fmt.Errorf("Topology Manager Policy Alpha-level Options not enabled, but option %q provided", option)
+		return fmt.Errorf("topology manager policy alpha-level options not enabled, but option %q provided", option)
 	}
 
 	if betaOptions.Has(option) && !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.TopologyManagerPolicyBetaOptions) {
-		return fmt.Errorf("Topology Manager Policy Beta-level Options not enabled, but option %q provided", option)
+		return fmt.Errorf("topology manager policy beta-level options not enabled, but option %q provided", option)
 	}
 
 	return nil

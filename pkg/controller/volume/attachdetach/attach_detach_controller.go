@@ -21,12 +21,10 @@ package attachdetach
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	"k8s.io/klog/v2"
 	"k8s.io/mount-utils"
-	utilexec "k8s.io/utils/exec"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	v1 "k8s.io/api/core/v1"
@@ -437,7 +435,7 @@ func (adc *attachDetachController) populateDesiredStateOfWorld(logger klog.Logge
 			// The volume specs present in the ActualStateOfWorld are nil, let's replace those
 			// with the correct ones found on pods. The present in the ASW with no corresponding
 			// pod will be detached and the spec is irrelevant.
-			volumeSpec, err := util.CreateVolumeSpec(logger, podVolume, podToAdd, nodeName, &adc.volumePluginMgr, adc.pvcLister, adc.pvLister, adc.csiMigratedPluginManager, adc.intreeToCSITranslator)
+			volumeSpec, err := util.CreateVolumeSpecWithNodeMigration(logger, podVolume, podToAdd, nodeName, &adc.volumePluginMgr, adc.pvcLister, adc.pvLister, adc.csiMigratedPluginManager, adc.intreeToCSITranslator)
 			if err != nil {
 				logger.Error(
 					err,
@@ -711,7 +709,7 @@ func (adc *attachDetachController) processVolumeAttachments(logger klog.Logger) 
 				// PV is migrated and should be handled by the CSI plugin instead of the in-tree one
 				plugin, _ = adc.volumePluginMgr.FindAttachablePluginByName(csi.CSIPluginName)
 				// podNamespace is not needed here for Azurefile as the volumeName generated will be the same with or without podNamespace
-				volumeSpec, err = csimigration.TranslateInTreeSpecToCSI(volumeSpec, "" /* podNamespace */, adc.intreeToCSITranslator)
+				volumeSpec, err = csimigration.TranslateInTreeSpecToCSI(logger, volumeSpec, "" /* podNamespace */, adc.intreeToCSITranslator)
 				if err != nil {
 					logger.Error(err, "Failed to translate intree volumeSpec to CSI volumeSpec for volume", "node", klog.KRef("", string(nodeName)), "inTreePluginName", inTreePluginName, "vaName", va.Name, "PV", klog.KRef("", *pvName))
 					continue
@@ -806,16 +804,12 @@ func (adc *attachDetachController) NewWrapperUnmounter(volName string, spec volu
 	return nil, fmt.Errorf("NewWrapperUnmounter not supported by Attach/Detach controller's VolumeHost implementation")
 }
 
-func (adc *attachDetachController) GetMounter(pluginName string) mount.Interface {
+func (adc *attachDetachController) GetMounter() mount.Interface {
 	return nil
 }
 
 func (adc *attachDetachController) GetHostName() string {
 	return ""
-}
-
-func (adc *attachDetachController) GetHostIP() (net.IP, error) {
-	return nil, fmt.Errorf("GetHostIP() not supported by Attach/Detach controller's VolumeHost implementation")
 }
 
 func (adc *attachDetachController) GetNodeAllocatable() (v1.ResourceList, error) {
@@ -849,10 +843,6 @@ func (adc *attachDetachController) DeleteServiceAccountTokenFunc() func(types.UI
 		// nolint:logcheck
 		klog.ErrorS(nil, "DeleteServiceAccountToken unsupported in attachDetachController")
 	}
-}
-
-func (adc *attachDetachController) GetExec(pluginName string) utilexec.Interface {
-	return utilexec.New()
 }
 
 func (adc *attachDetachController) addNodeToDswp(node *v1.Node, nodeName types.NodeName) {

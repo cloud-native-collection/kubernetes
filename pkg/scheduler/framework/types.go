@@ -19,6 +19,7 @@ package framework
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -28,198 +29,131 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/klog/v2"
 
-	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
-	resourcehelper "k8s.io/kubernetes/pkg/api/v1/resource"
+	"k8s.io/apimachinery/pkg/api/resource"
+	resourcehelper "k8s.io/component-helpers/resource"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/features"
 	schedutil "k8s.io/kubernetes/pkg/scheduler/util"
 )
 
 var generation int64
 
-// ActionType is an integer to represent one type of resource change.
-// Different ActionTypes can be bit-wised to compose new semantics.
-type ActionType int64
-
-// Constants for ActionTypes.
-const (
-	Add ActionType = 1 << iota
-	Delete
-
-	// UpdateNodeXYZ is only applicable for Node events.
-	// If you use UpdateNodeXYZ,
-	// your plugin's QueueingHint is only executed for the specific sub-Update event.
-	// It's better to narrow down the scope of the event by using them instead of just using Update event
-	// for better performance in requeueing.
-	UpdateNodeAllocatable
-	UpdateNodeLabel
-	UpdateNodeTaint
-	UpdateNodeCondition
-	UpdateNodeAnnotation
-
-	// UpdatePodXYZ is only applicable for Pod events.
-	// If you use UpdatePodXYZ,
-	// your plugin's QueueingHint is only executed for the specific sub-Update event.
-	// It's better to narrow down the scope of the event by using them instead of Update event
-	// for better performance in requeueing.
-	UpdatePodLabel
-	// UpdatePodScaleDown is an update for pod's scale down (i.e., any resource request is reduced).
-	UpdatePodScaleDown
-
-	// updatePodOther is a update for pod's other fields.
-	// It's used only for the internal event handling, and thus unexported.
-	updatePodOther
-
-	All ActionType = 1<<iota - 1
-
-	// Use the general Update type if you don't either know or care the specific sub-Update type to use.
-	Update = UpdateNodeAllocatable | UpdateNodeLabel | UpdateNodeTaint | UpdateNodeCondition | UpdateNodeAnnotation | UpdatePodLabel | UpdatePodScaleDown | updatePodOther
+var (
+	// basicActionTypes is a list of basic ActionTypes.
+	basicActionTypes = []fwk.ActionType{fwk.Add, fwk.Delete, fwk.Update}
+	// podActionTypes is a list of ActionTypes that are only applicable for Pod events.
+	podActionTypes = []fwk.ActionType{fwk.UpdatePodLabel, fwk.UpdatePodScaleDown, fwk.UpdatePodToleration, fwk.UpdatePodSchedulingGatesEliminated, fwk.UpdatePodGeneratedResourceClaim}
+	// nodeActionTypes is a list of ActionTypes that are only applicable for Node events.
+	nodeActionTypes = []fwk.ActionType{fwk.UpdateNodeAllocatable, fwk.UpdateNodeLabel, fwk.UpdateNodeTaint, fwk.UpdateNodeCondition, fwk.UpdateNodeAnnotation}
 )
-
-// GVK is short for group/version/kind, which can uniquely represent a particular API resource.
-type GVK string
 
 // Constants for GVKs.
-//
-// Note:
-// - UpdatePodXYZ or UpdateNodeXYZ: triggered by updating particular parts of a Pod or a Node, e.g. updatePodLabel.
-// Use specific events rather than general ones (updatePodLabel vs update) can make the requeueing process more efficient
-// and consume less memory as less events will be cached at scheduler.
 const (
-	// There are a couple of notes about how the scheduler notifies the events of Pods:
-	// - Add: add events could be triggered by either a newly created Pod or an existing Pod that is scheduled to a Node.
-	// - Delete: delete events could be triggered by:
-	//           - a Pod that is deleted
-	//           - a Pod that was assumed, but gets un-assumed due to some errors in the binding cycle.
-	//           - an existing Pod that was unscheduled but gets scheduled to a Node.
-	//
-	// Note that the Pod event type includes the events for the unscheduled Pod itself.
-	// i.e., when unscheduled Pods are updated, the scheduling queue checks with Pod/Update QueueingHint(s) whether the update may make the pods schedulable,
-	// and requeues them to activeQ/backoffQ when at least one QueueingHint(s) return Queue.
-	// Plugins **have to** implement a QueueingHint for Pod/Update event
-	// if the rejection from them could be resolved by updating unscheduled Pods themselves.
-	// Example: Pods that require excessive resources may be rejected by the noderesources plugin,
-	// if this unscheduled pod is updated to require fewer resources,
-	// the previous rejection from noderesources plugin can be resolved.
-	// this plugin would implement QueueingHint for Pod/Update event
-	// that returns Queue when such label changes are made in unscheduled Pods.
-	Pod GVK = "Pod"
-	// A note about NodeAdd event and UpdateNodeTaint event:
-	// NodeAdd QueueingHint isn't always called because of the internal feature called preCheck.
-	// It's definitely not something expected for plugin developers,
-	// and registering UpdateNodeTaint event is the only mitigation for now.
-	// So, kube-scheduler registers UpdateNodeTaint event for plugins that has NodeAdded event, but don't have UpdateNodeTaint event.
-	// It has a bad impact for the requeuing efficiency though, a lot better than some Pods being stuck in the
-	// unschedulable pod pool.
-	// This behavior will be removed when we remove the preCheck feature.
-	// See: https://github.com/kubernetes/kubernetes/issues/110175
-	Node                  GVK = "Node"
-	PersistentVolume      GVK = "PersistentVolume"
-	PersistentVolumeClaim GVK = "PersistentVolumeClaim"
-	CSINode               GVK = "storage.k8s.io/CSINode"
-	CSIDriver             GVK = "storage.k8s.io/CSIDriver"
-	CSIStorageCapacity    GVK = "storage.k8s.io/CSIStorageCapacity"
-	StorageClass          GVK = "storage.k8s.io/StorageClass"
-	PodSchedulingContext  GVK = "PodSchedulingContext"
-	ResourceClaim         GVK = "ResourceClaim"
-	DeviceClass           GVK = "DeviceClass"
-
-	// WildCard is a special GVK to match all resources.
-	// e.g., If you register `{Resource: "*", ActionType: All}` in EventsToRegister,
-	// all coming clusterEvents will be admitted. Be careful to register it, it will
-	// increase the computing pressure in requeueing unless you really need it.
-	//
-	// Meanwhile, if the coming clusterEvent is a wildcard one, all pods
-	// will be moved from unschedulablePod pool to activeQ/backoffQ forcibly.
-	WildCard GVK = "*"
+	// These assignedPod and unschedulablePod are internal resources that are used to represent the type of Pod.
+	// We don't expose them to the plugins deliberately because we don't publish Pod events with unschedulable Pods in the first place.
+	assignedPod      fwk.EventResource = "AssignedPod"
+	unschedulablePod fwk.EventResource = "UnschedulablePod"
 )
 
-type ClusterEventWithHint struct {
-	Event ClusterEvent
-	// QueueingHintFn is executed for the plugin rejected by this plugin when the above Event happens,
-	// and filters out events to reduce useless retry of Pod's scheduling.
-	// It's an optional field. If not set,
-	// the scheduling of Pods will be always retried with backoff when this Event happens.
-	// (the same as Queue)
-	QueueingHintFn QueueingHintFn
-}
-
-// QueueingHintFn returns a hint that signals whether the event can make a Pod,
-// which was rejected by this plugin in the past scheduling cycle, schedulable or not.
-// It's called before a Pod gets moved from unschedulableQ to backoffQ or activeQ.
-// If it returns an error, we'll take the returned QueueingHint as `Queue` at the caller whatever we returned here so that
-// we can prevent the Pod from being stuck in the unschedulable pod pool.
-//
-// - `pod`: the Pod to be enqueued, which is rejected by this plugin in the past.
-// - `oldObj` `newObj`: the object involved in that event.
-//   - For example, the given event is "Node deleted", the `oldObj` will be that deleted Node.
-//   - `oldObj` is nil if the event is add event.
-//   - `newObj` is nil if the event is delete event.
-type QueueingHintFn func(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (QueueingHint, error)
-
-type QueueingHint int
-
-const (
-	// QueueSkip implies that the cluster event has no impact on
-	// scheduling of the pod.
-	QueueSkip QueueingHint = iota
-
-	// Queue implies that the Pod may be schedulable by the event.
-	Queue
-)
-
-func (s QueueingHint) String() string {
-	switch s {
-	case QueueSkip:
-		return "QueueSkip"
-	case Queue:
-		return "Queue"
+var (
+	// allResources is a list of all resources.
+	allResources = []fwk.EventResource{
+		fwk.Pod,
+		assignedPod,
+		unschedulablePod,
+		fwk.Node,
+		fwk.PersistentVolume,
+		fwk.PersistentVolumeClaim,
+		fwk.CSINode,
+		fwk.CSIDriver,
+		fwk.CSIStorageCapacity,
+		fwk.StorageClass,
+		fwk.VolumeAttachment,
+		fwk.ResourceClaim,
+		fwk.ResourceSlice,
+		fwk.DeviceClass,
 	}
-	return ""
+)
+
+// AllClusterEventLabels returns all possible cluster event labels given to the metrics.
+func AllClusterEventLabels() []string {
+	labels := []string{UnschedulableTimeout, ForceActivate}
+	for _, r := range allResources {
+		for _, a := range basicActionTypes {
+			labels = append(labels, fwk.ClusterEvent{Resource: r, ActionType: a}.Label())
+		}
+	}
+	for _, a := range podActionTypes {
+		labels = append(labels, fwk.ClusterEvent{Resource: fwk.Pod, ActionType: a}.Label())
+	}
+	for _, a := range nodeActionTypes {
+		labels = append(labels, fwk.ClusterEvent{Resource: fwk.Node, ActionType: a}.Label())
+	}
+	return labels
 }
 
-// ClusterEvent abstracts how a system resource's state gets changed.
-// Resource represents the standard API resources such as Pod, Node, etc.
-// ActionType denotes the specific change such as Add, Update or Delete.
-type ClusterEvent struct {
-	Resource   GVK
-	ActionType ActionType
-	// Label describes this cluster event, only used in logging and metrics.
-	Label string
+// ClusterEventIsWildCard returns true if the given ClusterEvent follows WildCard semantics
+func ClusterEventIsWildCard(ce fwk.ClusterEvent) bool {
+	return ce.Resource == fwk.WildCard && ce.ActionType == fwk.All
 }
 
-// IsWildCard returns true if ClusterEvent follows WildCard semantics
-func (ce ClusterEvent) IsWildCard() bool {
-	return ce.Resource == WildCard && ce.ActionType == All
-}
-
-// Match returns true if ClusterEvent is matched with the coming event.
-// If the ce.Resource is "*", there's no requirement for the coming event' Resource.
-// Contrarily, if the coming event's Resource is "*", the ce.Resource should only be "*".
+// MatchClusterEvents returns true if ce is matched with incomingEvent.
+// "match" means that incomingEvent is the same or more specific than the ce.
+// e.g. when ce.ActionType is Update and incomingEvent.ActionType is UpdateNodeLabel, it will return true
+// because UpdateNodeLabel is more specific than Update.
+// On the other hand, when ce.ActionType is UpdateNodeLabel and incomingEvent.ActionType is Update, it returns false.
+// This is based on the fact that the scheduler interprets the incoming cluster event as specific event as possible;
+// meaning, if incomingEvent is Node/Update, it means that Node's update is not something that can be interpreted
+// as any of Node's specific Update events.
 //
-// Note: we have a special case here when the coming event is a wildcard event,
-// it will force all Pods to move to activeQ/backoffQ,
-// but we take it as an unmatched event unless the ce is also a wildcard one.
-func (ce ClusterEvent) Match(event ClusterEvent) bool {
-	return ce.IsWildCard() || (ce.Resource == WildCard || ce.Resource == event.Resource) && ce.ActionType&event.ActionType != 0
+// If the ce.Resource is "*", there's no requirement for incomingEvent.Resource.
+// Contrarily, if incomingEvent.Resource is "*", the only accepted ce.Resource is "*" (which should never
+// happen in the current implementation of the scheduling queue).
+//
+// Note: we have a special case here when incomingEvent is a wildcard event, it will force all Pods to move
+// to activeQ/backoffQ, but we take it as an unmatched event unless ce is also a wildcard event.
+func MatchClusterEvents(ce, incomingEvent fwk.ClusterEvent) bool {
+	return ClusterEventIsWildCard(ce) ||
+		matchEventResources(ce.Resource, incomingEvent.Resource) && ce.ActionType&incomingEvent.ActionType != 0 && incomingEvent.ActionType <= ce.ActionType
 }
 
-func UnrollWildCardResource() []ClusterEventWithHint {
-	return []ClusterEventWithHint{
-		{Event: ClusterEvent{Resource: Pod, ActionType: All}},
-		{Event: ClusterEvent{Resource: Node, ActionType: All}},
-		{Event: ClusterEvent{Resource: PersistentVolume, ActionType: All}},
-		{Event: ClusterEvent{Resource: PersistentVolumeClaim, ActionType: All}},
-		{Event: ClusterEvent{Resource: CSINode, ActionType: All}},
-		{Event: ClusterEvent{Resource: CSIDriver, ActionType: All}},
-		{Event: ClusterEvent{Resource: CSIStorageCapacity, ActionType: All}},
-		{Event: ClusterEvent{Resource: StorageClass, ActionType: All}},
-		{Event: ClusterEvent{Resource: PodSchedulingContext, ActionType: All}},
-		{Event: ClusterEvent{Resource: ResourceClaim, ActionType: All}},
-		{Event: ClusterEvent{Resource: DeviceClass, ActionType: All}},
+// match returns true if the resource is matched with the coming resource.
+func matchEventResources(r, resource fwk.EventResource) bool {
+	// WildCard matches all resources
+	return r == fwk.WildCard ||
+		// Exact match
+		r == resource ||
+		// Pod matches assignedPod and unschedulablePod.
+		// (assignedPod and unschedulablePod aren't exposed and hence only used for incoming events and never used in EventsToRegister)
+		r == fwk.Pod && (resource == assignedPod || resource == unschedulablePod)
+}
+
+func MatchAnyClusterEvent(ce fwk.ClusterEvent, incomingEvents []fwk.ClusterEvent) bool {
+	for _, e := range incomingEvents {
+		if MatchClusterEvents(e, ce) {
+			return true
+		}
+	}
+	return false
+}
+
+func UnrollWildCardResource() []fwk.ClusterEventWithHint {
+	return []fwk.ClusterEventWithHint{
+		{Event: fwk.ClusterEvent{Resource: fwk.Pod, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.Node, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.PersistentVolume, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.PersistentVolumeClaim, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.CSINode, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.CSIDriver, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.CSIStorageCapacity, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.StorageClass, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.ResourceClaim, ActionType: fwk.All}},
+		{Event: fwk.ClusterEvent{Resource: fwk.DeviceClass, ActionType: fwk.All}},
 	}
 }
 
@@ -230,21 +164,54 @@ type QueuedPodInfo struct {
 	*PodInfo
 	// The time pod added to the scheduling queue.
 	Timestamp time.Time
-	// Number of schedule attempts before successfully scheduled.
+	// Number of all schedule attempts before successfully scheduled.
 	// It's used to record the # attempts metric.
 	Attempts int
+	// BackoffExpiration is the time when the Pod will complete its backoff.
+	// If the SchedulerPopFromBackoffQ feature is enabled, the value is aligned to the backoff ordering window.
+	// Then, two Pods with the same BackoffExpiration (time bucket) are ordered by priority and eventually the timestamp,
+	// to make sure popping from the backoffQ considers priority of pods that are close to the expiration time.
+	BackoffExpiration time.Time
+	// The total number of the scheduling attempts that this Pod gets unschedulable.
+	// Basically it equals Attempts, but when the Pod fails with the Error status (e.g., the network error),
+	// this count won't be incremented.
+	// It's used to calculate the backoff time this Pod is obliged to get before retrying.
+	UnschedulableCount int
+	// The number of the error status that this Pod gets sequentially.
+	// This count is reset when the Pod gets another status than Error.
+	//
+	// If the error status is returned (e.g., kube-apiserver is unstable), we don't want to immediately retry the Pod and hence need a backoff retry mechanism
+	// because that might push more burden to the kube-apiserver.
+	// But, we don't want to calculate the backoff time in the same way as the normal unschedulable reason
+	// since the purpose is different; the backoff for a unschedulable status etc is for the punishment of wasting the scheduling cycles,
+	// whereas the backoff for the error status is for the protection of the kube-apiserver.
+	// That's why we need to distinguish ConsecutiveErrorsCount for the error status and UnschedulableCount for the unschedulable status.
+	// See https://github.com/kubernetes/kubernetes/issues/128744 for the discussion.
+	ConsecutiveErrorsCount int
 	// The time when the pod is added to the queue for the first time. The pod may be added
 	// back to the queue multiple times before it's successfully scheduled.
 	// It shouldn't be updated once initialized. It's used to record the e2e scheduling
 	// latency for a pod.
 	InitialAttemptTimestamp *time.Time
-	// UnschedulablePlugins records the plugin names that the Pod failed with Unschedulable or UnschedulableAndUnresolvable status.
-	// It's registered only when the Pod is rejected in PreFilter, Filter, Reserve, PreBind or Permit (WaitOnPermit).
+	// UnschedulablePlugins records the plugin names that the Pod failed with Unschedulable or UnschedulableAndUnresolvable status
+	// at specific extension points: PreFilter, Filter, Reserve, or Permit (WaitOnPermit).
+	// If Pods are rejected at other extension points,
+	// they're assumed to be unexpected errors (e.g., temporal network issue, plugin implementation issue, etc)
+	// and retried soon after a backoff period.
+	// That is because such failures could be solved regardless of incoming cluster events (registered in EventsToRegister).
 	UnschedulablePlugins sets.Set[string]
 	// PendingPlugins records the plugin names that the Pod failed with Pending status.
 	PendingPlugins sets.Set[string]
-	// Whether the Pod is scheduling gated (by PreEnqueuePlugins) or not.
-	Gated bool
+	// GatingPlugin records the plugin name that gated the Pod at PreEnqueue.
+	GatingPlugin string
+	// GatingPluginEvents records the events registered by the plugin that gated the Pod at PreEnqueue.
+	// We have it as a cache purpose to avoid re-computing which event(s) might ungate the Pod.
+	GatingPluginEvents []fwk.ClusterEvent
+}
+
+// Gated returns true if the pod is gated by any plugin.
+func (pqi *QueuedPodInfo) Gated() bool {
+	return pqi.GatingPlugin != ""
 }
 
 // DeepCopy returns a deep copy of the QueuedPodInfo object.
@@ -253,10 +220,22 @@ func (pqi *QueuedPodInfo) DeepCopy() *QueuedPodInfo {
 		PodInfo:                 pqi.PodInfo.DeepCopy(),
 		Timestamp:               pqi.Timestamp,
 		Attempts:                pqi.Attempts,
+		UnschedulableCount:      pqi.UnschedulableCount,
 		InitialAttemptTimestamp: pqi.InitialAttemptTimestamp,
 		UnschedulablePlugins:    pqi.UnschedulablePlugins.Clone(),
-		Gated:                   pqi.Gated,
+		BackoffExpiration:       pqi.BackoffExpiration,
+		GatingPlugin:            pqi.GatingPlugin,
+		GatingPluginEvents:      slices.Clone(pqi.GatingPluginEvents),
+		PendingPlugins:          pqi.PendingPlugins.Clone(),
+		ConsecutiveErrorsCount:  pqi.ConsecutiveErrorsCount,
 	}
+}
+
+// podResource contains the result of calculateResource and is used only internally.
+type podResource struct {
+	resource Resource
+	non0CPU  int64
+	non0Mem  int64
 }
 
 // PodInfo is a wrapper to a Pod with additional pre-computed information to
@@ -268,6 +247,15 @@ type PodInfo struct {
 	RequiredAntiAffinityTerms  []AffinityTerm
 	PreferredAffinityTerms     []WeightedAffinityTerm
 	PreferredAntiAffinityTerms []WeightedAffinityTerm
+	// cachedResource contains precomputed resources for Pod (podResource).
+	// The value can change only if InPlacePodVerticalScaling is enabled.
+	// In that case, the whole PodInfo object is recreated (for assigned pods in cache).
+	// cachedResource contains a podResource, computed when adding a scheduled pod to NodeInfo.
+	// When removing a pod from a NodeInfo, i.e. finding victims for preemption or removing a pod from a cluster,
+	// cachedResource is used instead, what provides a noticeable performance boost.
+	// Note: cachedResource field shouldn't be accessed directly.
+	// Use calculateResource method to obtain it instead.
+	cachedResource *podResource
 }
 
 // DeepCopy returns a deep copy of the PodInfo object.
@@ -278,6 +266,7 @@ func (pi *PodInfo) DeepCopy() *PodInfo {
 		RequiredAntiAffinityTerms:  pi.RequiredAntiAffinityTerms,
 		PreferredAffinityTerms:     pi.PreferredAffinityTerms,
 		PreferredAntiAffinityTerms: pi.PreferredAntiAffinityTerms,
+		cachedResource:             pi.cachedResource,
 	}
 }
 
@@ -326,6 +315,7 @@ func (pi *PodInfo) Update(pod *v1.Pod) error {
 	pi.RequiredAntiAffinityTerms = requiredAntiAffinityTerms
 	pi.PreferredAffinityTerms = weightedAffinityTerms
 	pi.PreferredAntiAffinityTerms = weightedAntiAffinityTerms
+	pi.cachedResource = nil
 	return utilerrors.NewAggregate(parseErrs)
 }
 
@@ -356,12 +346,10 @@ const ExtenderName = "Extender"
 
 // Diagnosis records the details to diagnose a scheduling failure.
 type Diagnosis struct {
-	// NodeToStatusMap records the status of each retriable node (status Unschedulable)
+	// NodeToStatus records the status of nodes and generic status for absent ones.
 	// if they're rejected in PreFilter (via PreFilterResult) or Filter plugins.
 	// Nodes that pass PreFilter/Filter plugins are not included in this map.
-	// While this map may contain UnschedulableAndUnresolvable statuses, the absence of
-	// a node should be interpreted as UnschedulableAndUnresolvable.
-	NodeToStatusMap NodeToStatusMap
+	NodeToStatus *NodeToStatus
 	// UnschedulablePlugins are plugins that returns Unschedulable or UnschedulableAndUnresolvable.
 	UnschedulablePlugins sets.Set[string]
 	// UnschedulablePlugins are plugins that returns Pending.
@@ -384,7 +372,7 @@ const (
 	NoNodeAvailableMsg = "0/%v nodes are available"
 )
 
-func (d *Diagnosis) AddPluginStatus(sts *Status) {
+func (d *Diagnosis) AddPluginStatus(sts *fwk.Status) {
 	if sts.Plugin() == "" {
 		return
 	}
@@ -394,7 +382,7 @@ func (d *Diagnosis) AddPluginStatus(sts *Status) {
 		}
 		d.UnschedulablePlugins.Insert(sts.Plugin())
 	}
-	if sts.Code() == Pending {
+	if sts.Code() == fwk.Pending {
 		if d.PendingPlugins == nil {
 			d.PendingPlugins = sets.New[string]()
 		}
@@ -421,9 +409,15 @@ func (f *FitError) Error() string {
 		// So, we shouldn't add the message from NodeToStatusMap when the PreFilter failed.
 		// Otherwise, we will have duplicated reasons in the error message.
 		reasons := make(map[string]int)
-		for _, status := range f.Diagnosis.NodeToStatusMap {
+		f.Diagnosis.NodeToStatus.ForEachExplicitNode(func(_ string, status *fwk.Status) {
 			for _, reason := range status.Reasons() {
 				reasons[reason]++
+			}
+		})
+		if f.Diagnosis.NodeToStatus.Len() < f.NumAllNodes {
+			// Adding predefined reasons for nodes that are absent in NodeToStatusMap
+			for _, reason := range f.Diagnosis.NodeToStatus.AbsentNodesStatus().Reasons() {
+				reasons[reason] += f.NumAllNodes - f.Diagnosis.NodeToStatus.Len()
 			}
 		}
 
@@ -821,7 +815,7 @@ func (n *NodeInfo) AddPodInfo(podInfo *PodInfo) {
 	if podWithRequiredAntiAffinity(podInfo.Pod) {
 		n.PodsWithRequiredAntiAffinity = append(n.PodsWithRequiredAntiAffinity, podInfo)
 	}
-	n.update(podInfo.Pod, 1)
+	n.update(podInfo, 1)
 }
 
 // AddPod is a wrapper around AddPodInfo.
@@ -843,27 +837,27 @@ func podWithRequiredAntiAffinity(p *v1.Pod) bool {
 		len(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 0
 }
 
-func removeFromSlice(logger klog.Logger, s []*PodInfo, k string) ([]*PodInfo, bool) {
-	var removed bool
+func removeFromSlice(logger klog.Logger, s []*PodInfo, k string) ([]*PodInfo, *PodInfo) {
+	var removedPod *PodInfo
 	for i := range s {
 		tmpKey, err := GetPodKey(s[i].Pod)
 		if err != nil {
-			logger.Error(err, "Cannot get pod key", "pod", klog.KObj(s[i].Pod))
+			utilruntime.HandleErrorWithLogger(logger, err, "Cannot get pod key", "pod", klog.KObj(s[i].Pod))
 			continue
 		}
 		if k == tmpKey {
+			removedPod = s[i]
 			// delete the element
 			s[i] = s[len(s)-1]
 			s = s[:len(s)-1]
-			removed = true
 			break
 		}
 	}
 	// resets the slices to nil so that we can do DeepEqual in unit tests.
 	if len(s) == 0 {
-		return nil, removed
+		return nil, removedPod
 	}
-	return s, removed
+	return s, removedPod
 }
 
 // RemovePod subtracts pod information from this NodeInfo.
@@ -879,83 +873,131 @@ func (n *NodeInfo) RemovePod(logger klog.Logger, pod *v1.Pod) error {
 		n.PodsWithRequiredAntiAffinity, _ = removeFromSlice(logger, n.PodsWithRequiredAntiAffinity, k)
 	}
 
-	var removed bool
-	if n.Pods, removed = removeFromSlice(logger, n.Pods, k); removed {
-		n.update(pod, -1)
+	var removedPod *PodInfo
+	if n.Pods, removedPod = removeFromSlice(logger, n.Pods, k); removedPod != nil {
+		n.update(removedPod, -1)
 		return nil
 	}
 	return fmt.Errorf("no corresponding pod %s in pods of node %s", pod.Name, n.node.Name)
 }
 
-// update node info based on the pod and sign.
+// update node info based on the pod, and sign.
 // The sign will be set to `+1` when AddPod and to `-1` when RemovePod.
-func (n *NodeInfo) update(pod *v1.Pod, sign int64) {
-	res, non0CPU, non0Mem := calculateResource(pod)
-	n.Requested.MilliCPU += sign * res.MilliCPU
-	n.Requested.Memory += sign * res.Memory
-	n.Requested.EphemeralStorage += sign * res.EphemeralStorage
-	if n.Requested.ScalarResources == nil && len(res.ScalarResources) > 0 {
+func (n *NodeInfo) update(podInfo *PodInfo, sign int64) {
+	podResource := podInfo.calculateResource()
+	n.Requested.MilliCPU += sign * podResource.resource.MilliCPU
+	n.Requested.Memory += sign * podResource.resource.Memory
+	n.Requested.EphemeralStorage += sign * podResource.resource.EphemeralStorage
+	if n.Requested.ScalarResources == nil && len(podResource.resource.ScalarResources) > 0 {
 		n.Requested.ScalarResources = map[v1.ResourceName]int64{}
 	}
-	for rName, rQuant := range res.ScalarResources {
+	for rName, rQuant := range podResource.resource.ScalarResources {
 		n.Requested.ScalarResources[rName] += sign * rQuant
 	}
-	n.NonZeroRequested.MilliCPU += sign * non0CPU
-	n.NonZeroRequested.Memory += sign * non0Mem
+	n.NonZeroRequested.MilliCPU += sign * podResource.non0CPU
+	n.NonZeroRequested.Memory += sign * podResource.non0Mem
 
 	// Consume ports when pod added or release ports when pod removed.
-	n.updateUsedPorts(pod, sign > 0)
-	n.updatePVCRefCounts(pod, sign > 0)
+	n.updateUsedPorts(podInfo.Pod, sign > 0)
+	n.updatePVCRefCounts(podInfo.Pod, sign > 0)
 
 	n.Generation = nextGeneration()
 }
 
-func calculateResource(pod *v1.Pod) (Resource, int64, int64) {
-	var non0InitCPU, non0InitMem int64
-	var non0CPU, non0Mem int64
-	requests := resourcehelper.PodRequests(pod, resourcehelper.PodResourcesOptions{
-		InPlacePodVerticalScalingEnabled: utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling),
-		ContainerFn: func(requests v1.ResourceList, containerType podutil.ContainerType) {
-			non0CPUReq, non0MemReq := schedutil.GetNonzeroRequests(&requests)
-			switch containerType {
-			case podutil.Containers:
-				non0CPU += non0CPUReq
-				non0Mem += non0MemReq
-			case podutil.InitContainers:
-				non0InitCPU = max(non0InitCPU, non0CPUReq)
-				non0InitMem = max(non0InitMem, non0MemReq)
-			}
-		},
-	})
-
-	non0CPU = max(non0CPU, non0InitCPU)
-	non0Mem = max(non0Mem, non0InitMem)
-
-	// If Overhead is being utilized, add to the non-zero cpu/memory tracking for the pod. It has already been added
-	// into ScalarResources since it is part of requests
-	if pod.Spec.Overhead != nil {
-		if _, found := pod.Spec.Overhead[v1.ResourceCPU]; found {
-			non0CPU += pod.Spec.Overhead.Cpu().MilliValue()
-		}
-
-		if _, found := pod.Spec.Overhead[v1.ResourceMemory]; found {
-			non0Mem += pod.Spec.Overhead.Memory().Value()
+// getNonMissingContainerRequests returns the default non-zero CPU and memory
+// requests for a container that the scheduler uses when container-level and
+// pod-level requests are not set for a resource. It returns a ResourceList that
+// includes these default non-zero requests, which are essential for the
+// scheduler to function correctly.
+// The method's behavior depends on whether pod-level resources are set or not:
+// 1. When the pod level resources are not set, the method returns a ResourceList
+// with the following defaults:
+//   - CPU: schedutil.DefaultMilliCPURequest
+//   - Memory: schedutil.DefaultMemoryRequest
+//
+// These defaults ensure that each container has a minimum resource request,
+// allowing the scheduler to aggregate these requests and find a suitable node
+// for the pod.
+//
+// 2. When the pod level resources are set, if a CPU or memory request is
+// missing at the container-level *and* at the pod-level, the corresponding
+// default value (schedutil.DefaultMilliCPURequest or schedutil.DefaultMemoryRequest)
+// is included in the returned ResourceList.
+// Note that these default values are not set in the Pod object itself, they are only used
+// by the scheduler during node selection.
+func getNonMissingContainerRequests(requests v1.ResourceList, podLevelResourcesSet bool) v1.ResourceList {
+	if !podLevelResourcesSet {
+		return v1.ResourceList{
+			v1.ResourceCPU:    *resource.NewMilliQuantity(schedutil.DefaultMilliCPURequest, resource.DecimalSI),
+			v1.ResourceMemory: *resource.NewQuantity(schedutil.DefaultMemoryRequest, resource.DecimalSI),
 		}
 	}
+
+	nonMissingContainerRequests := make(v1.ResourceList, 2)
+	// DefaultMilliCPURequest serves as the fallback value when both
+	// pod-level and container-level CPU requests are not set.
+	// Note that the apiserver defaulting logic will propagate a non-zero
+	// container-level CPU request to the pod level if a pod-level request
+	// is not explicitly set.
+	if _, exists := requests[v1.ResourceCPU]; !exists {
+		nonMissingContainerRequests[v1.ResourceCPU] = *resource.NewMilliQuantity(schedutil.DefaultMilliCPURequest, resource.DecimalSI)
+	}
+
+	// DefaultMemoryRequest serves as the fallback value when both
+	// pod-level and container-level CPU requests are unspecified.
+	// Note that the apiserver defaulting logic will propagate a non-zero
+	// container-level memory request to the pod level if a pod-level request
+	// is not explicitly set.
+	if _, exists := requests[v1.ResourceMemory]; !exists {
+		nonMissingContainerRequests[v1.ResourceMemory] = *resource.NewQuantity(schedutil.DefaultMemoryRequest, resource.DecimalSI)
+	}
+	return nonMissingContainerRequests
+
+}
+
+func (pi *PodInfo) calculateResource() podResource {
+	if pi.cachedResource != nil {
+		return *pi.cachedResource
+	}
+	inPlacePodVerticalScalingEnabled := utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling)
+	podLevelResourcesEnabled := utilfeature.DefaultFeatureGate.Enabled(features.PodLevelResources)
+	requests := resourcehelper.PodRequests(pi.Pod, resourcehelper.PodResourcesOptions{
+		UseStatusResources: inPlacePodVerticalScalingEnabled,
+		// SkipPodLevelResources is set to false when PodLevelResources feature is enabled.
+		SkipPodLevelResources: !podLevelResourcesEnabled,
+	})
+	isPodLevelResourcesSet := podLevelResourcesEnabled && resourcehelper.IsPodLevelRequestsSet(pi.Pod)
+	nonMissingContainerRequests := getNonMissingContainerRequests(requests, isPodLevelResourcesSet)
+	non0Requests := requests
+	if len(nonMissingContainerRequests) > 0 {
+		non0Requests = resourcehelper.PodRequests(pi.Pod, resourcehelper.PodResourcesOptions{
+			UseStatusResources: inPlacePodVerticalScalingEnabled,
+			// SkipPodLevelResources is set to false when PodLevelResources feature is enabled.
+			SkipPodLevelResources:       !podLevelResourcesEnabled,
+			NonMissingContainerRequests: nonMissingContainerRequests,
+		})
+	}
+	non0CPU := non0Requests[v1.ResourceCPU]
+	non0Mem := non0Requests[v1.ResourceMemory]
+
 	var res Resource
 	res.Add(requests)
-	return res, non0CPU, non0Mem
+	podResource := podResource{
+		resource: res,
+		non0CPU:  non0CPU.MilliValue(),
+		non0Mem:  non0Mem.Value(),
+	}
+	pi.cachedResource = &podResource
+	return podResource
 }
 
 // updateUsedPorts updates the UsedPorts of NodeInfo.
 func (n *NodeInfo) updateUsedPorts(pod *v1.Pod, add bool) {
-	for _, container := range pod.Spec.Containers {
-		for _, podPort := range container.Ports {
-			if add {
-				n.UsedPorts.Add(podPort.HostIP, string(podPort.Protocol), podPort.HostPort)
-			} else {
-				n.UsedPorts.Remove(podPort.HostIP, string(podPort.Protocol), podPort.HostPort)
-			}
+	for _, port := range schedutil.GetHostPorts(pod) {
+		if add {
+			n.UsedPorts.Add(port.HostIP, string(port.Protocol), port.HostPort)
+		} else {
+			n.UsedPorts.Remove(port.HostIP, string(port.Protocol), port.HostPort)
 		}
 	}
 }

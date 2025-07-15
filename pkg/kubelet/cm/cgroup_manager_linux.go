@@ -21,16 +21,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	libcontainercgroups "github.com/opencontainers/runc/libcontainer/cgroups"
-	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
-	"github.com/opencontainers/runc/libcontainer/cgroups/manager"
-	cgroupsystemd "github.com/opencontainers/runc/libcontainer/cgroups/systemd"
-	libcontainerconfigs "github.com/opencontainers/runc/libcontainer/configs"
+	libcontainercgroups "github.com/opencontainers/cgroups"
+	"github.com/opencontainers/cgroups/fscommon"
+	libcontainercgroupmanager "github.com/opencontainers/cgroups/manager"
+	cgroupsystemd "github.com/opencontainers/cgroups/systemd"
 	"k8s.io/klog/v2"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 
@@ -196,14 +194,14 @@ func (m *cgroupCommon) buildCgroupPaths(name CgroupName) map[string]string {
 }
 
 // libctCgroupConfig converts CgroupConfig to libcontainer's Cgroup config.
-func (m *cgroupCommon) libctCgroupConfig(in *CgroupConfig, needResources bool) *libcontainerconfigs.Cgroup {
-	config := &libcontainerconfigs.Cgroup{
+func (m *cgroupCommon) libctCgroupConfig(in *CgroupConfig, needResources bool) *libcontainercgroups.Cgroup {
+	config := &libcontainercgroups.Cgroup{
 		Systemd: m.useSystemd,
 	}
 	if needResources {
 		config.Resources = m.toResources(in.ResourceParameters)
 	} else {
-		config.Resources = &libcontainerconfigs.Resources{}
+		config.Resources = &libcontainercgroups.Resources{}
 	}
 
 	if !config.Systemd {
@@ -242,7 +240,7 @@ func (m *cgroupCommon) Destroy(cgroupConfig *CgroupConfig) error {
 	}()
 
 	libcontainerCgroupConfig := m.libctCgroupConfig(cgroupConfig, false)
-	manager, err := manager.New(libcontainerCgroupConfig)
+	manager, err := libcontainercgroupmanager.New(libcontainerCgroupConfig)
 	if err != nil {
 		return err
 	}
@@ -253,6 +251,15 @@ func (m *cgroupCommon) Destroy(cgroupConfig *CgroupConfig) error {
 	}
 
 	return nil
+}
+
+func (m *cgroupCommon) SetCgroupConfig(name CgroupName, resourceConfig *ResourceConfig) error {
+	containerConfig := &CgroupConfig{
+		Name:               name,
+		ResourceParameters: resourceConfig,
+	}
+
+	return m.Update(containerConfig)
 }
 
 // getCPUWeight converts from the range [2, 262144] to [1, 10000]
@@ -271,8 +278,8 @@ var (
 	availableRootControllers     sets.Set[string]
 )
 
-func (m *cgroupCommon) toResources(resourceConfig *ResourceConfig) *libcontainerconfigs.Resources {
-	resources := &libcontainerconfigs.Resources{
+func (m *cgroupCommon) toResources(resourceConfig *ResourceConfig) *libcontainercgroups.Resources {
+	resources := &libcontainercgroups.Resources{
 		SkipDevices:     true,
 		SkipFreezeOnSet: true,
 	}
@@ -298,6 +305,9 @@ func (m *cgroupCommon) toResources(resourceConfig *ResourceConfig) *libcontainer
 	if resourceConfig.PidsLimit != nil {
 		resources.PidsLimit = *resourceConfig.PidsLimit
 	}
+	if !resourceConfig.CPUSet.IsEmpty() {
+		resources.CpusetCpus = resourceConfig.CPUSet.String()
+	}
 
 	m.maybeSetHugetlb(resourceConfig, resources)
 
@@ -313,7 +323,7 @@ func (m *cgroupCommon) toResources(resourceConfig *ResourceConfig) *libcontainer
 	return resources
 }
 
-func (m *cgroupCommon) maybeSetHugetlb(resourceConfig *ResourceConfig, resources *libcontainerconfigs.Resources) {
+func (m *cgroupCommon) maybeSetHugetlb(resourceConfig *ResourceConfig, resources *libcontainercgroups.Resources) {
 	// Check if hugetlb is supported.
 	if libcontainercgroups.IsCgroup2UnifiedMode() {
 		if !getSupportedUnifiedControllers().Has("hugetlb") {
@@ -333,7 +343,7 @@ func (m *cgroupCommon) maybeSetHugetlb(resourceConfig *ResourceConfig, resources
 			klog.InfoS("Invalid pageSize", "err", err)
 			continue
 		}
-		resources.HugetlbLimit = append(resources.HugetlbLimit, &libcontainerconfigs.HugepageLimit{
+		resources.HugetlbLimit = append(resources.HugetlbLimit, &libcontainercgroups.HugepageLimit{
 			Pagesize: sizeString,
 			Limit:    uint64(limit),
 		})
@@ -344,7 +354,7 @@ func (m *cgroupCommon) maybeSetHugetlb(resourceConfig *ResourceConfig, resources
 		if pageSizes.Has(pageSize) {
 			continue
 		}
-		resources.HugetlbLimit = append(resources.HugetlbLimit, &libcontainerconfigs.HugepageLimit{
+		resources.HugetlbLimit = append(resources.HugetlbLimit, &libcontainercgroups.HugepageLimit{
 			Pagesize: pageSize,
 			Limit:    uint64(0),
 		})
@@ -359,7 +369,7 @@ func (m *cgroupCommon) Update(cgroupConfig *CgroupConfig) error {
 	}()
 
 	libcontainerCgroupConfig := m.libctCgroupConfig(cgroupConfig, true)
-	manager, err := manager.New(libcontainerCgroupConfig)
+	manager, err := libcontainercgroupmanager.New(libcontainerCgroupConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create cgroup manager: %v", err)
 	}
@@ -374,7 +384,7 @@ func (m *cgroupCommon) Create(cgroupConfig *CgroupConfig) error {
 	}()
 
 	libcontainerCgroupConfig := m.libctCgroupConfig(cgroupConfig, true)
-	manager, err := manager.New(libcontainerCgroupConfig)
+	manager, err := libcontainercgroupmanager.New(libcontainerCgroupConfig)
 	if err != nil {
 		return err
 	}
@@ -471,13 +481,4 @@ func readCgroupMemoryConfig(cgroupPath string, memLimitFile string) (*ResourceCo
 	//TODO(vinaykul,InPlacePodVerticalScaling): Add memory request support
 	return &ResourceConfig{Memory: &mLim}, nil
 
-}
-
-func writeCgroupMemoryLimit(memoryLimitFileLocation string, resourceConfig *ResourceConfig) error {
-	memLimit := strconv.FormatInt(*resourceConfig.Memory, 10)
-	if err := os.WriteFile(memoryLimitFileLocation, []byte(memLimit), 0700); err != nil {
-		return fmt.Errorf("failed to write %v to %v: %w", memLimit, memoryLimitFileLocation, err)
-	}
-	//TODO(vinaykul,InPlacePodVerticalScaling): Add memory request support
-	return nil
 }

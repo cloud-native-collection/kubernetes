@@ -22,9 +22,9 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/metrics"
-	"k8s.io/kubernetes/pkg/kubelet/types"
 
 	podresourcesv1 "k8s.io/kubelet/pkg/apis/podresources/v1"
 )
@@ -66,16 +66,13 @@ func (p *v1PodResourcesServer) List(ctx context.Context, req *podresourcesv1.Lis
 			Containers: make([]*podresourcesv1.ContainerResources, 0, len(pod.Spec.Containers)),
 		}
 
-		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.SidecarContainers) {
-			pRes.Containers = make([]*podresourcesv1.ContainerResources, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
-
-			for _, container := range pod.Spec.InitContainers {
-				if !types.IsRestartableInitContainer(&container) {
-					continue
-				}
-
-				pRes.Containers = append(pRes.Containers, p.getContainerResources(pod, &container))
+		pRes.Containers = make([]*podresourcesv1.ContainerResources, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
+		for _, container := range pod.Spec.InitContainers {
+			if !podutil.IsRestartableInitContainer(&container) {
+				continue
 			}
+
+			pRes.Containers = append(pRes.Containers, p.getContainerResources(pod, &container))
 		}
 
 		for _, container := range pod.Spec.Containers {
@@ -126,16 +123,13 @@ func (p *v1PodResourcesServer) Get(ctx context.Context, req *podresourcesv1.GetP
 		Containers: make([]*podresourcesv1.ContainerResources, 0, len(pod.Spec.Containers)),
 	}
 
-	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.SidecarContainers) {
-		podResources.Containers = make([]*podresourcesv1.ContainerResources, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
-
-		for _, container := range pod.Spec.InitContainers {
-			if !types.IsRestartableInitContainer(&container) {
-				continue
-			}
-
-			podResources.Containers = append(podResources.Containers, p.getContainerResources(pod, &container))
+	podResources.Containers = make([]*podresourcesv1.ContainerResources, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
+	for _, container := range pod.Spec.InitContainers {
+		if !podutil.IsRestartableInitContainer(&container) {
+			continue
 		}
+
+		podResources.Containers = append(podResources.Containers, p.getContainerResources(pod, &container))
 	}
 
 	for _, container := range pod.Spec.Containers {

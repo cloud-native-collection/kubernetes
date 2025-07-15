@@ -39,7 +39,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/core"
 	corefuzzer "k8s.io/kubernetes/pkg/apis/core/fuzzer"
 	corev1 "k8s.io/kubernetes/pkg/apis/core/v1"
-	utilpointer "k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	// ensure types are installed
 	_ "k8s.io/kubernetes/pkg/apis/core/install"
@@ -52,6 +52,8 @@ func TestPodLogOptions(t *testing.T) {
 	sinceTime := metav1.NewTime(time.Date(2000, 1, 1, 12, 34, 56, 0, time.UTC).Local())
 	tailLines := int64(2)
 	limitBytes := int64(3)
+	v1StreamStderr := v1.LogStreamStderr
+	coreStreamStderr := core.LogStreamStderr
 
 	versionedLogOptions := &v1.PodLogOptions{
 		Container:    "mycontainer",
@@ -62,6 +64,7 @@ func TestPodLogOptions(t *testing.T) {
 		Timestamps:   true,
 		TailLines:    &tailLines,
 		LimitBytes:   &limitBytes,
+		Stream:       &v1StreamStderr,
 	}
 	unversionedLogOptions := &core.PodLogOptions{
 		Container:    "mycontainer",
@@ -72,6 +75,7 @@ func TestPodLogOptions(t *testing.T) {
 		Timestamps:   true,
 		TailLines:    &tailLines,
 		LimitBytes:   &limitBytes,
+		Stream:       &coreStreamStderr,
 	}
 	expectedParameters := url.Values{
 		"container":    {"mycontainer"},
@@ -82,6 +86,7 @@ func TestPodLogOptions(t *testing.T) {
 		"timestamps":   {"true"},
 		"tailLines":    {"2"},
 		"limitBytes":   {"3"},
+		"stream":       {"Stderr"},
 	}
 
 	codec := runtime.NewParameterCodec(legacyscheme.Scheme)
@@ -247,7 +252,7 @@ func TestReplicationControllerConversion(t *testing.T) {
 				Namespace: "namespace",
 			},
 			Spec: v1.ReplicationControllerSpec{
-				Replicas:        utilpointer.Int32(1),
+				Replicas:        ptr.To[int32](1),
 				MinReadySeconds: 32,
 				Selector:        map[string]string{"foo": "bar", "bar": "foo"},
 				Template: &v1.PodTemplateSpec{
@@ -287,7 +292,7 @@ func TestReplicationControllerConversion(t *testing.T) {
 	apiObjectFuzzer := fuzzer.FuzzerFor(fuzzer.MergeFuzzerFuncs(metafuzzer.Funcs, corefuzzer.Funcs), rand.NewSource(152), legacyscheme.Codecs)
 	for i := 0; i < 100; i++ {
 		rc := &v1.ReplicationController{}
-		apiObjectFuzzer.Fuzz(rc)
+		apiObjectFuzzer.Fill(rc)
 		// Sometimes the fuzzer decides to leave Spec.Template nil.
 		// We can't support that because Spec.Template is not a pointer in RS,
 		// so it will round-trip as non-nil but empty.
@@ -721,14 +726,14 @@ func TestConvert_v1_Pod_To_core_Pod(t *testing.T) {
 			args: args{
 				in: &v1.Pod{
 					Spec: v1.PodSpec{
-						TerminationGracePeriodSeconds: utilpointer.Int64(-1),
+						TerminationGracePeriodSeconds: ptr.To[int64](-1),
 					},
 				},
 				out: &core.Pod{},
 			},
 			wantOut: &core.Pod{
 				Spec: core.PodSpec{
-					TerminationGracePeriodSeconds: utilpointer.Int64(1),
+					TerminationGracePeriodSeconds: ptr.To[int64](1),
 					SecurityContext:               &core.PodSecurityContext{},
 				},
 			},
@@ -761,14 +766,14 @@ func TestConvert_core_Pod_To_v1_Pod(t *testing.T) {
 			args: args{
 				in: &core.Pod{
 					Spec: core.PodSpec{
-						TerminationGracePeriodSeconds: utilpointer.Int64(-1),
+						TerminationGracePeriodSeconds: ptr.To[int64](-1),
 					},
 				},
 				out: &v1.Pod{},
 			},
 			wantOut: &v1.Pod{
 				Spec: v1.PodSpec{
-					TerminationGracePeriodSeconds: utilpointer.Int64(1),
+					TerminationGracePeriodSeconds: ptr.To[int64](1),
 				},
 			},
 		},

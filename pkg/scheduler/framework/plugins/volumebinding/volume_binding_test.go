@@ -27,15 +27,16 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/klog/v2/ktesting"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
+	"k8s.io/utils/ptr"
 )
 
 var (
@@ -59,6 +60,22 @@ var (
 		},
 		VolumeBindingMode: &waitForFirstConsumer,
 	}
+	waitSCWithStorageCapacity = &storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "wait-sc-with-storage-capacity",
+		},
+		Provisioner:       "driver-with-storage-capacity",
+		VolumeBindingMode: &waitForFirstConsumer,
+	}
+
+	driverWithStorageCapacity = &storagev1.CSIDriver{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "driver-with-storage-capacity",
+		},
+		Spec: storagev1.CSIDriverSpec{
+			StorageCapacity: ptr.To(true),
+		},
+	}
 
 	defaultShapePoint = []config.UtilizationShapePoint{
 		{
@@ -79,14 +96,15 @@ func TestVolumeBinding(t *testing.T) {
 		nodes                   []*v1.Node
 		pvcs                    []*v1.PersistentVolumeClaim
 		pvs                     []*v1.PersistentVolume
+		capacities              []*storagev1.CSIStorageCapacity
 		fts                     feature.Features
 		args                    *config.VolumeBindingArgs
 		wantPreFilterResult     *framework.PreFilterResult
-		wantPreFilterStatus     *framework.Status
+		wantPreFilterStatus     *fwk.Status
 		wantStateAfterPreFilter *stateData
-		wantFilterStatus        []*framework.Status
+		wantFilterStatus        []*fwk.Status
 		wantScores              []int64
-		wantPreScoreStatus      *framework.Status
+		wantPreScoreStatus      *fwk.Status
 	}{
 		{
 			name: "pod has not pvcs",
@@ -94,11 +112,11 @@ func TestVolumeBinding(t *testing.T) {
 			nodes: []*v1.Node{
 				makeNode("node-a").Node,
 			},
-			wantPreFilterStatus: framework.NewStatus(framework.Skip),
-			wantFilterStatus: []*framework.Status{
+			wantPreFilterStatus: fwk.NewStatus(fwk.Skip),
+			wantFilterStatus: []*fwk.Status{
 				nil,
 			},
-			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+			wantPreScoreStatus: fwk.NewStatus(fwk.Skip),
 		},
 		{
 			name: "all bound",
@@ -122,47 +140,10 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
+			wantFilterStatus: []*fwk.Status{
 				nil,
 			},
-			wantPreScoreStatus: framework.NewStatus(framework.Skip),
-		},
-		{
-			name: "all bound with local volumes",
-			pod:  makePod("pod-a").withPVCVolume("pvc-a", "volume-a").withPVCVolume("pvc-b", "volume-b").Pod,
-			nodes: []*v1.Node{
-				makeNode("node-a").Node,
-			},
-			pvcs: []*v1.PersistentVolumeClaim{
-				makePVC("pvc-a", waitSC.Name).withBoundPV("pv-a").PersistentVolumeClaim,
-				makePVC("pvc-b", waitSC.Name).withBoundPV("pv-b").PersistentVolumeClaim,
-			},
-			pvs: []*v1.PersistentVolume{
-				makePV("pv-a", waitSC.Name).withPhase(v1.VolumeBound).withNodeAffinity(map[string][]string{
-					v1.LabelHostname: {"node-a"},
-				}).PersistentVolume,
-				makePV("pv-b", waitSC.Name).withPhase(v1.VolumeBound).withNodeAffinity(map[string][]string{
-					v1.LabelHostname: {"node-a"},
-				}).PersistentVolume,
-			},
-			wantPreFilterResult: &framework.PreFilterResult{
-				NodeNames: sets.New("node-a"),
-			},
-			wantStateAfterPreFilter: &stateData{
-				podVolumeClaims: &PodVolumeClaims{
-					boundClaims: []*v1.PersistentVolumeClaim{
-						makePVC("pvc-a", waitSC.Name).withBoundPV("pv-a").PersistentVolumeClaim,
-						makePVC("pvc-b", waitSC.Name).withBoundPV("pv-b").PersistentVolumeClaim,
-					},
-					unboundClaimsDelayBinding:  []*v1.PersistentVolumeClaim{},
-					unboundVolumesDelayBinding: map[string][]*v1.PersistentVolume{},
-				},
-				podVolumesByNode: map[string]*PodVolumes{},
-			},
-			wantFilterStatus: []*framework.Status{
-				nil,
-			},
-			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+			wantPreScoreStatus: fwk.NewStatus(fwk.Skip),
 		},
 		{
 			name: "PVC does not exist",
@@ -171,8 +152,8 @@ func TestVolumeBinding(t *testing.T) {
 				makeNode("node-a").Node,
 			},
 			pvcs:                []*v1.PersistentVolumeClaim{},
-			wantPreFilterStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-a" not found`),
-			wantFilterStatus: []*framework.Status{
+			wantPreFilterStatus: fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-a" not found`),
+			wantFilterStatus: []*fwk.Status{
 				nil,
 			},
 			wantScores: []int64{
@@ -188,8 +169,8 @@ func TestVolumeBinding(t *testing.T) {
 			pvcs: []*v1.PersistentVolumeClaim{
 				makePVC("pvc-a", waitSC.Name).withBoundPV("pv-a").PersistentVolumeClaim,
 			},
-			wantPreFilterStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-b" not found`),
-			wantFilterStatus: []*framework.Status{
+			wantPreFilterStatus: fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-b" not found`),
+			wantFilterStatus: []*fwk.Status{
 				nil,
 			},
 			wantScores: []int64{
@@ -205,8 +186,8 @@ func TestVolumeBinding(t *testing.T) {
 			pvcs: []*v1.PersistentVolumeClaim{
 				makePVC("pvc-a", immediateSC.Name).PersistentVolumeClaim,
 			},
-			wantPreFilterStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, "pod has unbound immediate PersistentVolumeClaims"),
-			wantFilterStatus: []*framework.Status{
+			wantPreFilterStatus: fwk.NewStatus(fwk.UnschedulableAndUnresolvable, "pod has unbound immediate PersistentVolumeClaims"),
+			wantFilterStatus: []*fwk.Status{
 				nil,
 			},
 			wantScores: []int64{
@@ -232,10 +213,10 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, string(ErrReasonBindConflict)),
+			wantFilterStatus: []*fwk.Status{
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, string(ErrReasonBindConflict)),
 			},
-			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+			wantPreScoreStatus: fwk.NewStatus(fwk.Skip),
 		},
 		{
 			name: "bound and unbound unsatisfied",
@@ -270,24 +251,10 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, string(ErrReasonNodeConflict), string(ErrReasonBindConflict)),
+			wantFilterStatus: []*fwk.Status{
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, string(ErrReasonNodeConflict), string(ErrReasonBindConflict)),
 			},
-			wantPreScoreStatus: framework.NewStatus(framework.Skip),
-		},
-		{
-			name: "pvc not found",
-			pod:  makePod("pod-a").withPVCVolume("pvc-a", "").Pod,
-			nodes: []*v1.Node{
-				makeNode("node-a").Node,
-			},
-			wantPreFilterStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-a" not found`),
-			wantFilterStatus: []*framework.Status{
-				nil,
-			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: fwk.NewStatus(fwk.Skip),
 		},
 		{
 			name: "pv not found",
@@ -309,10 +276,10 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) unavailable due to one or more pvc(s) bound to non-existent pv(s)`),
+			wantFilterStatus: []*fwk.Status{
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) unavailable due to one or more pvc(s) bound to non-existent pv(s)`),
 			},
-			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+			wantPreScoreStatus: fwk.NewStatus(fwk.Skip),
 		},
 		{
 			name: "pv not found claim lost",
@@ -323,8 +290,8 @@ func TestVolumeBinding(t *testing.T) {
 			pvcs: []*v1.PersistentVolumeClaim{
 				makePVC("pvc-a", waitSC.Name).withBoundPV("pv-a").withPhase(v1.ClaimLost).PersistentVolumeClaim,
 			},
-			wantPreFilterStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-a" bound to non-existent persistentvolume "pv-a"`),
-			wantFilterStatus: []*framework.Status{
+			wantPreFilterStatus: fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-a" bound to non-existent persistentvolume "pv-a"`),
+			wantFilterStatus: []*fwk.Status{
 				nil,
 			},
 			wantScores: []int64{
@@ -361,7 +328,7 @@ func TestVolumeBinding(t *testing.T) {
 					withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-b"}}).PersistentVolume,
 			},
 			fts: feature.Features{
-				EnableVolumeCapacityPriority: true,
+				EnableStorageCapacityScoring: true,
 			},
 			wantPreFilterStatus: nil,
 			wantStateAfterPreFilter: &stateData{
@@ -393,10 +360,10 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
+			wantFilterStatus: []*fwk.Status{
 				nil,
 				nil,
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
 			},
 			wantScores: []int64{
 				25,
@@ -451,7 +418,7 @@ func TestVolumeBinding(t *testing.T) {
 					withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-b"}}).PersistentVolume,
 			},
 			fts: feature.Features{
-				EnableVolumeCapacityPriority: true,
+				EnableStorageCapacityScoring: true,
 			},
 			wantPreFilterStatus: nil,
 			wantStateAfterPreFilter: &stateData{
@@ -502,10 +469,10 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
+			wantFilterStatus: []*fwk.Status{
 				nil,
 				nil,
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
 			},
 			wantScores: []int64{
 				38,
@@ -570,7 +537,7 @@ func TestVolumeBinding(t *testing.T) {
 					}).PersistentVolume,
 			},
 			fts: feature.Features{
-				EnableVolumeCapacityPriority: true,
+				EnableStorageCapacityScoring: true,
 			},
 			wantPreFilterStatus: nil,
 			wantStateAfterPreFilter: &stateData{
@@ -614,13 +581,13 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
+			wantFilterStatus: []*fwk.Status{
 				nil,
 				nil,
 				nil,
 				nil,
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
 			},
 			wantScores: []int64{
 				25,
@@ -688,7 +655,7 @@ func TestVolumeBinding(t *testing.T) {
 					}).PersistentVolume,
 			},
 			fts: feature.Features{
-				EnableVolumeCapacityPriority: true,
+				EnableStorageCapacityScoring: true,
 			},
 			args: &config.VolumeBindingArgs{
 				BindTimeoutSeconds: 300,
@@ -750,13 +717,13 @@ func TestVolumeBinding(t *testing.T) {
 				},
 				podVolumesByNode: map[string]*PodVolumes{},
 			},
-			wantFilterStatus: []*framework.Status{
+			wantFilterStatus: []*fwk.Status{
 				nil,
 				nil,
 				nil,
 				nil,
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
-				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
+				fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `node(s) didn't find available persistent volumes to bind`),
 			},
 			wantScores: []int64{
 				15,
@@ -764,6 +731,250 @@ func TestVolumeBinding(t *testing.T) {
 				30,
 				30,
 				0,
+				0,
+			},
+		},
+		{
+			name: "storage capacity score",
+			pod:  makePod("pod-a").withPVCVolume("pvc-dynamic", "").Pod,
+			nodes: []*v1.Node{
+				makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node,
+				makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node,
+				makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node,
+			},
+			pvcs: []*v1.PersistentVolumeClaim{
+				makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+			},
+			capacities: []*storagev1.CSIStorageCapacity{
+				makeCapacity("node-a", waitSCWithStorageCapacity.Name, makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node, "100Gi", ""),
+				makeCapacity("node-b", waitSCWithStorageCapacity.Name, makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node, "50Gi", ""),
+				makeCapacity("node-c", waitSCWithStorageCapacity.Name, makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node, "10Gi", ""),
+			},
+			fts: feature.Features{
+				EnableStorageCapacityScoring: true,
+			},
+			wantPreFilterStatus: nil,
+			wantStateAfterPreFilter: &stateData{
+				podVolumeClaims: &PodVolumeClaims{
+					boundClaims: []*v1.PersistentVolumeClaim{},
+					unboundClaimsDelayBinding: []*v1.PersistentVolumeClaim{
+						makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+					},
+					unboundVolumesDelayBinding: map[string][]*v1.PersistentVolume{waitSCWithStorageCapacity.Name: {}},
+				},
+				podVolumesByNode: map[string]*PodVolumes{},
+			},
+			wantFilterStatus: []*fwk.Status{
+				nil,
+				nil,
+				nil,
+			},
+			wantScores: []int64{
+				10,
+				20,
+				100,
+			},
+		},
+		{
+			name: "storage capacity score with static binds",
+			pod:  makePod("pod-a").withPVCVolume("pvc-dynamic", "").withPVCVolume("pvc-static", "").Pod,
+			nodes: []*v1.Node{
+				makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node,
+				makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node,
+				makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node,
+			},
+			pvcs: []*v1.PersistentVolumeClaim{
+				makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+				makePVC("pvc-static", waitSC.Name).withRequestStorage(resource.MustParse("50Gi")).PersistentVolumeClaim,
+			},
+			pvs: []*v1.PersistentVolume{
+				makePV("pv-static-a", waitSC.Name).
+					withPhase(v1.VolumeAvailable).
+					withCapacity(resource.MustParse("100Gi")).
+					withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-a"}}).PersistentVolume,
+				makePV("pv-static-b", waitSC.Name).
+					withPhase(v1.VolumeAvailable).
+					withCapacity(resource.MustParse("100Gi")).
+					withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-b"}}).PersistentVolume,
+				makePV("pv-static-c", waitSC.Name).
+					withPhase(v1.VolumeAvailable).
+					withCapacity(resource.MustParse("100Gi")).
+					withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-c"}}).PersistentVolume,
+			},
+			capacities: []*storagev1.CSIStorageCapacity{
+				makeCapacity("node-a", waitSCWithStorageCapacity.Name, makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node, "100Gi", ""),
+				makeCapacity("node-b", waitSCWithStorageCapacity.Name, makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node, "50Gi", ""),
+				makeCapacity("node-c", waitSCWithStorageCapacity.Name, makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node, "10Gi", ""),
+			},
+			fts: feature.Features{
+				EnableStorageCapacityScoring: true,
+			},
+			wantPreFilterStatus: nil,
+			wantStateAfterPreFilter: &stateData{
+				podVolumeClaims: &PodVolumeClaims{
+					boundClaims: []*v1.PersistentVolumeClaim{},
+					unboundClaimsDelayBinding: []*v1.PersistentVolumeClaim{
+						makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+						makePVC("pvc-static", waitSC.Name).withRequestStorage(resource.MustParse("50Gi")).PersistentVolumeClaim,
+					},
+					unboundVolumesDelayBinding: map[string][]*v1.PersistentVolume{
+						waitSC.Name: {
+							makePV("pv-static-a", waitSC.Name).
+								withPhase(v1.VolumeAvailable).
+								withCapacity(resource.MustParse("100Gi")).
+								withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-a"}}).PersistentVolume,
+							makePV("pv-static-b", waitSC.Name).
+								withPhase(v1.VolumeAvailable).
+								withCapacity(resource.MustParse("100Gi")).
+								withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-b"}}).PersistentVolume,
+							makePV("pv-static-c", waitSC.Name).
+								withPhase(v1.VolumeAvailable).
+								withCapacity(resource.MustParse("100Gi")).
+								withNodeAffinity(map[string][]string{v1.LabelHostname: {"node-c"}}).PersistentVolume,
+						},
+						waitSCWithStorageCapacity.Name: {},
+					},
+				},
+				podVolumesByNode: map[string]*PodVolumes{},
+			},
+			wantFilterStatus: []*fwk.Status{
+				nil,
+				nil,
+				nil,
+			},
+			wantScores: []int64{
+				50,
+				50,
+				50,
+			},
+		},
+		{
+			name: "dynamic provisioning with multiple PVCs of the same StorageClass",
+			pod:  makePod("pod-a").withPVCVolume("pvc-dynamic-0", "").withPVCVolume("pvc-dynamic-1", "").Pod,
+			nodes: []*v1.Node{
+				makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node,
+			},
+			pvcs: []*v1.PersistentVolumeClaim{
+				makePVC("pvc-dynamic-0", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("50Gi")).PersistentVolumeClaim,
+				makePVC("pvc-dynamic-1", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("50Gi")).PersistentVolumeClaim,
+			},
+			capacities: []*storagev1.CSIStorageCapacity{
+				makeCapacity("node-a", waitSCWithStorageCapacity.Name, makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node, "100Gi", ""),
+			},
+			fts: feature.Features{
+				EnableStorageCapacityScoring: true,
+			},
+			wantPreFilterStatus: nil,
+			wantStateAfterPreFilter: &stateData{
+				podVolumeClaims: &PodVolumeClaims{
+					boundClaims: []*v1.PersistentVolumeClaim{},
+					unboundClaimsDelayBinding: []*v1.PersistentVolumeClaim{
+						makePVC("pvc-dynamic-0", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("50Gi")).PersistentVolumeClaim,
+						makePVC("pvc-dynamic-1", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("50Gi")).PersistentVolumeClaim,
+					},
+					unboundVolumesDelayBinding: map[string][]*v1.PersistentVolume{waitSCWithStorageCapacity.Name: {}},
+				},
+				podVolumesByNode: map[string]*PodVolumes{},
+			},
+			wantFilterStatus: []*fwk.Status{
+				nil,
+			},
+			wantScores: []int64{
+				100,
+			},
+		},
+		{
+			name: "prefer node with least allocatable",
+			pod:  makePod("pod-a").withPVCVolume("pvc-dynamic", "").Pod,
+			nodes: []*v1.Node{
+				makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node,
+				makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node,
+				makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node,
+			},
+			pvcs: []*v1.PersistentVolumeClaim{
+				makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+			},
+			capacities: []*storagev1.CSIStorageCapacity{
+				makeCapacity("node-a", waitSCWithStorageCapacity.Name, makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node, "100Gi", ""),
+				makeCapacity("node-b", waitSCWithStorageCapacity.Name, makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node, "20Gi", ""),
+				makeCapacity("node-c", waitSCWithStorageCapacity.Name, makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node, "10Gi", ""),
+			},
+			fts: feature.Features{
+				EnableStorageCapacityScoring: true,
+			},
+			wantPreFilterStatus: nil,
+			wantStateAfterPreFilter: &stateData{
+				podVolumeClaims: &PodVolumeClaims{
+					boundClaims: []*v1.PersistentVolumeClaim{},
+					unboundClaimsDelayBinding: []*v1.PersistentVolumeClaim{
+						makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+					},
+					unboundVolumesDelayBinding: map[string][]*v1.PersistentVolume{waitSCWithStorageCapacity.Name: {}},
+				},
+				podVolumesByNode: map[string]*PodVolumes{},
+			},
+			wantFilterStatus: []*fwk.Status{
+				nil,
+				nil,
+				nil,
+			},
+			wantScores: []int64{
+				10,
+				50,
+				100,
+			},
+		},
+		{
+			name: "prefer node with maximum allocatable",
+			pod:  makePod("pod-a").withPVCVolume("pvc-dynamic", "").Pod,
+			nodes: []*v1.Node{
+				makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node,
+				makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node,
+				makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node,
+			},
+			pvcs: []*v1.PersistentVolumeClaim{
+				makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+			},
+			capacities: []*storagev1.CSIStorageCapacity{
+				makeCapacity("node-a", waitSCWithStorageCapacity.Name, makeNode("node-a").withLabel(nodeLabelKey, "node-a").Node, "100Gi", ""),
+				makeCapacity("node-b", waitSCWithStorageCapacity.Name, makeNode("node-b").withLabel(nodeLabelKey, "node-b").Node, "20Gi", ""),
+				makeCapacity("node-c", waitSCWithStorageCapacity.Name, makeNode("node-c").withLabel(nodeLabelKey, "node-c").Node, "10Gi", ""),
+			},
+			fts: feature.Features{
+				EnableStorageCapacityScoring: true,
+			},
+			args: &config.VolumeBindingArgs{
+				BindTimeoutSeconds: 300,
+				Shape: []config.UtilizationShapePoint{
+					{
+						Utilization: 0,
+						Score:       int32(config.MaxCustomPriorityScore),
+					},
+					{
+						Utilization: 100,
+						Score:       0,
+					},
+				},
+			},
+			wantPreFilterStatus: nil,
+			wantStateAfterPreFilter: &stateData{
+				podVolumeClaims: &PodVolumeClaims{
+					boundClaims: []*v1.PersistentVolumeClaim{},
+					unboundClaimsDelayBinding: []*v1.PersistentVolumeClaim{
+						makePVC("pvc-dynamic", waitSCWithStorageCapacity.Name).withRequestStorage(resource.MustParse("10Gi")).PersistentVolumeClaim,
+					},
+					unboundVolumesDelayBinding: map[string][]*v1.PersistentVolume{waitSCWithStorageCapacity.Name: {}},
+				},
+				podVolumesByNode: map[string]*PodVolumes{},
+			},
+			wantFilterStatus: []*fwk.Status{
+				nil,
+				nil,
+				nil,
+			},
+			wantScores: []int64{
+				90,
+				50,
 				0,
 			},
 		},
@@ -791,7 +1002,7 @@ func TestVolumeBinding(t *testing.T) {
 				args = &config.VolumeBindingArgs{
 					BindTimeoutSeconds: 300,
 				}
-				if item.fts.EnableVolumeCapacityPriority {
+				if item.fts.EnableStorageCapacityScoring {
 					args.Shape = defaultShapePoint
 				}
 			}
@@ -802,17 +1013,50 @@ func TestVolumeBinding(t *testing.T) {
 			}
 
 			t.Log("Feed testing data and wait for them to be synced")
-			client.StorageV1().StorageClasses().Create(ctx, immediateSC, metav1.CreateOptions{})
-			client.StorageV1().StorageClasses().Create(ctx, waitSC, metav1.CreateOptions{})
-			client.StorageV1().StorageClasses().Create(ctx, waitHDDSC, metav1.CreateOptions{})
+			_, err = client.StorageV1().StorageClasses().Create(ctx, immediateSC, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.StorageV1().StorageClasses().Create(ctx, waitSC, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.StorageV1().StorageClasses().Create(ctx, waitHDDSC, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.StorageV1().StorageClasses().Create(ctx, waitSCWithStorageCapacity, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = client.StorageV1().CSIDrivers().Create(ctx, driverWithStorageCapacity, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, node := range item.nodes {
-				client.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
+				_, err = client.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			for _, pvc := range item.pvcs {
-				client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
+				_, err = client.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			for _, pv := range item.pvs {
-				client.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
+				_, err = client.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, capacity := range item.capacities {
+				_, err = client.StorageV1().CSIStorageCapacities(capacity.Namespace).Create(ctx, capacity, metav1.CreateOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			t.Log("Start informer factory after initialization")
@@ -824,16 +1068,11 @@ func TestVolumeBinding(t *testing.T) {
 			t.Log("Verify")
 
 			p := pl.(*VolumeBinding)
-			nodeInfos := make([]*framework.NodeInfo, 0)
-			for _, node := range item.nodes {
-				nodeInfo := framework.NewNodeInfo()
-				nodeInfo.SetNode(node)
-				nodeInfos = append(nodeInfos, nodeInfo)
-			}
+			nodeInfos := tf.BuildNodeInfos(item.nodes)
 			state := framework.NewCycleState()
 
 			t.Logf("Verify: call PreFilter and check status")
-			gotPreFilterResult, gotPreFilterStatus := p.PreFilter(ctx, state, item.pod)
+			gotPreFilterResult, gotPreFilterStatus := p.PreFilter(ctx, state, item.pod, nil)
 			assert.Equal(t, item.wantPreFilterStatus, gotPreFilterStatus)
 			assert.Equal(t, item.wantPreFilterResult, gotPreFilterResult)
 
@@ -869,7 +1108,7 @@ func TestVolumeBinding(t *testing.T) {
 			}
 
 			t.Logf("Verify: call PreScore and check status")
-			gotPreScoreStatus := p.PreScore(ctx, state, item.pod, tf.BuildNodeInfos(item.nodes))
+			gotPreScoreStatus := p.PreScore(ctx, state, item.pod, nodeInfos)
 			if diff := cmp.Diff(item.wantPreScoreStatus, gotPreScoreStatus); diff != "" {
 				t.Errorf("state got after prescore does not match (-want,+got):\n%s", diff)
 			}
@@ -878,13 +1117,14 @@ func TestVolumeBinding(t *testing.T) {
 			}
 
 			t.Logf("Verify: Score")
-			for i, node := range item.nodes {
-				score, status := p.Score(ctx, state, item.pod, node.Name)
+			for i, nodeInfo := range nodeInfos {
+				nodeName := nodeInfo.Node().Name
+				score, status := p.Score(ctx, state, item.pod, nodeInfo)
 				if !status.IsSuccess() {
 					t.Errorf("Score expects success status, got: %v", status)
 				}
 				if score != item.wantScores[i] {
-					t.Errorf("Score expects score %d for node %q, got: %d", item.wantScores[i], node.Name, score)
+					t.Errorf("Score expects score %d for node %q, got: %d", item.wantScores[i], nodeName, score)
 				}
 			}
 		})
@@ -897,14 +1137,14 @@ func TestIsSchedulableAfterCSINodeChange(t *testing.T) {
 		oldObj interface{}
 		newObj interface{}
 		err    bool
-		expect framework.QueueingHint
+		expect fwk.QueueingHint
 	}{
 		{
 			name:   "unexpected objects are passed",
 			oldObj: new(struct{}),
 			newObj: new(struct{}),
 			err:    true,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 		{
 			name: "CSINode is newly created",
@@ -915,7 +1155,7 @@ func TestIsSchedulableAfterCSINodeChange(t *testing.T) {
 			},
 			oldObj: nil,
 			err:    false,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 		{
 			name: "CSINode's migrated-plugins annotations is added",
@@ -936,7 +1176,7 @@ func TestIsSchedulableAfterCSINodeChange(t *testing.T) {
 				},
 			},
 			err:    false,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 		{
 			name: "CSINode's migrated-plugins annotation is updated",
@@ -957,7 +1197,7 @@ func TestIsSchedulableAfterCSINodeChange(t *testing.T) {
 				},
 			},
 			err:    false,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 		{
 			name: "CSINode is updated but migrated-plugins annotation gets unchanged",
@@ -978,7 +1218,7 @@ func TestIsSchedulableAfterCSINodeChange(t *testing.T) {
 				},
 			},
 			err:    false,
-			expect: framework.QueueSkip,
+			expect: fwk.QueueSkip,
 		},
 	}
 	for _, item := range table {
@@ -1004,7 +1244,7 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 		oldPVC  interface{}
 		newPVC  interface{}
 		wantErr bool
-		expect  framework.QueueingHint
+		expect  fwk.QueueingHint
 	}{
 		{
 			name:    "pod has no pvc or ephemeral volumes",
@@ -1012,7 +1252,7 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 			oldPVC:  makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
 			newPVC:  makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "pvc with the same name as the one used by the pod in a different namespace is modified",
@@ -1024,7 +1264,7 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 			oldPVC:  nil,
 			newPVC:  makePVC("pvc-b", "").PersistentVolumeClaim,
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "pod has no pvc that is being modified",
@@ -1035,7 +1275,7 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 			oldPVC:  makePVC("pvc-b", "").PersistentVolumeClaim,
 			newPVC:  makePVC("pvc-b", "").PersistentVolumeClaim,
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "pod has no generic ephemeral volume that is being modified",
@@ -1046,7 +1286,7 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 			oldPVC:  makePVC("pod-a-ephemeral-b", "").PersistentVolumeClaim,
 			newPVC:  makePVC("pod-a-ephemeral-b", "").PersistentVolumeClaim,
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "pod has the pvc that is being modified",
@@ -1057,7 +1297,7 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 			oldPVC:  makePVC("pvc-b", "").PersistentVolumeClaim,
 			newPVC:  makePVC("pvc-b", "").PersistentVolumeClaim,
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "pod has the generic ephemeral volume that is being modified",
@@ -1068,14 +1308,14 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 			oldPVC:  makePVC("pod-a-ephemeral-b", "").PersistentVolumeClaim,
 			newPVC:  makePVC("pod-a-ephemeral-b", "").PersistentVolumeClaim,
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name:    "type conversion error",
 			oldPVC:  new(struct{}),
 			newPVC:  new(struct{}),
 			wantErr: true,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 	}
 
@@ -1102,7 +1342,7 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 		newSC     interface{}
 		pvcLister tf.PersistentVolumeClaimLister
 		err       bool
-		expect    framework.QueueingHint
+		expect    fwk.QueueingHint
 	}{
 		{
 			name:  "When a new StorageClass is created, it returns Queue",
@@ -1114,7 +1354,7 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 				},
 			},
 			err:    false,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 		{
 			name: "When the AllowedTopologies are changed, it returns Queue",
@@ -1140,7 +1380,7 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 				},
 			},
 			err:    false,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 		{
 			name: "When there are no changes to the StorageClass, it returns QueueSkip",
@@ -1156,14 +1396,14 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 				},
 			},
 			err:    false,
-			expect: framework.QueueSkip,
+			expect: fwk.QueueSkip,
 		},
 		{
 			name:   "type conversion error",
 			oldSC:  new(struct{}),
 			newSC:  new(struct{}),
 			err:    true,
-			expect: framework.Queue,
+			expect: fwk.Queue,
 		},
 	}
 
@@ -1189,7 +1429,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 		oldCap  interface{}
 		newCap  interface{}
 		wantErr bool
-		expect  framework.QueueingHint
+		expect  fwk.QueueingHint
 	}{
 		{
 			name:   "When a new CSIStorageCapacity is created, it returns Queue",
@@ -1201,7 +1441,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				},
 			},
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "When the volume limit is increase(Capacity set), it returns Queue",
@@ -1218,7 +1458,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				Capacity: resource.NewQuantity(100, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "When the volume limit is increase(MaximumVolumeSize set), it returns Queue",
@@ -1235,7 +1475,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				MaximumVolumeSize: resource.NewQuantity(100, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "When the volume limit is increase(Capacity increase), it returns Queue",
@@ -1253,7 +1493,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				Capacity: resource.NewQuantity(100, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "When the volume limit is increase(MaximumVolumeSize unset), it returns Queue",
@@ -1272,7 +1512,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				Capacity: resource.NewQuantity(100, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "When the volume limit is increase(MaximumVolumeSize increase), it returns Queue",
@@ -1292,7 +1532,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				MaximumVolumeSize: resource.NewQuantity(60, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 		{
 			name: "When there are no changes to the CSIStorageCapacity, it returns QueueSkip",
@@ -1312,7 +1552,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				MaximumVolumeSize: resource.NewQuantity(50, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "When the volume limit is equal(Capacity), it returns QueueSkip",
@@ -1330,7 +1570,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				Capacity: resource.NewQuantity(100, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "When the volume limit is equal(MaximumVolumeSize unset), it returns QueueSkip",
@@ -1349,7 +1589,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				Capacity: resource.NewQuantity(50, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "When the volume limit is decrease(Capacity), it returns QueueSkip",
@@ -1367,7 +1607,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				Capacity: resource.NewQuantity(90, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name: "When the volume limit is decrease(MaximumVolumeSize), it returns QueueSkip",
@@ -1385,14 +1625,14 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				MaximumVolumeSize: resource.NewQuantity(90, resource.DecimalSI),
 			},
 			wantErr: false,
-			expect:  framework.QueueSkip,
+			expect:  fwk.QueueSkip,
 		},
 		{
 			name:    "type conversion error",
 			oldCap:  new(struct{}),
 			newCap:  new(struct{}),
 			wantErr: true,
-			expect:  framework.Queue,
+			expect:  fwk.Queue,
 		},
 	}
 
@@ -1403,6 +1643,191 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			qhint, err := pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, item.oldCap, item.newCap)
 			if (err != nil) != item.wantErr {
 				t.Errorf("error is unexpectedly returned or not returned from isSchedulableAfterCSIStorageCapacityChange. wantErr: %v actual error: %q", item.wantErr, err)
+			}
+			if qhint != item.expect {
+				t.Errorf("QHint does not match: %v, want: %v", qhint, item.expect)
+			}
+		})
+	}
+}
+
+func TestIsSchedulableAfterCSIDriverChange(t *testing.T) {
+	table := []struct {
+		name   string
+		pod    *v1.Pod
+		newObj interface{}
+		oldObj interface{}
+		err    bool
+		expect fwk.QueueingHint
+	}{
+		{
+			name: "pod has no CSIDriver",
+			pod:  makePod("pod-a").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(true),
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+			},
+			err:    false,
+			expect: fwk.QueueSkip,
+		},
+		{
+			name:   "unexpected objects are passed",
+			pod:    makePod("pod-a").Pod,
+			newObj: new(struct{}),
+			oldObj: new(struct{}),
+			err:    true,
+			expect: fwk.Queue,
+		},
+		{
+			name: "driver name in pod and csidriver name are different",
+			pod:  makePod("pod-a").withCSI("test1").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test2",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(false),
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test2",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(true),
+				},
+			},
+			err:    false,
+			expect: fwk.QueueSkip,
+		},
+		{
+			name: "original StorageCapacity is nil",
+			pod:  makePod("pod-a").withCSI("test1").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: nil,
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: nil,
+				},
+			},
+			err:    false,
+			expect: fwk.QueueSkip,
+		},
+		{
+			name: "original StorageCapacity is false",
+			pod:  makePod("pod-a").withCSI("test1").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(false),
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(false),
+				},
+			},
+			err:    false,
+			expect: fwk.QueueSkip,
+		},
+		{
+			name: "modified StorageCapacity is nil",
+			pod:  makePod("pod-a").withCSI("test1").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: nil,
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(true),
+				},
+			},
+			err:    false,
+			expect: fwk.Queue,
+		},
+		{
+			name: "modified StorageCapacity is true",
+			pod:  makePod("pod-a").withCSI("test1").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(true),
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(true),
+				},
+			},
+			err:    false,
+			expect: fwk.QueueSkip,
+		},
+
+		{
+			name: "modified StorageCapacity is false",
+			pod:  makePod("pod-a").withCSI("test1").Pod,
+			newObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(false),
+				},
+			},
+			oldObj: &storagev1.CSIDriver{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test1",
+				},
+				Spec: storagev1.CSIDriverSpec{
+					StorageCapacity: ptr.To(true),
+				},
+			},
+			err:    false,
+			expect: fwk.Queue,
+		},
+	}
+	for _, item := range table {
+		t.Run(item.name, func(t *testing.T) {
+			pl := &VolumeBinding{}
+			logger, _ := ktesting.NewTestContext(t)
+			qhint, err := pl.isSchedulableAfterCSIDriverChange(logger, item.pod, item.oldObj, item.newObj)
+			if (err != nil) != item.err {
+				t.Errorf("isSchedulableAfterCSINodeChange failed - got: %q", err)
 			}
 			if qhint != item.expect {
 				t.Errorf("QHint does not match: %v, want: %v", qhint, item.expect)

@@ -21,11 +21,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg/errors"
-
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
+
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/errors"
 )
 
 // ArgumentsToCommand takes two Arg slices, one with the base arguments and one
@@ -65,7 +65,9 @@ func ArgumentsToCommand(base []kubeadmapi.Arg, overrides []kubeadmapi.Arg) []str
 	return command
 }
 
-// ArgumentsFromCommand parses a CLI command in the form "--foo=bar" to an Arg slice
+// ArgumentsFromCommand parses a CLI command in the form "--foo=bar" to an Arg slice.
+// This function's primary purpose is to parse the kubeadm-flags.env file, but can remain unused
+// for some releases.
 func ArgumentsFromCommand(command []string) []kubeadmapi.Arg {
 	args := []kubeadmapi.Arg{}
 	for i, arg := range command {

@@ -23,18 +23,24 @@ import (
 	"io"
 	"strings"
 
-	"github.com/google/go-cmp/cmp"
 	v1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/diff"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/admission"
 	apiserveradmission "k8s.io/apiserver/pkg/admission/initializer"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/client-go/informers"
 	corev1lister "k8s.io/client-go/listers/core/v1"
+	storagelisters "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/component-base/featuregate"
+	"k8s.io/component-helpers/storage/ephemeral"
+	csitrans "k8s.io/csi-translation-lib"
+	"k8s.io/klog/v2"
 	kubeletapis "k8s.io/kubelet/pkg/apis"
 	podutil "k8s.io/kubernetes/pkg/api/pod"
 	authenticationapi "k8s.io/kubernetes/pkg/apis/authentication"
@@ -43,7 +49,7 @@ import (
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/apis/resource"
-	storage "k8s.io/kubernetes/pkg/apis/storage"
+	"k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/auth/nodeidentifier"
 	"k8s.io/kubernetes/pkg/features"
 )
@@ -70,19 +76,27 @@ func NewPlugin(nodeIdentifier nodeidentifier.NodeIdentifier) *Plugin {
 // Plugin holds state for and implements the admission plugin.
 type Plugin struct {
 	*admission.Handler
-	nodeIdentifier nodeidentifier.NodeIdentifier
-	podsGetter     corev1lister.PodLister
-	nodesGetter    corev1lister.NodeLister
+	nodeIdentifier  nodeidentifier.NodeIdentifier
+	podsGetter      corev1lister.PodLister
+	nodesGetter     corev1lister.NodeLister
+	csiDriverGetter storagelisters.CSIDriverLister
+	pvcGetter       corev1lister.PersistentVolumeClaimLister
+	pvGetter        corev1lister.PersistentVolumeLister
+	csiTranslator   csitrans.CSITranslator
+
+	authz authorizer.Authorizer
 
 	expansionRecoveryEnabled                       bool
 	dynamicResourceAllocationEnabled               bool
 	allowInsecureKubeletCertificateSigningRequests bool
+	serviceAccountNodeAudienceRestriction          bool
 }
 
 var (
 	_ admission.Interface                                 = &Plugin{}
 	_ apiserveradmission.WantsExternalKubeInformerFactory = &Plugin{}
 	_ apiserveradmission.WantsFeatures                    = &Plugin{}
+	_ apiserveradmission.WantsAuthorizer                  = &Plugin{}
 )
 
 // InspectFeatureGates allows setting bools without taking a dep on a global variable
@@ -90,12 +104,19 @@ func (p *Plugin) InspectFeatureGates(featureGates featuregate.FeatureGate) {
 	p.expansionRecoveryEnabled = featureGates.Enabled(features.RecoverVolumeExpansionFailure)
 	p.dynamicResourceAllocationEnabled = featureGates.Enabled(features.DynamicResourceAllocation)
 	p.allowInsecureKubeletCertificateSigningRequests = featureGates.Enabled(features.AllowInsecureKubeletCertificateSigningRequests)
+	p.serviceAccountNodeAudienceRestriction = featureGates.Enabled(features.ServiceAccountNodeAudienceRestriction)
 }
 
 // SetExternalKubeInformerFactory registers an informer factory into Plugin
 func (p *Plugin) SetExternalKubeInformerFactory(f informers.SharedInformerFactory) {
 	p.podsGetter = f.Core().V1().Pods().Lister()
 	p.nodesGetter = f.Core().V1().Nodes().Lister()
+	if p.serviceAccountNodeAudienceRestriction {
+		p.csiDriverGetter = f.Storage().V1().CSIDrivers().Lister()
+		p.pvcGetter = f.Core().V1().PersistentVolumeClaims().Lister()
+		p.pvGetter = f.Core().V1().PersistentVolumes().Lister()
+		p.csiTranslator = csitrans.New()
+	}
 }
 
 // ValidateInitialization validates the Plugin was initialized properly
@@ -109,7 +130,28 @@ func (p *Plugin) ValidateInitialization() error {
 	if p.nodesGetter == nil {
 		return fmt.Errorf("%s requires a node getter", PluginName)
 	}
+	if p.serviceAccountNodeAudienceRestriction {
+		if p.csiDriverGetter == nil {
+			return fmt.Errorf("%s requires a CSI driver getter", PluginName)
+		}
+		if p.pvcGetter == nil {
+			return fmt.Errorf("%s requires a PVC getter", PluginName)
+		}
+		if p.pvGetter == nil {
+			return fmt.Errorf("%s requires a PV getter", PluginName)
+		}
+		if p.authz == nil {
+			return fmt.Errorf("%s requires an authorizer", PluginName)
+		}
+	}
 	return nil
+}
+
+// SetAuthorizer sets the authorizer.
+func (p *Plugin) SetAuthorizer(authz authorizer.Authorizer) {
+	if p.serviceAccountNodeAudienceRestriction {
+		p.authz = authz
+	}
 }
 
 var (
@@ -164,7 +206,7 @@ func (p *Plugin) Admit(ctx context.Context, a admission.Attributes, o admission.
 		}
 
 	case svcacctResource:
-		return p.admitServiceAccount(nodeName, a)
+		return p.admitServiceAccount(ctx, nodeName, a)
 
 	case leaseResource:
 		return p.admitLease(nodeName, a)
@@ -262,34 +304,12 @@ func (p *Plugin) admitPodCreate(nodeName string, a admission.Attributes) error {
 	}
 
 	// don't allow a node to create a pod that references any other API objects
-	if pod.Spec.ServiceAccountName != "" {
-		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference a service account", nodeName))
+	isPodReferencingAPIObjects, resource, err := podutil.HasAPIObjectReference(pod)
+	if err != nil {
+		return admission.NewForbidden(a, fmt.Errorf("error checking mirror pod for API references: %w", err))
 	}
-	hasSecrets := false
-	podutil.VisitPodSecretNames(pod, func(name string) (shouldContinue bool) { hasSecrets = true; return false }, podutil.AllContainers)
-	if hasSecrets {
-		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference secrets", nodeName))
-	}
-	hasConfigMaps := false
-	podutil.VisitPodConfigmapNames(pod, func(name string) (shouldContinue bool) { hasConfigMaps = true; return false }, podutil.AllContainers)
-	if hasConfigMaps {
-		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference configmaps", nodeName))
-	}
-
-	for _, vol := range pod.Spec.Volumes {
-		if vol.VolumeSource.Projected != nil {
-			for _, src := range vol.VolumeSource.Projected.Sources {
-				if src.ClusterTrustBundle != nil {
-					return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference clustertrustbundles", nodeName))
-				}
-			}
-		}
-	}
-
-	for _, v := range pod.Spec.Volumes {
-		if v.PersistentVolumeClaim != nil {
-			return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference persistentvolumeclaims", nodeName))
-		}
+	if isPodReferencingAPIObjects {
+		return admission.NewForbidden(a, fmt.Errorf("node %q can not create pods that reference %s", nodeName, resource))
 	}
 
 	return nil
@@ -429,7 +449,7 @@ func (p *Plugin) admitPVCStatus(nodeName string, a admission.Attributes) error {
 
 		// ensure no metadata changed. nodes should not be able to relabel, add finalizers/owners, etc
 		if !apiequality.Semantic.DeepEqual(oldPVC, newPVC) {
-			return admission.NewForbidden(a, fmt.Errorf("node %q is not allowed to update fields other than status.quantity and status.conditions: %v", nodeName, cmp.Diff(oldPVC, newPVC)))
+			return admission.NewForbidden(a, fmt.Errorf("node %q is not allowed to update fields other than status.quantity and status.conditions: %v", nodeName, diff.Diff(oldPVC, newPVC)))
 		}
 
 		return nil
@@ -556,7 +576,7 @@ func (p *Plugin) getForbiddenLabels(modifiedLabels sets.String) sets.String {
 	return forbiddenLabels
 }
 
-func (p *Plugin) admitServiceAccount(nodeName string, a admission.Attributes) error {
+func (p *Plugin) admitServiceAccount(ctx context.Context, nodeName string, a admission.Attributes) error {
 	if a.GetOperation() != admission.Create {
 		return nil
 	}
@@ -594,6 +614,12 @@ func (p *Plugin) admitServiceAccount(nodeName string, a admission.Attributes) er
 		return admission.NewForbidden(a, fmt.Errorf("node requested token bound to a pod scheduled on a different node"))
 	}
 
+	if p.serviceAccountNodeAudienceRestriction {
+		if err := p.validateNodeServiceAccountAudience(ctx, tr, pod, a); err != nil {
+			return admission.NewForbidden(a, err)
+		}
+	}
+
 	// Note: A token may only be bound to one object at a time. By requiring
 	// the Pod binding, noderestriction eliminates the opportunity to spoof
 	// a Node binding. Instead, kube-apiserver automatically infers and sets
@@ -601,6 +627,150 @@ func (p *Plugin) admitServiceAccount(nodeName string, a admission.Attributes) er
 	// https://github.com/kubernetes/kubernetes/issues/121723 for more info.
 
 	return nil
+}
+
+func (p *Plugin) validateNodeServiceAccountAudience(ctx context.Context, tr *authenticationapi.TokenRequest, pod *v1.Pod, a admission.Attributes) error {
+	// ensure all items in tr.Spec.Audiences are present in a volume mount in the pod
+	requestedAudience := ""
+	switch len(tr.Spec.Audiences) {
+	case 0:
+		requestedAudience = ""
+	case 1:
+		requestedAudience = tr.Spec.Audiences[0]
+	default:
+		return fmt.Errorf("node may only request 0 or 1 audiences")
+	}
+
+	foundAudiencesInPodSpec, err := p.podReferencesAudience(ctx, pod, requestedAudience)
+	if err != nil {
+		return fmt.Errorf("error validating audience %q: %w", requestedAudience, err)
+	}
+	if foundAudiencesInPodSpec {
+		return nil
+	}
+
+	userInfo := a.GetUserInfo()
+	attrs := authorizer.AttributesRecord{
+		User:            userInfo, // this is the user info of the node requesting the token
+		Verb:            "request-serviceaccounts-token-audience",
+		Namespace:       a.GetNamespace(),
+		APIGroup:        "",
+		APIVersion:      "v1",
+		Resource:        requestedAudience, // this gives us the audience for which node is requesting a token for; wildcard will allow all audiences
+		Name:            a.GetName(),       // this gives us the service account name for which node is requesting a token for; if not set, default will allow all service accounts
+		ResourceRequest: true,
+	}
+
+	authorized, _, err := p.authz.Authorize(ctx, attrs)
+	// an authorizer like RBAC could encounter evaluation errors and still allow the request, so authorizer decision is checked before error here.
+	// following the same pattern as withAuthorization (ref: https://github.com/kubernetes/kubernetes/blob/2b025e645975d6d51bf38c008f972c632cf49657/staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go#L71-L91)
+	if authorized == authorizer.DecisionAllow {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("audience %q not found in pod spec volume, error authorizing %s to request tokens for this audience: %w", requestedAudience, userInfo.GetName(), err)
+	}
+
+	return fmt.Errorf("audience %q not found in pod spec volume, %s is not authorized to request tokens for this audience", requestedAudience, userInfo.GetName())
+}
+
+func (p *Plugin) podReferencesAudience(ctx context.Context, pod *v1.Pod, audience string) (bool, error) {
+	var errs []error
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Projected != nil {
+			for _, src := range v.Projected.Sources {
+				if src.ServiceAccountToken != nil && src.ServiceAccountToken.Audience == audience {
+					return true, nil
+				}
+			}
+		}
+
+		// also allow audiences for CSI token requests
+		// - pod --> ephemeral --> pvc --> pv --> csi --> driver --> tokenrequest with audience
+		// - pod --> pvc --> pv --> csi --> driver --> tokenrequest with audience
+		// - pod --> csi --> driver --> tokenrequest with audience
+		var driverName string
+		var err error
+		switch {
+		case v.Ephemeral != nil && v.Ephemeral.VolumeClaimTemplate != nil:
+			pvcName := ephemeral.VolumeClaimName(pod, &v)
+			driverName, err = p.getCSIFromPVC(ctx, pod.Namespace, pvcName)
+		case v.PersistentVolumeClaim != nil:
+			driverName, err = p.getCSIFromPVC(ctx, pod.Namespace, v.PersistentVolumeClaim.ClaimName)
+		case v.CSI != nil:
+			driverName = v.CSI.Driver
+		case p.csiTranslator.IsInlineMigratable(&v):
+			pv, translateErr := p.csiTranslator.TranslateInTreeInlineVolumeToCSI(klog.FromContext(ctx), &v, pod.Namespace)
+			if translateErr != nil {
+				err = translateErr
+				break
+			}
+			if pv != nil && pv.Spec.CSI != nil {
+				driverName = pv.Spec.CSI.Driver
+			}
+		}
+
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		if len(driverName) > 0 {
+			hasAudience, hasAudienceErr := p.csiDriverHasAudience(driverName, audience)
+			if hasAudienceErr != nil {
+				errs = append(errs, hasAudienceErr)
+				continue
+			}
+			if hasAudience {
+				return true, nil
+			}
+		}
+	}
+
+	return false, utilerrors.NewAggregate(errs)
+}
+
+// getCSIFromPVC returns the CSI driver name from the PVC->PV->CSI->Driver chain
+func (p *Plugin) getCSIFromPVC(ctx context.Context, namespace, claimName string) (string, error) {
+	pvc, err := p.pvcGetter.PersistentVolumeClaims(namespace).Get(claimName)
+	if err != nil {
+		return "", err
+	}
+	pv, err := p.pvGetter.Get(pvc.Spec.VolumeName)
+	if err != nil {
+		return "", err
+	}
+	if pv.Spec.CSI != nil {
+		return pv.Spec.CSI.Driver, nil
+	}
+
+	if p.csiTranslator.IsPVMigratable(pv) {
+		// For in-tree PV, we need to convert ("translate") the PV to CSI before checking the driver name.
+		translatedPV, err := p.csiTranslator.TranslateInTreePVToCSI(klog.FromContext(ctx), pv)
+		if err != nil {
+			return "", err
+		}
+		if translatedPV != nil && translatedPV.Spec.CSI != nil {
+			return translatedPV.Spec.CSI.Driver, nil
+		}
+	}
+
+	return "", nil
+}
+
+func (p *Plugin) csiDriverHasAudience(driverName, audience string) (bool, error) {
+	driver, err := p.csiDriverGetter.Get(driverName)
+	if err != nil {
+		return false, err
+	}
+
+	for _, tokenRequest := range driver.Spec.TokenRequests {
+		if tokenRequest.Audience == audience {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (p *Plugin) admitLease(nodeName string, a admission.Attributes) error {
@@ -663,7 +833,7 @@ func (p *Plugin) admitResourceSlice(nodeName string, a admission.Attributes) err
 			return admission.NewForbidden(a, fmt.Errorf("unexpected type %T", a.GetObject()))
 		}
 
-		if slice.Spec.NodeName != nodeName {
+		if slice.Spec.NodeName == nil || *slice.Spec.NodeName != nodeName {
 			return admission.NewForbidden(a, errors.New("can only create ResourceSlice with the same NodeName as the requesting node"))
 		}
 	case admission.Delete:
@@ -672,7 +842,7 @@ func (p *Plugin) admitResourceSlice(nodeName string, a admission.Attributes) err
 			return admission.NewForbidden(a, fmt.Errorf("unexpected type %T", a.GetOldObject()))
 		}
 
-		if slice.Spec.NodeName != nodeName {
+		if slice.Spec.NodeName == nil || *slice.Spec.NodeName != nodeName {
 			return admission.NewForbidden(a, errors.New("can only delete ResourceSlice with the same NodeName as the requesting node"))
 		}
 	}

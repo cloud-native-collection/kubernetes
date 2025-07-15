@@ -32,15 +32,16 @@ import (
 	"google.golang.org/grpc"
 
 	v1 "k8s.io/api/core/v1"
-	resourceapi "k8s.io/api/resource/v1alpha3"
+	resourceapi "k8s.io/api/resource/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/dynamic-resource-allocation/resourceclaim"
-	drapb "k8s.io/kubelet/pkg/apis/dra/v1alpha4"
-	"k8s.io/kubernetes/pkg/kubelet/cm/dra/plugin"
+	"k8s.io/klog/v2"
+	drapb "k8s.io/kubelet/pkg/apis/dra/v1beta1"
 	"k8s.io/kubernetes/pkg/kubelet/cm/dra/state"
+	"k8s.io/kubernetes/test/utils/ktesting"
 )
 
 const (
@@ -50,7 +51,7 @@ const (
 )
 
 type fakeDRADriverGRPCServer struct {
-	drapb.UnimplementedNodeServer
+	drapb.UnimplementedDRAPluginServer
 	driverName                 string
 	timeout                    *time.Duration
 	prepareResourceCalls       atomic.Uint32
@@ -117,7 +118,7 @@ type fakeDRAServerInfo struct {
 	teardownFn tearDown
 }
 
-func setupFakeDRADriverGRPCServer(shouldTimeout bool, pluginClientTimeout *time.Duration, prepareResourcesResponse *drapb.NodePrepareResourcesResponse, unprepareResourcesResponse *drapb.NodeUnprepareResourcesResponse) (fakeDRAServerInfo, error) {
+func setupFakeDRADriverGRPCServer(ctx context.Context, shouldTimeout bool, pluginClientTimeout *time.Duration, prepareResourcesResponse *drapb.NodePrepareResourcesResponse, unprepareResourcesResponse *drapb.NodeUnprepareResourcesResponse) (fakeDRAServerInfo, error) {
 	socketDir, err := os.MkdirTemp("", "dra")
 	if err != nil {
 		return fakeDRAServerInfo{
@@ -132,7 +133,10 @@ func setupFakeDRADriverGRPCServer(shouldTimeout bool, pluginClientTimeout *time.
 
 	teardown := func() {
 		close(stopCh)
-		os.RemoveAll(socketName)
+		if err := os.Remove(socketName); err != nil {
+			logger := klog.FromContext(ctx)
+			logger.Error(err, "failed to remove socket file", "path", socketName)
+		}
 	}
 
 	l, err := net.Listen("unix", socketName)
@@ -156,13 +160,18 @@ func setupFakeDRADriverGRPCServer(shouldTimeout bool, pluginClientTimeout *time.
 		fakeDRADriverGRPCServer.timeout = &timeout
 	}
 
-	drapb.RegisterNodeServer(s, fakeDRADriverGRPCServer)
+	drapb.RegisterDRAPluginServer(s, fakeDRADriverGRPCServer)
 
-	go func() {
-		go s.Serve(l)
+	go func(ctx context.Context) {
+		go func() {
+			if err := s.Serve(l); err != nil {
+				logger := klog.FromContext(ctx)
+				logger.Error(err, "failed to serve gRPC")
+			}
+		}()
 		<-stopCh
 		s.GracefulStop()
-	}()
+	}(ctx)
 
 	return fakeDRAServerInfo{
 		server:     fakeDRADriverGRPCServer,
@@ -189,13 +198,14 @@ func TestNewManagerImpl(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			manager, err := NewManagerImpl(kubeClient, test.stateFileDirectory, "worker")
+			tCtx := ktesting.Init(t)
+			manager, err := NewManager(tCtx.Logger(), kubeClient, test.stateFileDirectory)
 			if test.wantErr {
 				assert.Error(t, err)
 				return
 			}
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.NotNil(t, manager.cache)
 			assert.NotNil(t, manager.kubeClient)
 		})
@@ -272,7 +282,7 @@ func genTestClaim(name, driver, device, podUID string) *resourceapi.ResourceClai
 }
 
 // genTestClaimInfo generates claim info object
-func genTestClaimInfo(podUIDs []string, prepared bool) *ClaimInfo {
+func genTestClaimInfo(claimUID types.UID, podUIDs []string, prepared bool) *ClaimInfo {
 	return &ClaimInfo{
 		ClaimInfoState: state.ClaimInfoState{
 			ClaimUID:  claimUID,
@@ -334,7 +344,7 @@ func TestGetResources(t *testing.T) {
 				},
 			},
 			pod:       genTestPod(),
-			claimInfo: genTestClaimInfo(nil, false),
+			claimInfo: genTestClaimInfo(claimUID, nil, false),
 		},
 		{
 			description: "nil claiminfo",
@@ -353,8 +363,9 @@ func TestGetResources(t *testing.T) {
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			manager, err := NewManagerImpl(kubeClient, t.TempDir(), "worker")
-			assert.NoError(t, err)
+			tCtx := ktesting.Init(t)
+			manager, err := NewManager(tCtx.Logger(), kubeClient, t.TempDir())
+			require.NoError(t, err)
 
 			if test.claimInfo != nil {
 				manager.cache.add(test.claimInfo)
@@ -378,6 +389,7 @@ func getFakeNode() (*v1.Node, error) {
 func TestPrepareResources(t *testing.T) {
 	claimName := claimName
 	fakeKubeClient := fake.NewSimpleClientset()
+	anotherClaimUID := types.UID("another-claim-uid")
 
 	for _, test := range []struct {
 		description         string
@@ -397,13 +409,13 @@ func TestPrepareResources(t *testing.T) {
 			description:    "claim doesn't exist",
 			driverName:     driverName,
 			pod:            genTestPod(),
-			expectedErrMsg: "failed to fetch ResourceClaim ",
+			expectedErrMsg: "fetch ResourceClaim ",
 		},
 		{
 			description:    "unknown driver",
 			pod:            genTestPod(),
-			claim:          genTestClaim(claimName, "unknown driver", deviceName, podUID),
-			expectedErrMsg: "plugin name unknown driver not found in the list of registered DRA plugins",
+			claim:          genTestClaim(claimName, "unknown.driver", deviceName, podUID),
+			expectedErrMsg: "DRA driver unknown.driver is not registered",
 		},
 		{
 			description:            "should prepare resources, driver returns nil value",
@@ -421,14 +433,14 @@ func TestPrepareResources(t *testing.T) {
 			claim:                genTestClaim(claimName, driverName, deviceName, podUID),
 			resp:                 &drapb.NodePrepareResourcesResponse{Claims: map[string]*drapb.NodePrepareResourceResponse{}},
 			expectedPrepareCalls: 1,
-			expectedErrMsg:       "NodePrepareResources left out 1 claims",
+			expectedErrMsg:       "NodePrepareResources skipped 1 ResourceClaims",
 		},
 		{
 			description:    "pod is not allowed to use resource claim",
 			driverName:     driverName,
 			pod:            genTestPod(),
 			claim:          genTestClaim(claimName, driverName, deviceName, ""),
-			expectedErrMsg: "is not allowed to use resource claim ",
+			expectedErrMsg: "is not allowed to use ResourceClaim ",
 		},
 		{
 			description: "no container uses the claim",
@@ -472,7 +484,7 @@ func TestPrepareResources(t *testing.T) {
 			driverName:             driverName,
 			pod:                    genTestPod(),
 			claim:                  genTestClaim(claimName, driverName, deviceName, podUID),
-			claimInfo:              genTestClaimInfo([]string{podUID}, true),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, true),
 			expectedClaimInfoState: genClaimInfoState(cdiID),
 			resp: &drapb.NodePrepareResourcesResponse{Claims: map[string]*drapb.NodePrepareResourceResponse{
 				string(claimUID): {
@@ -494,7 +506,7 @@ func TestPrepareResources(t *testing.T) {
 			claim:                genTestClaim(claimName, driverName, deviceName, podUID),
 			wantTimeout:          true,
 			expectedPrepareCalls: 1,
-			expectedErrMsg:       "NodePrepareResources failed: rpc error: code = DeadlineExceeded desc = context deadline exceeded",
+			expectedErrMsg:       "NodePrepareResources: rpc error: code = DeadlineExceeded",
 		},
 		{
 			description:            "should prepare resource, claim not in cache",
@@ -521,7 +533,7 @@ func TestPrepareResources(t *testing.T) {
 			driverName:             driverName,
 			pod:                    genTestPod(),
 			claim:                  genTestClaim(claimName, driverName, deviceName, podUID),
-			claimInfo:              genTestClaimInfo([]string{podUID}, true),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, true),
 			expectedClaimInfoState: genClaimInfoState(cdiID),
 			resp: &drapb.NodePrepareResourcesResponse{Claims: map[string]*drapb.NodePrepareResourceResponse{
 				string(claimUID): {
@@ -536,24 +548,28 @@ func TestPrepareResources(t *testing.T) {
 				},
 			}},
 		},
+		{
+			description:    "claim UIDs mismatch",
+			driverName:     driverName,
+			pod:            genTestPod(),
+			claim:          genTestClaim(claimName, driverName, deviceName, podUID),
+			claimInfo:      genTestClaimInfo(anotherClaimUID, []string{podUID}, false),
+			expectedErrMsg: fmt.Sprintf("old ResourceClaim with same name %s and different UID %s still exists", claimName, anotherClaimUID),
+		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(t.TempDir(), draManagerStateFileName)
-			if err != nil {
-				t.Fatalf("failed to newClaimInfoCache, err:%v", err)
-			}
+			tCtx := ktesting.Init(t)
 
-			manager := &ManagerImpl{
-				kubeClient: fakeKubeClient,
-				cache:      cache,
-			}
+			manager, err := NewManager(tCtx.Logger(), fakeKubeClient, t.TempDir())
+			require.NoError(t, err, "create DRA manager")
+			manager.initDRAPluginManager(tCtx, getFakeNode, time.Second /* very short wiping delay for testing */)
 
 			if test.claim != nil {
-				if _, err := fakeKubeClient.ResourceV1alpha3().ResourceClaims(test.pod.Namespace).Create(context.Background(), test.claim, metav1.CreateOptions{}); err != nil {
+				if _, err := fakeKubeClient.ResourceV1beta1().ResourceClaims(test.pod.Namespace).Create(tCtx, test.claim, metav1.CreateOptions{}); err != nil {
 					t.Fatalf("failed to create ResourceClaim %s: %+v", test.claim.Name, err)
 				}
 				defer func() {
-					require.NoError(t, fakeKubeClient.ResourceV1alpha3().ResourceClaims(test.pod.Namespace).Delete(context.Background(), test.claim.Name, metav1.DeleteOptions{}))
+					require.NoError(t, fakeKubeClient.ResourceV1beta1().ResourceClaims(test.pod.Namespace).Delete(tCtx, test.claim.Name, metav1.DeleteOptions{}))
 				}()
 			}
 
@@ -563,35 +579,33 @@ func TestPrepareResources(t *testing.T) {
 				pluginClientTimeout = &timeout
 			}
 
-			draServerInfo, err := setupFakeDRADriverGRPCServer(test.wantTimeout, pluginClientTimeout, test.resp, nil)
+			draServerInfo, err := setupFakeDRADriverGRPCServer(tCtx, test.wantTimeout, pluginClientTimeout, test.resp, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer draServerInfo.teardownFn()
-
-			plg := plugin.NewRegistrationHandler(nil, getFakeNode)
-			if err := plg.RegisterPlugin(test.driverName, draServerInfo.socketName, []string{"1.27"}, pluginClientTimeout); err != nil {
+			plg := manager.GetWatcherHandler()
+			if err := plg.RegisterPlugin(test.driverName, draServerInfo.socketName, []string{drapb.DRAPluginService}, pluginClientTimeout); err != nil {
 				t.Fatalf("failed to register plugin %s, err: %v", test.driverName, err)
 			}
-			defer plg.DeRegisterPlugin(test.driverName) // for sake of next tests
 
 			if test.claimInfo != nil {
 				manager.cache.add(test.claimInfo)
 			}
 
-			err = manager.PrepareResources(test.pod)
+			err = manager.PrepareResources(tCtx, test.pod)
 
 			assert.Equal(t, test.expectedPrepareCalls, draServerInfo.server.prepareResourceCalls.Load())
 
 			if test.expectedErrMsg != "" {
 				assert.Error(t, err)
 				if err != nil {
-					assert.Contains(t, err.Error(), test.expectedErrMsg)
+					assert.ErrorContains(t, err, test.expectedErrMsg)
 				}
 				return // PrepareResources returned an error so stopping the test case here
 			}
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			if test.wantResourceSkipped {
 				return // resource skipped so no need to continue
@@ -634,40 +648,40 @@ func TestUnprepareResources(t *testing.T) {
 			description:    "unknown driver",
 			pod:            genTestPod(),
 			claim:          genTestClaim(claimName, "unknown driver", deviceName, podUID),
-			claimInfo:      genTestClaimInfo([]string{podUID}, true),
-			expectedErrMsg: "plugin name test-driver not found in the list of registered DRA plugins",
+			claimInfo:      genTestClaimInfo(claimUID, []string{podUID}, true),
+			expectedErrMsg: "DRA driver test-driver is not registered",
 		},
 		{
 			description:         "resource claim referenced by other pod(s)",
 			driverName:          driverName,
 			pod:                 genTestPod(),
-			claimInfo:           genTestClaimInfo([]string{podUID, "another-pod-uid"}, true),
+			claimInfo:           genTestClaimInfo(claimUID, []string{podUID, "another-pod-uid"}, true),
 			wantResourceSkipped: true,
 		},
 		{
 			description:            "should timeout",
 			driverName:             driverName,
 			pod:                    genTestPod(),
-			claimInfo:              genTestClaimInfo([]string{podUID}, true),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, true),
 			wantTimeout:            true,
 			expectedUnprepareCalls: 1,
-			expectedErrMsg:         "context deadline exceeded",
+			expectedErrMsg:         "NodeUnprepareResources: rpc error: code = DeadlineExceeded",
 		},
 		{
 			description:            "should fail when driver returns empty response",
 			driverName:             driverName,
 			pod:                    genTestPod(),
-			claimInfo:              genTestClaimInfo([]string{podUID}, true),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, true),
 			resp:                   &drapb.NodeUnprepareResourcesResponse{Claims: map[string]*drapb.NodeUnprepareResourceResponse{}},
 			expectedUnprepareCalls: 1,
-			expectedErrMsg:         "NodeUnprepareResources left out 1 claims",
+			expectedErrMsg:         "NodeUnprepareResources skipped 1 ResourceClaims",
 		},
 		{
 			description:            "should unprepare resource",
 			driverName:             driverName,
 			pod:                    genTestPod(),
 			claim:                  genTestClaim(claimName, driverName, deviceName, podUID),
-			claimInfo:              genTestClaimInfo([]string{podUID}, false),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, false),
 			expectedUnprepareCalls: 1,
 		},
 		{
@@ -675,23 +689,20 @@ func TestUnprepareResources(t *testing.T) {
 			driverName:             driverName,
 			pod:                    genTestPod(),
 			claim:                  genTestClaim(claimName, driverName, deviceName, podUID),
-			claimInfo:              genTestClaimInfo([]string{podUID}, true),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, true),
 			expectedUnprepareCalls: 1,
 		},
 		{
 			description:            "should unprepare resource when driver returns nil value",
 			driverName:             driverName,
 			pod:                    genTestPod(),
-			claimInfo:              genTestClaimInfo([]string{podUID}, true),
+			claimInfo:              genTestClaimInfo(claimUID, []string{podUID}, true),
 			resp:                   &drapb.NodeUnprepareResourcesResponse{Claims: map[string]*drapb.NodeUnprepareResourceResponse{string(claimUID): nil}},
 			expectedUnprepareCalls: 1,
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(t.TempDir(), draManagerStateFileName)
-			if err != nil {
-				t.Fatalf("failed to create a new instance of the claimInfoCache, err: %v", err)
-			}
+			tCtx := ktesting.Init(t)
 
 			var pluginClientTimeout *time.Duration
 			if test.wantTimeout {
@@ -699,40 +710,38 @@ func TestUnprepareResources(t *testing.T) {
 				pluginClientTimeout = &timeout
 			}
 
-			draServerInfo, err := setupFakeDRADriverGRPCServer(test.wantTimeout, pluginClientTimeout, nil, test.resp)
+			draServerInfo, err := setupFakeDRADriverGRPCServer(tCtx, test.wantTimeout, pluginClientTimeout, nil, test.resp)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer draServerInfo.teardownFn()
 
-			plg := plugin.NewRegistrationHandler(nil, getFakeNode)
-			if err := plg.RegisterPlugin(test.driverName, draServerInfo.socketName, []string{"1.27"}, pluginClientTimeout); err != nil {
-				t.Fatalf("failed to register plugin %s, err: %v", test.driverName, err)
-			}
-			defer plg.DeRegisterPlugin(test.driverName) // for sake of next tests
+			manager, err := NewManager(tCtx.Logger(), fakeKubeClient, t.TempDir())
+			require.NoError(t, err, "create DRA manager")
+			manager.initDRAPluginManager(tCtx, getFakeNode, time.Second /* very short wiping delay for testing */)
 
-			manager := &ManagerImpl{
-				kubeClient: fakeKubeClient,
-				cache:      cache,
+			plg := manager.GetWatcherHandler()
+			if err := plg.RegisterPlugin(test.driverName, draServerInfo.socketName, []string{drapb.DRAPluginService}, pluginClientTimeout); err != nil {
+				t.Fatalf("failed to register plugin %s, err: %v", test.driverName, err)
 			}
 
 			if test.claimInfo != nil {
 				manager.cache.add(test.claimInfo)
 			}
 
-			err = manager.UnprepareResources(test.pod)
+			err = manager.UnprepareResources(tCtx, test.pod)
 
 			assert.Equal(t, test.expectedUnprepareCalls, draServerInfo.server.unprepareResourceCalls.Load())
 
 			if test.expectedErrMsg != "" {
 				assert.Error(t, err)
 				if err != nil {
-					assert.Contains(t, err.Error(), test.expectedErrMsg)
+					assert.ErrorContains(t, err, test.expectedErrMsg)
 				}
 				return // PrepareResources returned an error so stopping the test case here
 			}
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			if test.wantResourceSkipped {
 				return // resource skipped so no need to continue
@@ -751,17 +760,10 @@ func TestUnprepareResources(t *testing.T) {
 }
 
 func TestPodMightNeedToUnprepareResources(t *testing.T) {
+	tCtx := ktesting.Init(t)
 	fakeKubeClient := fake.NewSimpleClientset()
-
-	cache, err := newClaimInfoCache(t.TempDir(), draManagerStateFileName)
-	if err != nil {
-		t.Fatalf("failed to newClaimInfoCache, err:%v", err)
-	}
-
-	manager := &ManagerImpl{
-		kubeClient: fakeKubeClient,
-		cache:      cache,
-	}
+	manager, err := NewManager(tCtx.Logger(), fakeKubeClient, t.TempDir())
+	require.NoError(t, err, "create DRA manager")
 
 	claimInfo := &ClaimInfo{
 		ClaimInfoState: state.ClaimInfoState{PodUIDs: sets.New(podUID), ClaimName: claimName, Namespace: namespace},
@@ -788,13 +790,13 @@ func TestGetContainerClaimInfos(t *testing.T) {
 			description:       "should get claim info",
 			expectedClaimName: claimName,
 			pod:               genTestPod(),
-			claimInfo:         genTestClaimInfo([]string{podUID}, false),
+			claimInfo:         genTestClaimInfo(claimUID, []string{podUID}, false),
 		},
 		{
 			description:    "should fail when claim info not found",
 			pod:            genTestPod(),
 			claimInfo:      &ClaimInfo{},
-			expectedErrMsg: "unable to get claim info for claim ",
+			expectedErrMsg: "unable to get information for ResourceClaim ",
 		},
 		{
 			description: "should fail when none of the supported fields are set",
@@ -824,23 +826,19 @@ func TestGetContainerClaimInfos(t *testing.T) {
 					},
 				},
 			},
-			claimInfo:      genTestClaimInfo([]string{podUID}, false),
+			claimInfo:      genTestClaimInfo(claimUID, []string{podUID}, false),
 			expectedErrMsg: "none of the supported fields are set",
 		},
 		{
 			description:    "should fail when claim info is not cached",
 			pod:            genTestPod(),
-			expectedErrMsg: "unable to get claim info for claim ",
+			expectedErrMsg: "unable to get information for ResourceClaim ",
 		},
 	} {
 		t.Run(test.description, func(t *testing.T) {
-			cache, err := newClaimInfoCache(t.TempDir(), draManagerStateFileName)
-			if err != nil {
-				t.Fatalf("error occur:%v", err)
-			}
-			manager := &ManagerImpl{
-				cache: cache,
-			}
+			tCtx := ktesting.Init(t)
+			manager, err := NewManager(tCtx.Logger(), nil, t.TempDir())
+			require.NoError(t, err, "create DRA manager")
 
 			if test.claimInfo != nil {
 				manager.cache.add(test.claimInfo)
@@ -851,12 +849,12 @@ func TestGetContainerClaimInfos(t *testing.T) {
 			if test.expectedErrMsg != "" {
 				assert.Error(t, err)
 				if err != nil {
-					assert.Contains(t, err.Error(), test.expectedErrMsg)
+					assert.ErrorContains(t, err, test.expectedErrMsg)
 				}
 				return
 			}
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Len(t, claimInfos, 1)
 			assert.Equal(t, test.expectedClaimName, claimInfos[0].ClaimInfoState.ClaimName)
 		})
@@ -866,29 +864,25 @@ func TestGetContainerClaimInfos(t *testing.T) {
 // TestParallelPrepareUnprepareResources calls PrepareResources and UnprepareResources APIs in parallel
 // to detect possible data races
 func TestParallelPrepareUnprepareResources(t *testing.T) {
+	tCtx := ktesting.Init(t)
+
 	// Setup and register fake DRA driver
-	draServerInfo, err := setupFakeDRADriverGRPCServer(false, nil, nil, nil)
+	draServerInfo, err := setupFakeDRADriverGRPCServer(tCtx, false, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer draServerInfo.teardownFn()
 
-	plg := plugin.NewRegistrationHandler(nil, getFakeNode)
-	if err := plg.RegisterPlugin(driverName, draServerInfo.socketName, []string{"1.27"}, nil); err != nil {
-		t.Fatalf("failed to register plugin %s, err: %v", driverName, err)
-	}
-	defer plg.DeRegisterPlugin(driverName)
-
-	// Create ClaimInfo cache
-	cache, err := newClaimInfoCache(t.TempDir(), draManagerStateFileName)
-	if err != nil {
-		t.Errorf("failed to newClaimInfoCache, err: %+v", err)
-		return
-	}
-
 	// Create fake Kube client and DRA manager
 	fakeKubeClient := fake.NewSimpleClientset()
-	manager := &ManagerImpl{kubeClient: fakeKubeClient, cache: cache}
+	manager, err := NewManager(tCtx.Logger(), fakeKubeClient, t.TempDir())
+	require.NoError(t, err, "create DRA manager")
+	manager.initDRAPluginManager(tCtx, getFakeNode, time.Second /* very short wiping delay for testing */)
+
+	plg := manager.GetWatcherHandler()
+	if err := plg.RegisterPlugin(driverName, draServerInfo.socketName, []string{drapb.DRAPluginService}, nil); err != nil {
+		t.Fatalf("failed to register plugin %s, err: %v", driverName, err)
+	}
 
 	// Call PrepareResources in parallel
 	var wgSync, wgStart sync.WaitGroup // groups to sync goroutines
@@ -934,17 +928,17 @@ func TestParallelPrepareUnprepareResources(t *testing.T) {
 			}
 			claim := genTestClaim(claimName, driverName, deviceName, string(podUID))
 
-			if _, err = fakeKubeClient.ResourceV1alpha3().ResourceClaims(pod.Namespace).Create(context.Background(), claim, metav1.CreateOptions{}); err != nil {
+			if _, err = fakeKubeClient.ResourceV1beta1().ResourceClaims(pod.Namespace).Create(tCtx, claim, metav1.CreateOptions{}); err != nil {
 				t.Errorf("failed to create ResourceClaim %s: %+v", claim.Name, err)
 				return
 			}
 
-			if err = manager.PrepareResources(pod); err != nil {
+			if err = manager.PrepareResources(tCtx, pod); err != nil {
 				t.Errorf("pod: %s: PrepareResources failed: %+v", pod.Name, err)
 				return
 			}
 
-			if err = manager.UnprepareResources(pod); err != nil {
+			if err = manager.UnprepareResources(tCtx, pod); err != nil {
 				t.Errorf("pod: %s: UnprepareResources failed: %+v", pod.Name, err)
 				return
 			}

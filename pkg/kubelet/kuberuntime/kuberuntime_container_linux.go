@@ -29,22 +29,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/cgroups"
 	cadvisorv1 "github.com/google/cadvisor/info/v1"
-	libcontainercgroups "github.com/opencontainers/runc/libcontainer/cgroups"
+	libcontainercgroups "github.com/opencontainers/cgroups"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	resourcehelper "k8s.io/component-helpers/resource"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/klog/v2"
+
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	kubeapiqos "k8s.io/kubernetes/pkg/apis/core/v1/helper/qos"
 	kubefeatures "k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/cm"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
-	kubelettypes "k8s.io/kubernetes/pkg/kubelet/types"
+	"k8s.io/kubernetes/pkg/kubelet/types"
+	"k8s.io/utils/ptr"
 )
 
 var defaultPageSize = int64(os.Getpagesize())
@@ -93,6 +95,34 @@ func (m *kubeGenericRuntimeManager) generateLinuxContainerConfig(container *v1.C
 	return lc, nil
 }
 
+// getCPULimit returns the memory limit for the container to be used to calculate
+// Linux Container Resources.
+func getCPULimit(pod *v1.Pod, container *v1.Container) *resource.Quantity {
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.PodLevelResources) && resourcehelper.IsPodLevelResourcesSet(pod) {
+		// When container-level CPU limit is not set, the pod-level
+		// limit is used in the calculation for components relying on linux resource limits
+		// to be set.
+		if container.Resources.Limits.Cpu().IsZero() {
+			return pod.Spec.Resources.Limits.Cpu()
+		}
+	}
+	return container.Resources.Limits.Cpu()
+}
+
+// getMemoryLimit returns the memory limit for the container to be used to calculate
+// Linux Container Resources.
+func getMemoryLimit(pod *v1.Pod, container *v1.Container) *resource.Quantity {
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.PodLevelResources) && resourcehelper.IsPodLevelResourcesSet(pod) {
+		// When container-level memory limit is not set, the pod-level
+		// limit is used in the calculation for components relying on linux resource limits
+		// to be set.
+		if container.Resources.Limits.Memory().IsZero() {
+			return pod.Spec.Resources.Limits.Memory()
+		}
+	}
+	return container.Resources.Limits.Memory()
+}
+
 // generateLinuxContainerResources generates linux container resources config for runtime
 func (m *kubeGenericRuntimeManager) generateLinuxContainerResources(pod *v1.Pod, container *v1.Container, enforceMemoryQoS bool) *runtimeapi.LinuxContainerResources {
 	// set linux container resources
@@ -100,7 +130,15 @@ func (m *kubeGenericRuntimeManager) generateLinuxContainerResources(pod *v1.Pod,
 	if _, cpuRequestExists := container.Resources.Requests[v1.ResourceCPU]; cpuRequestExists {
 		cpuRequest = container.Resources.Requests.Cpu()
 	}
-	lcr := m.calculateLinuxResources(cpuRequest, container.Resources.Limits.Cpu(), container.Resources.Limits.Memory())
+
+	memoryLimit := getMemoryLimit(pod, container)
+	cpuLimit := getCPULimit(pod, container)
+
+	// If pod has exclusive cpu and the container in question has integer cpu requests
+	// the cfs quota will not be enforced
+	disableCPUQuota := utilfeature.DefaultFeatureGate.Enabled(kubefeatures.DisableCPUQuotaWithExclusiveCPUs) && m.containerManager.ContainerHasExclusiveCPUs(pod, container)
+	klog.V(5).InfoS("Enforcing CFS quota", "pod", klog.KObj(pod), "unlimited", disableCPUQuota)
+	lcr := m.calculateLinuxResources(cpuRequest, cpuLimit, memoryLimit, disableCPUQuota)
 
 	lcr.OomScoreAdj = int64(qos.GetContainerOOMScoreAdjust(pod, container,
 		int64(m.machineInfo.MemoryCapacity)))
@@ -168,33 +206,43 @@ func (m *kubeGenericRuntimeManager) configureContainerSwapResources(lcr *runtime
 	}
 
 	swapConfigurationHelper := newSwapConfigurationHelper(*m.machineInfo)
-	if m.memorySwapBehavior == kubelettypes.LimitedSwap {
-		if !isCgroup2UnifiedMode() {
-			swapConfigurationHelper.ConfigureNoSwap(lcr)
-			return
-		}
-	}
-
-	if !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) {
-		swapConfigurationHelper.ConfigureNoSwap(lcr)
-		return
-	}
-
-	if kubelettypes.IsCriticalPod(pod) {
-		swapConfigurationHelper.ConfigureNoSwap(lcr)
-		return
-	}
-
 	// NOTE(ehashman): Behavior is defined in the opencontainers runtime spec:
 	// https://github.com/opencontainers/runtime-spec/blob/1c3f411f041711bbeecf35ff7e93461ea6789220/config-linux.md#memory
-	switch m.memorySwapBehavior {
-	case kubelettypes.NoSwap:
+	switch m.GetContainerSwapBehavior(pod, container) {
+	case types.NoSwap:
 		swapConfigurationHelper.ConfigureNoSwap(lcr)
-	case kubelettypes.LimitedSwap:
+	case types.LimitedSwap:
 		swapConfigurationHelper.ConfigureLimitedSwap(lcr, pod, container)
 	default:
 		swapConfigurationHelper.ConfigureNoSwap(lcr)
 	}
+}
+
+// GetContainerSwapBehavior checks what swap behavior should be configured for a container,
+// considering the requirements for enabling swap.
+func (m *kubeGenericRuntimeManager) GetContainerSwapBehavior(pod *v1.Pod, container *v1.Container) types.SwapBehavior {
+	c := types.SwapBehavior(m.memorySwapBehavior)
+	if c == types.LimitedSwap {
+		if !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.NodeSwap) || !swapControllerAvailable() {
+			return types.NoSwap
+		}
+
+		if !isCgroup2UnifiedMode() {
+			return types.NoSwap
+		}
+
+		if types.IsCriticalPod(pod) {
+			return types.NoSwap
+		}
+		podQos := kubeapiqos.GetPodQOS(pod)
+		containerDoesNotRequestMemory := container.Resources.Requests.Memory().IsZero() && container.Resources.Limits.Memory().IsZero()
+		memoryRequestEqualsToLimit := container.Resources.Requests.Memory().Cmp(*container.Resources.Limits.Memory()) == 0
+		if podQos != v1.PodQOSBurstable || containerDoesNotRequestMemory || memoryRequestEqualsToLimit {
+			return types.NoSwap
+		}
+		return c
+	}
+	return types.NoSwap
 }
 
 // generateContainerResources generates platform specific (linux) container resources config for runtime
@@ -210,8 +258,19 @@ func (m *kubeGenericRuntimeManager) generateContainerResources(pod *v1.Pod, cont
 	}
 }
 
+// generateUpdatePodSandboxResourcesRequest generates platform specific (linux) podsandox resources config for runtime
+func (m *kubeGenericRuntimeManager) generateUpdatePodSandboxResourcesRequest(sandboxID string, pod *v1.Pod, podResources *cm.ResourceConfig) *runtimeapi.UpdatePodSandboxResourcesRequest {
+
+	podResourcesWithoutOverhead := subtractOverheadFromResourceConfig(podResources, pod)
+	return &runtimeapi.UpdatePodSandboxResourcesRequest{
+		PodSandboxId: sandboxID,
+		Overhead:     m.convertOverheadToLinuxResources(pod),
+		Resources:    convertResourceConfigToLinuxContainerResources(podResourcesWithoutOverhead),
+	}
+}
+
 // calculateLinuxResources will create the linuxContainerResources type based on the provided CPU and memory resource requests, limits
-func (m *kubeGenericRuntimeManager) calculateLinuxResources(cpuRequest, cpuLimit, memoryLimit *resource.Quantity) *runtimeapi.LinuxContainerResources {
+func (m *kubeGenericRuntimeManager) calculateLinuxResources(cpuRequest, cpuLimit, memoryLimit *resource.Quantity, disableCPUQuota bool) *runtimeapi.LinuxContainerResources {
 	resources := runtimeapi.LinuxContainerResources{}
 	var cpuShares int64
 
@@ -235,19 +294,22 @@ func (m *kubeGenericRuntimeManager) calculateLinuxResources(cpuRequest, cpuLimit
 	if m.cpuCFSQuota {
 		// if cpuLimit.Amount is nil, then the appropriate default value is returned
 		// to allow full usage of cpu resource.
-		cpuPeriod := int64(quotaPeriod)
+		cpuPeriod := int64(cm.QuotaPeriod)
 		if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.CPUCFSQuotaPeriod) {
 			// kubeGenericRuntimeManager.cpuCFSQuotaPeriod is provided in time.Duration,
 			// but we need to convert it to number of microseconds which is used by kernel.
 			cpuPeriod = int64(m.cpuCFSQuotaPeriod.Duration / time.Microsecond)
 		}
-		cpuQuota := milliCPUToQuota(cpuLimit.MilliValue(), cpuPeriod)
+		cpuQuota := cm.MilliCPUToQuota(cpuLimit.MilliValue(), cpuPeriod)
 		resources.CpuQuota = cpuQuota
+		if disableCPUQuota {
+			resources.CpuQuota = int64(-1)
+		}
 		resources.CpuPeriod = cpuPeriod
 	}
 
 	// runc requires cgroupv2 for unified mode
-	if isCgroup2UnifiedMode() {
+	if isCgroup2UnifiedMode() && !ptr.Deref(m.singleProcessOOMKill, true) {
 		resources.Unified = map[string]string{
 			// Ask the kernel to kill all processes in the container cgroup in case of OOM.
 			// See memory.oom.group in https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html for
@@ -337,38 +399,35 @@ var isCgroup2UnifiedMode = func() bool {
 	return libcontainercgroups.IsCgroup2UnifiedMode()
 }
 
-var (
-	swapControllerAvailability     bool
-	swapControllerAvailabilityOnce sync.Once
-)
-
 // Note: this function variable is being added here so it would be possible to mock
 // the swap controller availability for unit tests by assigning a new function to it. Without it,
 // the swap controller availability would solely depend on the environment running the test.
-var swapControllerAvailable = func() bool {
+var swapControllerAvailable = sync.OnceValue(func() bool {
 	// See https://github.com/containerd/containerd/pull/7838/
-	swapControllerAvailabilityOnce.Do(func() {
-		const warn = "Failed to detect the availability of the swap controller, assuming not available"
-		p := "/sys/fs/cgroup/memory/memory.memsw.limit_in_bytes"
-		if isCgroup2UnifiedMode() {
-			// memory.swap.max does not exist in the cgroup root, so we check /sys/fs/cgroup/<SELF>/memory.swap.max
-			_, unified, err := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
-			if err != nil {
-				klog.V(5).ErrorS(fmt.Errorf("failed to parse /proc/self/cgroup: %w", err), warn)
-				return
-			}
-			p = filepath.Join("/sys/fs/cgroup", unified, "memory.swap.max")
+	const warn = "Failed to detect the availability of the swap controller, assuming not available"
+	p := "/sys/fs/cgroup/memory/memory.memsw.limit_in_bytes"
+	if isCgroup2UnifiedMode() {
+		// memory.swap.max does not exist in the cgroup root, so we check /sys/fs/cgroup/<SELF>/memory.swap.max
+		cm, err := libcontainercgroups.ParseCgroupFile("/proc/self/cgroup")
+		if err != nil {
+			klog.V(5).ErrorS(fmt.Errorf("failed to parse /proc/self/cgroup: %w", err), warn)
+			return false
 		}
-		if _, err := os.Stat(p); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				klog.V(5).ErrorS(err, warn)
-			}
-			return
+		// Fr cgroup v2 unified hierarchy, there are no per-controller
+		// cgroup paths, so the cm map returned by ParseCgroupFile above
+		// has a single element where the key is empty string ("") and
+		// the value is the cgroup path the <pid> is in.
+		p = filepath.Join("/sys/fs/cgroup", cm[""], "memory.swap.max")
+	}
+	if _, err := os.Stat(p); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			klog.V(5).ErrorS(err, warn)
 		}
-		swapControllerAvailability = true
-	})
-	return swapControllerAvailability
-}
+		return false
+	}
+
+	return true
+})
 
 type swapConfigurationHelper struct {
 	machineInfo cadvisorv1.MachineInfo
@@ -379,18 +438,8 @@ func newSwapConfigurationHelper(machineInfo cadvisorv1.MachineInfo) *swapConfigu
 }
 
 func (m swapConfigurationHelper) ConfigureLimitedSwap(lcr *runtimeapi.LinuxContainerResources, pod *v1.Pod, container *v1.Container) {
-	podQos := kubeapiqos.GetPodQOS(pod)
-	containerDoesNotRequestMemory := container.Resources.Requests.Memory().IsZero() && container.Resources.Limits.Memory().IsZero()
-	memoryRequestEqualsToLimit := container.Resources.Requests.Memory().Cmp(*container.Resources.Limits.Memory()) == 0
-
-	if podQos != v1.PodQOSBurstable || containerDoesNotRequestMemory || !isCgroup2UnifiedMode() || memoryRequestEqualsToLimit {
-		m.ConfigureNoSwap(lcr)
-		return
-	}
-
 	containerMemoryRequest := container.Resources.Requests.Memory()
 	swapLimit, err := calcSwapForBurstablePods(containerMemoryRequest.Value(), int64(m.machineInfo.MemoryCapacity), int64(m.machineInfo.SwapCapacity))
-
 	if err != nil {
 		klog.ErrorS(err, "cannot calculate swap allocation amount; disallowing swap")
 		m.ConfigureNoSwap(lcr)
