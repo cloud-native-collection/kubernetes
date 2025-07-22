@@ -122,64 +122,69 @@ func (s *ProxyServer) platformCheckSupported(ctx context.Context) (ipv4Supported
 }
 
 // createProxier creates the proxy.Provider
+// 根据 KubeProxyConfiguration 选择并实例化真正执行转发规则的 Proxier 实现（iptables / IPVS / nftables）
 func (s *ProxyServer) createProxier(ctx context.Context, config *proxyconfigapi.KubeProxyConfiguration, dualStack, initOnly bool) (proxy.Provider, error) {
 	logger := klog.FromContext(ctx)
 	var proxier proxy.Provider
 	var err error
 
+	// ​准备本地流量探测器根据 KubeProxyConfiguration 中的 LocalMode 配置，选择 LocalDetector	
+	// 生成一组 DetectLocal 策略（依据 ClusterCIDR、NodeCIDR 等），后面传给各 Proxier 用于判断某流量是否“本地 Pod”
 	localDetectors := getLocalDetectors(logger, s.PrimaryIPFamily, config, s.podCIDRs)
 
-	if config.Mode == proxyconfigapi.ProxyModeIPTables {
+	// 根据 config.Mode 选择 backend Proxier
+	if config.Mode == proxyconfigapi.ProxyModeIPTables { // iptables 实现
 		logger.Info("Using iptables Proxier")
 		ipts, _ := utiliptables.NewDualStack()
 
+		// 双栈模式
 		if dualStack {
 			// TODO this has side effects that should only happen when Run() is invoked.
 			proxier, err = iptables.NewDualStackProxier(
 				ctx,
-				ipts,
-				utilsysctl.New(),
-				config.SyncPeriod.Duration,
-				config.MinSyncPeriod.Duration,
-				config.Linux.MasqueradeAll,
-				*config.IPTables.LocalhostNodePorts,
-				int(*config.IPTables.MasqueradeBit),
-				localDetectors,
-				s.NodeName,
-				s.NodeIPs,
-				s.Recorder,
-				s.HealthzServer,
-				config.NodePortAddresses,
-				initOnly,
-			)
-		} else {
+				ipts,  // iptables handle (v4+v6)
+				utilsysctl.New(), // sysctl handle
+				config.SyncPeriod.Duration, // 同步周期
+				config.MinSyncPeriod.Duration, // 最小同步周期
+				config.Linux.MasqueradeAll, // 是否 masquerade，是否对所有出站流量 SNAT
+				*config.IPTables.LocalhostNodePorts,  // 是否允许 127.0.0.1 命中 NodePort
+				int(*config.IPTables.MasqueradeBit),  // SNAT mark 位
+				localDetectors,  // 本地流量探测策略
+				s.NodeName, // 节点名称
+				s.NodeIPs, // 节点 IP
+				s.Recorder, // 事件记录器
+				s.HealthzServer, // 健康检查服务器
+				config.NodePortAddresses, // NodePort 地址 监听 NodePort 地址列表，控制 NodePort 服务监听在哪些本地 IP 上
+				initOnly, // 是否只初始化
+			) // 一次创建两套 tables/链
+		} else { // 单栈模式
 			// Create a single-stack proxier if and only if the node does not support dual-stack (i.e, no iptables support).
 
 			// TODO this has side effects that should only happen when Run() is invoked.
 			proxier, err = iptables.NewProxier(
 				ctx,
-				s.PrimaryIPFamily,
-				ipts[s.PrimaryIPFamily],
-				utilsysctl.New(),
-				config.SyncPeriod.Duration,
-				config.MinSyncPeriod.Duration,
-				config.Linux.MasqueradeAll,
-				*config.IPTables.LocalhostNodePorts,
-				int(*config.IPTables.MasqueradeBit),
-				localDetectors[s.PrimaryIPFamily],
-				s.NodeName,
-				s.NodeIPs[s.PrimaryIPFamily],
-				s.Recorder,
-				s.HealthzServer,
-				config.NodePortAddresses,
-				initOnly,
+				s.PrimaryIPFamily, // IP 家庭
+				ipts[s.PrimaryIPFamily], // iptables handle
+				utilsysctl.New(), // sysctl handle
+				config.SyncPeriod.Duration, // 同步周期
+				config.MinSyncPeriod.Duration, // 最小同步周期
+				config.Linux.MasqueradeAll, // 是否 masquerade，是否对所有出站流量 SNAT
+				*config.IPTables.LocalhostNodePorts, // 是否允许 127.0.0.1 命中 NodePort
+				int(*config.IPTables.MasqueradeBit), // SNAT mark 位
+				localDetectors[s.PrimaryIPFamily], // 本地流量探测策略
+				s.NodeName, // 节点名称
+				s.NodeIPs[s.PrimaryIPFamily], // 节点 IP
+				s.Recorder, // 事件记录器
+				s.HealthzServer, // 健康检查服务器
+				config.NodePortAddresses, // NodePort 地址 监听 NodePort 地址列表
+				initOnly, // 是否只初始化
 			)
 		}
 
 		if err != nil {
 			return nil, fmt.Errorf("unable to create proxier: %v", err)
 		}
-	} else if config.Mode == proxyconfigapi.ProxyModeIPVS {
+	} else if config.Mode == proxyconfigapi.ProxyModeIPVS { // IPVS 实现
 		ipsetInterface := utilipset.New()
 		ipvsInterface := utilipvs.New()
 		if err := ipvs.CanUseIPVSProxier(ctx, ipvsInterface, ipsetInterface, config.IPVS.Scheduler); err != nil {
@@ -191,94 +196,95 @@ func (s *ProxyServer) createProxier(ctx context.Context, config *proxyconfigapi.
 		if dualStack {
 			proxier, err = ipvs.NewDualStackProxier(
 				ctx,
-				ipts,
-				ipvsInterface,
-				ipsetInterface,
-				utilsysctl.New(),
-				config.SyncPeriod.Duration,
-				config.MinSyncPeriod.Duration,
-				config.IPVS.ExcludeCIDRs,
-				config.IPVS.StrictARP,
-				config.IPVS.TCPTimeout.Duration,
-				config.IPVS.TCPFinTimeout.Duration,
-				config.IPVS.UDPTimeout.Duration,
-				config.Linux.MasqueradeAll,
-				int(*config.IPTables.MasqueradeBit),
-				localDetectors,
-				s.NodeName,
-				s.NodeIPs,
-				s.Recorder,
-				s.HealthzServer,
-				config.IPVS.Scheduler,
-				config.NodePortAddresses,
-				initOnly,
+				ipts, // iptables handle
+				ipvsInterface, // ipvs handle
+				ipsetInterface, // ipset handle
+				utilsysctl.New(), // sysctl handle
+				config.SyncPeriod.Duration, // 同步周期
+				config.MinSyncPeriod.Duration, // 最小同步周期
+				config.IPVS.ExcludeCIDRs, // IPVS 排除 CIDR
+				config.IPVS.StrictARP, // IPVS 严格 ARP
+				config.IPVS.TCPTimeout.Duration, // IPVS TCP 超时
+				config.IPVS.TCPFinTimeout.Duration, // IPVS TCP FIN 超时
+				config.IPVS.UDPTimeout.Duration, // IPVS UDP 超时
+				config.Linux.MasqueradeAll, // 是否 masquerade，是否对所有出站流量 SNAT
+				int(*config.IPTables.MasqueradeBit), // SNAT mark 位
+				localDetectors, // 本地流量探测策略
+				s.NodeName, // 节点名称
+				s.NodeIPs, // 节点 IP
+				s.Recorder, // 事件记录器
+				s.HealthzServer, // 健康检查服务器
+				config.IPVS.Scheduler, // IPVS 调度器
+				config.NodePortAddresses, // NodePort 地址 监听 NodePort 地址列表
+				initOnly, // 是否只初始化
 			)
 		} else {
 			proxier, err = ipvs.NewProxier(
 				ctx,
-				s.PrimaryIPFamily,
-				ipts[s.PrimaryIPFamily],
-				ipvsInterface,
-				ipsetInterface,
-				utilsysctl.New(),
-				config.SyncPeriod.Duration,
-				config.MinSyncPeriod.Duration,
-				config.IPVS.ExcludeCIDRs,
-				config.IPVS.StrictARP,
-				config.IPVS.TCPTimeout.Duration,
-				config.IPVS.TCPFinTimeout.Duration,
-				config.IPVS.UDPTimeout.Duration,
-				config.Linux.MasqueradeAll,
-				int(*config.IPTables.MasqueradeBit),
-				localDetectors[s.PrimaryIPFamily],
-				s.NodeName,
-				s.NodeIPs[s.PrimaryIPFamily],
-				s.Recorder,
-				s.HealthzServer,
-				config.IPVS.Scheduler,
-				config.NodePortAddresses,
-				initOnly,
+				s.PrimaryIPFamily, // IP 家庭
+				ipts[s.PrimaryIPFamily], // iptables handle
+				ipvsInterface, // ipvs handle
+				ipsetInterface, // ipset handle
+				utilsysctl.New(), // sysctl handle
+				config.SyncPeriod.Duration, // 同步周期
+				config.MinSyncPeriod.Duration, // 最小同步周期
+				config.IPVS.ExcludeCIDRs, // IPVS 排除 CIDR
+				config.IPVS.StrictARP, // IPVS 严格 ARP
+				config.IPVS.TCPTimeout.Duration, // IPVS TCP 超时
+				config.IPVS.TCPFinTimeout.Duration, // IPVS TCP FIN 超时
+				config.IPVS.UDPTimeout.Duration, // IPVS UDP 超时
+				config.Linux.MasqueradeAll, // 是否 masquerade，是否对所有出站流量 SNAT
+				int(*config.IPTables.MasqueradeBit), // SNAT mark 位
+				localDetectors[s.PrimaryIPFamily], // 本地流量探测策略
+				s.NodeName, // 节点名称
+				s.NodeIPs[s.PrimaryIPFamily], // 节点 IP
+				s.Recorder, // 事件记录器
+				s.HealthzServer, // 健康检查服务器
+				config.IPVS.Scheduler, // IPVS 调度器
+				config.NodePortAddresses, // NodePort 地址 监听 NodePort 地址列表
+				initOnly, // 是否只初始化
 			)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("unable to create proxier: %v", err)
 		}
-	} else if config.Mode == proxyconfigapi.ProxyModeNFTables {
+	} else if config.Mode == proxyconfigapi.ProxyModeNFTables { // nftables 实现，1.26+ 实验
 		logger.Info("Using nftables Proxier")
 
+		// ​针对单栈 / 双栈分别构造
 		if dualStack {
 			// TODO this has side effects that should only happen when Run() is invoked.
 			proxier, err = nftables.NewDualStackProxier(
 				ctx,
-				config.SyncPeriod.Duration,
-				config.MinSyncPeriod.Duration,
-				config.Linux.MasqueradeAll,
-				int(*config.NFTables.MasqueradeBit),
-				localDetectors,
-				s.NodeName,
-				s.NodeIPs,
-				s.Recorder,
-				s.HealthzServer,
-				config.NodePortAddresses,
-				initOnly,
+				config.SyncPeriod.Duration, // 同步周期
+				config.MinSyncPeriod.Duration, // 最小同步周期
+				config.Linux.MasqueradeAll, // 是否 masquerade，是否对所有出站流量 SNAT
+				int(*config.NFTables.MasqueradeBit), // SNAT mark 位
+				localDetectors, // 本地流量探测策略
+				s.NodeName, // 节点名称
+				s.NodeIPs,	 // 节点 IP
+				s.Recorder, // 事件记录器
+				s.HealthzServer, // 健康检查服务器
+				config.NodePortAddresses, // NodePort 地址 监听 NodePort 地址列表
+				initOnly, // 是否只初始化
 			)
 		} else {
 			// Create a single-stack proxier if and only if the node does not support dual-stack
 			// TODO this has side effects that should only happen when Run() is invoked.
 			proxier, err = nftables.NewProxier(
 				ctx,
-				s.PrimaryIPFamily,
-				config.SyncPeriod.Duration,
-				config.MinSyncPeriod.Duration,
-				config.Linux.MasqueradeAll,
-				int(*config.NFTables.MasqueradeBit),
-				localDetectors[s.PrimaryIPFamily],
-				s.NodeName,
-				s.NodeIPs[s.PrimaryIPFamily],
-				s.Recorder,
-				s.HealthzServer,
-				config.NodePortAddresses,
-				initOnly,
+				s.PrimaryIPFamily, // IP 家庭
+				config.SyncPeriod.Duration, // 同步周期
+				config.MinSyncPeriod.Duration, // 最小同步周期
+				config.Linux.MasqueradeAll, // 是否 masquerade，是否对所有出站流量 SNAT
+				int(*config.NFTables.MasqueradeBit), // SNAT mark 位
+				localDetectors[s.PrimaryIPFamily], // 本地流量探测策略
+				s.NodeName, // 节点名称
+				s.NodeIPs[s.PrimaryIPFamily], // 节点 IP
+				s.Recorder, // 事件记录器
+				s.HealthzServer, // 健康检查服务器
+				config.NodePortAddresses, // NodePort 地址 监听 NodePort 地址列表
+				initOnly, // 是否只初始化
 			)
 		}
 

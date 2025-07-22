@@ -57,33 +57,37 @@ type Endpoint interface {
 // This could be used directly by proxier while processing endpoints,
 // or can be used for constructing a more specific EndpointInfo struct
 // defined by the proxier if needed.
+// BaseEndpointInfo 包含定义端点的基本信息。
+// 这可以被直接用于处理端点，
+// 或者可以用于构建更具体的 EndpointInfo 结构
+// 定义的 proxier。
 type BaseEndpointInfo struct {
 	// Cache this values to improve performance
 	ip   string
 	port int
 	// endpoint is the same as net.JoinHostPort(ip,port)
-	endpoint string
+	endpoint string // 端点
 
 	// isLocal indicates whether the endpoint is running on same host as kube-proxy.
-	isLocal bool
+	isLocal bool // 端点是否在当前节点上
 
 	// ready indicates whether this endpoint is ready and NOT terminating, unless
 	// PublishNotReadyAddresses is set on the service, in which case it will just
 	// always be true.
-	ready bool
+	ready bool // 准备
 	// serving indicates whether this endpoint is ready regardless of its terminating state.
 	// For pods this is true if it has a ready status regardless of its deletion timestamp.
-	serving bool
+	serving bool // 服务
 	// terminating indicates whether this endpoint is terminating.
 	// For pods this is true if it has a non-nil deletion timestamp.
-	terminating bool
+	terminating bool // 终止
 
 	// zoneHints represent the zone hints for the endpoint. This is based on
 	// endpoint.hints.forZones[*].name in the EndpointSlice API.
-	zoneHints sets.Set[string]
+	zoneHints sets.Set[string] // 区域提示
 	// nodeHints represent the node hints for the endpoint. This is based on
 	// endpoint.hints.forNodes[*].name in the EndpointSlice API.
-	nodeHints sets.Set[string]
+	nodeHints sets.Set[string] // 节点提示
 }
 
 var _ Endpoint = &BaseEndpointInfo{}

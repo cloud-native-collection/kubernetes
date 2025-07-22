@@ -26,19 +26,20 @@ import (
 )
 
 // BoundedFrequencyRunner manages runs of a user-provided work function.
+// 控制函数执行频率的组件
 type BoundedFrequencyRunner struct {
-	name string // the name of this instance
+	name string // 实例名称
 
-	minInterval   time.Duration // the min time between runs
-	retryInterval time.Duration // the time between a run and a retry
-	maxInterval   time.Duration // the max time between runs
+	minInterval   time.Duration // 最小间隔
+	retryInterval time.Duration // 重试间隔
+	maxInterval   time.Duration // 最大间隔
 
-	run chan struct{} // try an async run
+	run chan struct{} // 用于触发异步运行
 
-	fn               func() error // the work function
-	minIntervalTimer clock.Timer
-	nextRunTimer     clock.Timer // Combined timer for maxInterval and retryInterval logic
-	clock            clock.Clock
+	fn               func() error // 工作函数
+	minIntervalTimer clock.Timer  // 最小间隔定时器
+	nextRunTimer     clock.Timer  // Combined timer for maxInterval and retryInterval logic
+	clock            clock.Clock  // 时钟
 }
 
 // NewBoundedFrequencyRunner creates and returns a new BoundedFrequencyRunner.
@@ -86,31 +87,35 @@ func construct(name string, fn func() error, minInterval, retryInterval, maxInte
 
 // Loop handles the periodic timer and run requests.  This is expected to be
 // called as a goroutine.
+// 循环处理周期性定时器和运行请求
 func (bfr *BoundedFrequencyRunner) Loop(stop <-chan struct{}) {
 	klog.V(3).InfoS("Loop running", "runner", bfr.name)
 	defer close(bfr.run)
 
+	// 创建最小间隔定时器
 	bfr.minIntervalTimer = bfr.clock.NewTimer(bfr.minInterval)
 	defer bfr.minIntervalTimer.Stop()
 
 	// Initialize nextRunTimer with maxInterval
+	// 初始化nextRunTimer为maxInterval
 	bfr.nextRunTimer = bfr.clock.NewTimer(bfr.maxInterval)
 	defer bfr.nextRunTimer.Stop()
 
+	// 循环处理周期性定时器和运行请求
 	for {
 		select {
 		case <-stop:
 			klog.V(3).InfoS("Loop stopping", "runner", bfr.name)
 			return
 		case <-bfr.nextRunTimer.C(): // Wait on the single timer
-		case <-bfr.run:
+		case <-bfr.run: //
 		}
 
 		// stop the timers here to allow the tests using the fake clock to synchronize
 		// with the fakeClock.HasWaiters() method. The timers are reset after the function
 		// is executed.
-		bfr.minIntervalTimer.Stop()
-		bfr.nextRunTimer.Stop()
+		bfr.minIntervalTimer.Stop() // 停止最小间隔计时器
+		bfr.nextRunTimer.Stop()     // 停止nextRunTimer
 
 		var err error
 		// avoid crashing if the function executed crashes
@@ -129,15 +134,15 @@ func (bfr *BoundedFrequencyRunner) Loop(stop <-chan struct{}) {
 			klog.V(3).InfoS("scheduling retry", "runner", bfr.name, "interval", nextInterval, "error", err)
 		}
 		// Reset the timers
-		bfr.minIntervalTimer.Reset(bfr.minInterval)
-		bfr.nextRunTimer.Reset(nextInterval)
+		bfr.minIntervalTimer.Reset(bfr.minInterval) // 重置最小间隔计时器
+		bfr.nextRunTimer.Reset(nextInterval)        // 重置nextRunTimer
 
 		// Wait for minInterval before looping
 		select {
 		case <-stop:
 			klog.V(3).InfoS("Loop stopping", "runner", bfr.name)
 			return
-		case <-bfr.minIntervalTimer.C():
+		case <-bfr.minIntervalTimer.C(): // 等待minInterval
 		}
 	}
 }
@@ -148,8 +153,9 @@ func (bfr *BoundedFrequencyRunner) Loop(stop <-chan struct{}) {
 // Run() will have no effect until after it runs.
 func (bfr *BoundedFrequencyRunner) Run() {
 	// If bfr.run is empty, push an element onto it. Otherwise, do nothing.
+	// 如果bfr.run为空，将一个元素推入其中。否则，什么也不做。
 	select {
 	case bfr.run <- struct{}{}:
-	default:
+	default: // // 如果已经有待处理的运行请求，则忽略
 	}
 }

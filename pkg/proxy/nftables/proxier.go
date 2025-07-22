@@ -141,66 +141,66 @@ func NewDualStackProxier(
 // Proxier is an nftables-based proxy
 type Proxier struct {
 	// ipFamily defines the IP family which this proxier is tracking.
-	ipFamily v1.IPFamily
+	ipFamily v1.IPFamily // IPV4或IPV6
 
 	// endpointsChanges and serviceChanges contains all changes to endpoints and
 	// services that happened since nftables was synced. For a single object,
 	// changes are accumulated, i.e. previous is state from before all of them,
 	// current is state after applying all of those.
-	endpointsChanges *proxy.EndpointsChangeTracker
-	serviceChanges   *proxy.ServiceChangeTracker
+	endpointsChanges *proxy.EndpointsChangeTracker //端点变化
+	serviceChanges   *proxy.ServiceChangeTracker   //服务变化
 
-	mu             sync.Mutex // protects the following fields
-	svcPortMap     proxy.ServicePortMap
-	endpointsMap   proxy.EndpointsMap
-	topologyLabels map[string]string
+	mu             sync.Mutex           // protects the following fields
+	svcPortMap     proxy.ServicePortMap //服务端口映射
+	endpointsMap   proxy.EndpointsMap   //端点映射
+	topologyLabels map[string]string    //拓扑标签
 	// endpointSlicesSynced, and servicesSynced are set to true
 	// when corresponding objects are synced after startup. This is used to avoid
 	// updating nftables with some partial data after kube-proxy restart.
-	endpointSlicesSynced bool
-	servicesSynced       bool
-	syncedOnce           bool
-	lastFullSync         time.Time
-	needFullSync         bool
-	initialized          int32
+	endpointSlicesSynced bool                           //端点切片同步
+	servicesSynced       bool                           //服务同步
+	syncedOnce           bool                           //同步一次
+	lastFullSync         time.Time                      //最后一次完整同步时间
+	needFullSync         bool                           //需要完整同步
+	initialized          int32                          //初始化
 	syncRunner           *runner.BoundedFrequencyRunner // governs calls to syncProxyRules
-	syncPeriod           time.Duration
-	flushed              bool
+	syncPeriod           time.Duration                  //同步周期
+	flushed              bool                           //刷新
 
 	// These are effectively const and do not need the mutex to be held.
-	nftables       knftables.Interface
-	masqueradeAll  bool
-	masqueradeMark string
-	conntrack      conntrack.Interface
-	localDetector  proxyutil.LocalTrafficDetector
-	nodeName       string
-	nodeIP         net.IP
+	nftables       knftables.Interface            //nftables接口
+	masqueradeAll  bool                           //是否 masquerade 所有流量
+	masqueradeMark string                         //masquerade 标记
+	conntrack      conntrack.Interface            //连接跟踪接口
+	localDetector  proxyutil.LocalTrafficDetector //本地流量检测器
+	nodeName       string                         //节点名称
+	nodeIP         net.IP                         //节点IP
 
-	serviceHealthServer healthcheck.ServiceHealthServer
-	healthzServer       *healthcheck.ProxyHealthServer
+	serviceHealthServer healthcheck.ServiceHealthServer // 服务健康检查服务器
+	healthzServer       *healthcheck.ProxyHealthServer  // 健康检查服务器
 
 	// nodePortAddresses selects the interfaces where nodePort works.
-	nodePortAddresses *proxyutil.NodePortAddresses
+	nodePortAddresses *proxyutil.NodePortAddresses // 节点端口地址
 	// networkInterfacer defines an interface for several net library functions.
 	// Inject for test purpose.
-	networkInterfacer proxyutil.NetworkInterfacer
+	networkInterfacer proxyutil.NetworkInterfacer // 网络接口
 
 	// staleChains contains information about chains to be deleted later
-	staleChains map[string]time.Time
+	staleChains map[string]time.Time //过期的链
 
 	// serviceCIDRs is a comma separated list of ServiceCIDRs belonging to the IPFamily
 	// which proxier is operating on, can be directly consumed by knftables.
-	serviceCIDRs string
+	serviceCIDRs string //服务CIDRs
 
-	logger         klog.Logger
-	logRateLimiter *rate.Limiter
+	logger         klog.Logger   //日志记录器
+	logRateLimiter *rate.Limiter //日志速率限制器
 
-	clusterIPs          *nftElementStorage
-	serviceIPs          *nftElementStorage
-	firewallIPs         *nftElementStorage
-	noEndpointServices  *nftElementStorage
-	noEndpointNodePorts *nftElementStorage
-	serviceNodePorts    *nftElementStorage
+	clusterIPs          *nftElementStorage //集群IP
+	serviceIPs          *nftElementStorage //服务IP
+	firewallIPs         *nftElementStorage //防火墙IP
+	noEndpointServices  *nftElementStorage //无端点服务
+	noEndpointNodePorts *nftElementStorage //无端点节点端口
+	serviceNodePorts    *nftElementStorage //服务节点端口
 }
 
 // Proxier implements proxy.Provider

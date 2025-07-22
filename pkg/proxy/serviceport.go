@@ -31,40 +31,40 @@ import (
 // ServicePort is an interface which abstracts information about a service.
 type ServicePort interface {
 	// String returns service string.  An example format can be: `IP:Port/Protocol`.
-	String() string
+	String() string // 返回服务字符串，格式为 `IP:Port/Protocol`
 	// ClusterIP returns service cluster IP in net.IP format.
-	ClusterIP() net.IP
+	ClusterIP() net.IP // 返回服务集群IP
 	// Port returns service port if present. If return 0 means not present.
-	Port() int
+	Port() int // 返回服务端口
 	// SessionAffinityType returns service session affinity type
-	SessionAffinityType() v1.ServiceAffinity
+	SessionAffinityType() v1.ServiceAffinity // 返回服务会话亲和类型
 	// StickyMaxAgeSeconds returns service max connection age
-	StickyMaxAgeSeconds() int
+	StickyMaxAgeSeconds() int // 返回服务最大连接年龄
 	// ExternalIPs returns service ExternalIPs
-	ExternalIPs() []net.IP
+	ExternalIPs() []net.IP // 返回服务外部IP列表
 	// LoadBalancerVIPs returns service LoadBalancerIPs which are VIP mode
-	LoadBalancerVIPs() []net.IP
+	LoadBalancerVIPs() []net.IP // 返回服务LoadBalancer IP列表
 	// Protocol returns service protocol.
-	Protocol() v1.Protocol
+	Protocol() v1.Protocol // 返回服务协议
 	// LoadBalancerSourceRanges returns service LoadBalancerSourceRanges if present empty array if not
-	LoadBalancerSourceRanges() []*net.IPNet
+	LoadBalancerSourceRanges() []*net.IPNet // 返回服务LoadBalancer源IP范围
 	// HealthCheckNodePort returns service health check node port if present.  If return 0, it means not present.
-	HealthCheckNodePort() int
+	HealthCheckNodePort() int // 返回服务健康检查NodePort
 	// NodePort returns a service Node port if present. If return 0, it means not present.
-	NodePort() int
+	NodePort() int // 返回服务NodePort
 	// ExternalPolicyLocal returns if a service has only node local endpoints for external traffic.
-	ExternalPolicyLocal() bool
+	ExternalPolicyLocal() bool // 返回服务外部策略本地
 	// InternalPolicyLocal returns if a service has only node local endpoints for internal traffic.
-	InternalPolicyLocal() bool
+	InternalPolicyLocal() bool // 返回服务内部策略本地
 	// ExternallyAccessible returns true if the service port is reachable via something
 	// other than ClusterIP (NodePort/ExternalIP/LoadBalancer)
-	ExternallyAccessible() bool
+	ExternallyAccessible() bool // 返回服务是否可外部访问
 	// UsesClusterEndpoints returns true if the service port ever sends traffic to
 	// endpoints based on "Cluster" traffic policy
-	UsesClusterEndpoints() bool
+	UsesClusterEndpoints() bool // 返回服务是否使用集群端点
 	// UsesLocalEndpoints returns true if the service port ever sends traffic to
 	// endpoints based on "Local" traffic policy
-	UsesLocalEndpoints() bool
+	UsesLocalEndpoints() bool // 返回服务是否使用本地端点
 }
 
 // BaseServicePortInfo contains base information that defines a service.
@@ -72,18 +72,18 @@ type ServicePort interface {
 // or can be used for constructing a more specific ServiceInfo struct
 // defined by the proxier if needed.
 type BaseServicePortInfo struct {
-	clusterIP                net.IP
-	port                     int
-	protocol                 v1.Protocol
-	nodePort                 int
-	loadBalancerVIPs         []net.IP
-	sessionAffinityType      v1.ServiceAffinity
-	stickyMaxAgeSeconds      int
-	externalIPs              []net.IP
-	loadBalancerSourceRanges []*net.IPNet
-	healthCheckNodePort      int
-	externalPolicyLocal      bool
-	internalPolicyLocal      bool
+	clusterIP                net.IP             // 服务集群IP
+	port                     int                // 服务端口
+	protocol                 v1.Protocol        // 服务协议
+	nodePort                 int                // NodePort端口
+	loadBalancerVIPs         []net.IP           // LoadBalancer VIP列表
+	sessionAffinityType      v1.ServiceAffinity // 会话亲和类型
+	stickyMaxAgeSeconds      int                // 会话保持最大年龄
+	externalIPs              []net.IP           // 外部IP列表
+	loadBalancerSourceRanges []*net.IPNet       // LoadBalancer源IP范围
+	healthCheckNodePort      int                // 健康检查NodePort
+	externalPolicyLocal      bool               // 外部策略本地
+	internalPolicyLocal      bool               // 内部策略本地
 }
 
 var _ ServicePort = &BaseServicePortInfo{}

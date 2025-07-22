@@ -160,21 +160,27 @@ with the apiserver API to configure the proxy.`,
 // ProxyServer represents all the parameters required to start the Kubernetes proxy server. All
 // fields are required.
 type ProxyServer struct {
+	// 配置和客户端
 	Config *kubeproxyconfig.KubeProxyConfiguration
 
-	Client          clientset.Interface
-	Broadcaster     events.EventBroadcaster
-	Recorder        events.EventRecorder
-	NodeRef         *v1.ObjectReference
-	HealthzServer   *healthcheck.ProxyHealthServer
+	Client clientset.Interface // API Server 客户端
+	// 事件处理
+	Broadcaster   events.EventBroadcaster
+	Recorder      events.EventRecorder
+	NodeRef       *v1.ObjectReference
+	HealthzServer *healthcheck.ProxyHealthServer
+	// 节点信息
 	NodeName        string
-	PrimaryIPFamily v1.IPFamily
-	NodeIPs         map[v1.IPFamily]net.IP
-	flagz           flagz.Reader
+	PrimaryIPFamily v1.IPFamily            // 节点主要 IP 家族
+	NodeIPs         map[v1.IPFamily]net.IP // 节点 IP 地址
+	flagz           flagz.Reader           // flagz HTTP 端点
 
-	podCIDRs    []string // only used for LocalModeNodeCIDR
+	// Pod 的 CIDR 范围
+	podCIDRs []string // only used for LocalModeNodeCIDR
+	// 节点管理接口
 	NodeManager *proxy.NodeManager
 
+	// Proxier 是 Proxier 的接口，
 	Proxier proxy.Provider
 }
 
@@ -187,26 +193,31 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		flagz:  flagzReader,
 	}
 
+	// 注册配置,  用于 /configz HTTP 端点即可返回当前 kube-proxy 配置，
 	cz, err := configz.New(kubeproxyconfig.GroupName)
 	if err != nil {
 		return nil, fmt.Errorf("unable to register configz: %s", err)
 	}
 	cz.Set(config)
 
+	// 设置隐藏指标
 	if len(config.ShowHiddenMetricsForVersion) > 0 {
 		metrics.SetShowHidden()
 	}
 
+	// 获取节点名称
 	s.NodeName, err = nodeutil.GetHostname(config.HostnameOverride)
 	if err != nil {
 		return nil, err
 	}
 
+	// 创建 Kubernetes 客户端
 	s.Client, err = createClient(ctx, config.ClientConnection, master)
 	if err != nil {
 		return nil, err
 	}
 
+	// 创建节点管理器，kube-proxy 自己的 informer 管理器，仅 watch 本节点 对象
 	// NodeManager makes an informer that selects for the node where this kube-proxy is running
 	s.NodeManager, err = proxy.NewNodeManager(ctx, s.Client, s.Config.ConfigSyncPeriod.Duration,
 		s.NodeName, s.Config.DetectLocalMode == kubeproxyconfig.LocalModeNodeCIDR)
@@ -214,11 +225,14 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		return nil, err
 	}
 
-	rawNodeIPs := s.NodeManager.NodeIPs()
-	s.podCIDRs = s.NodeManager.PodCIDRs()
+	// 获取节点 IP节点网络信息并确定主 IPFamily
+	rawNodeIPs := s.NodeManager.NodeIPs() // 获取节点 IP
+	s.podCIDRs = s.NodeManager.PodCIDRs() // 获取节点 Pod CIDR
 	logger.Info("Successfully retrieved NodeIPs", "NodeIPs", rawNodeIPs)
+	//--bind-address > NodeIPs > 默认环回地址。确定单/双栈及主 IP 家族。
 	s.PrimaryIPFamily, s.NodeIPs = detectNodeIPs(ctx, rawNodeIPs, config.BindAddress)
 
+	// 如果 NodePortAddresses 设置为 NodePortAddressesPrimary，就自动设置为本节点 IP
 	if len(config.NodePortAddresses) == 1 && config.NodePortAddresses[0] == kubeproxyconfig.NodePortAddressesPrimary {
 		var nodePortAddresses []string
 		if nodeIP := s.NodeIPs[v1.IPv4Protocol]; nodeIP != nil && !nodeIP.IsLoopback() {
@@ -230,9 +244,11 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		config.NodePortAddresses = nodePortAddresses
 	}
 
+	// 初始化事件系统，创建事件广播器，后续调用 s.Recorder.Eventf(...) 可把事件写到 API Serve
 	s.Broadcaster = events.NewBroadcaster(&events.EventSinkImpl{Interface: s.Client.EventsV1()})
 	s.Recorder = s.Broadcaster.NewRecorder(proxyconfigscheme.Scheme, kubeProxy)
 
+	// 创建节点引用，用于事件中填充 involvedObject 字段，标明事件与哪个 Node 相关
 	s.NodeRef = &v1.ObjectReference{
 		Kind:      "Node",
 		Name:      s.NodeName,
@@ -240,20 +256,24 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		Namespace: "",
 	}
 
+	// 创建健康检查服务器，--healthz-bind-address 设置，就启动 /healthz 端点，间隔 2×SyncPeriod 对自身做健康探针。
 	if len(config.HealthzBindAddress) > 0 {
 		s.HealthzServer = healthcheck.NewProxyHealthServer(config.HealthzBindAddress, 2*config.SyncPeriod.Duration, s.NodeManager)
 	}
 
+	// 初始化平台依赖，如 conntrack
 	err = s.platformSetup(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	// 检查配置是否合理
 	err = checkBadConfig(s)
 	if err != nil {
 		logger.Error(err, "Kube-proxy configuration may be incomplete or incorrect")
 	}
 
+	// 检查 IP 家族是否支持，探测内核是否支持 iptables/ipvs/dual-stack
 	ipv4Supported, ipv6Supported, dualStackSupported, err := s.platformCheckSupported(ctx)
 	if err != nil {
 		return nil, err
@@ -265,6 +285,7 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		logger.Info("kube-proxy running in single-stack mode", "ipFamily", s.PrimaryIPFamily)
 	}
 
+	// 检查 IP 配置是否合理，IP 家族相关的细粒度校验，如 IPVS 模式下，
 	err, fatal := checkBadIPConfig(s, dualStackSupported)
 	if err != nil {
 		if fatal {
@@ -273,11 +294,13 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		logger.Error(err, "Kube-proxy configuration may be incomplete or incorrect")
 	}
 
+	// 创建 Proxier，Proxier 是 Proxier 的接口，
 	s.Proxier, err = s.createProxier(ctx, config, dualStackSupported, initOnly)
 	if err != nil {
 		return nil, err
 	}
 
+	// 完成全部依赖注入和环境检测，返回 ProxyServer，随后在 Run()中启动事件循环、metrics、healthz 等 goroutine 即可
 	return s, nil
 }
 
@@ -556,19 +579,29 @@ func (s *ProxyServer) Run(ctx context.Context) error {
 	// Start up a metrics server if requested
 	serveMetrics(ctx, s.Config.MetricsBindAddress, s.Config.Mode, s.Config.EnableProfiling, s.flagz, metricsErrCh)
 
-	noProxyName, err := labels.NewRequirement(apis.LabelServiceProxyName, selection.DoesNotExist, nil)
+	// 构造一个 LabelSelector 的过滤条件，用于稍后 watch Service / EndpointSlice 时排除“不需要 kube-proxy 代理”的 Service
+	noProxyName, err := labels.NewRequirement(
+		apis.LabelServiceProxyName, // label 键：选择没有 apis.LabelServiceProxyName 标签的 Service，当 Service 设置了这个标签且值不为空时，表示它希望由 自定义的 service-proxy（如 Istio、UserDefinedProxy） 来处理，而不是由内置 kube-proxy 来转发。
+		selection.DoesNotExist,     // 条件： 只匹配“没有设置此标签” 的 Service
+		nil)                        // 值列表为空，因为我们只关心“是否存在”
 	if err != nil {
 		return err
 	}
 
-	noHeadlessEndpoints, err := labels.NewRequirement(v1.IsHeadlessService, selection.DoesNotExist, nil)
+	// 排除 Headless Service 对应的对象
+	noHeadlessEndpoints, err := labels.NewRequirement(
+		v1.IsHeadlessService,   // label 键：kubernetes.io/service-account.name == "headless”，常量值为 service.kubernetes.io/headless。当 Service 的 spec.clusterIP 设为 "None"（即 Headless Service）时，API Server 会自动给该 Service 加上此标签。
+		selection.DoesNotExist, // 条件： 只匹配“没有设置此标签” 的 Service，即非-Headless Service。
+		nil)                    // Headless Service 通常由 DNS 直接返回 Pod IP，不经 kube-proxy，所以要排除。
 	if err != nil {
 		return err
 	}
 
+	// 构造一个 LabelSelector，用于稍后 watch Service / EndpointSlice 时排除“不需要 kube-proxy 代理”的 Service
 	labelSelector := labels.NewSelector()
 	labelSelector = labelSelector.Add(*noProxyName, *noHeadlessEndpoints)
 
+	// 构造 informer，用于 watch API Server 对象变化, EndpointSlice、ServiceCIDR
 	// Make informers that filter out objects that want a non-default service proxy.
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.Config.ConfigSyncPeriod.Duration,
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
@@ -580,19 +613,23 @@ func (s *ProxyServer) Run(ctx context.Context) error {
 	// only notify on changes, and the initial update (on process start) may be lost if no handlers
 	// are registered yet.
 	// don't watch headless services for kube-proxy, they are proxied by DNS.
+	// 再建一个 factory，专门 watch Service,Service 需要额外 field 过滤，而 EndpointSlice/ServiceCIDR 不能带该字段，否则 server 不接受；因此拆成两个 cache。
 	serviceInformerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.Config.ConfigSyncPeriod.Duration,
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.LabelSelector = labelSelector.String()
-			options.FieldSelector = fields.OneTermNotEqualSelector("spec.clusterIP", v1.ClusterIPNone).String()
+			options.FieldSelector = fields.OneTermNotEqualSelector("spec.clusterIP", v1.ClusterIPNone).String() // 排除 Headless Service
 		}))
+	// 把 Service informer 事件（Add/Update/Delete）转成 ServiceUpdate 回调到 Proxier
 	serviceConfig := config.NewServiceConfig(ctx, serviceInformerFactory.Core().V1().Services(), s.Config.ConfigSyncPeriod.Duration)
 	serviceConfig.RegisterEventHandler(s.Proxier)
 	go serviceConfig.Run(ctx.Done())
 
+	// 把 EndpointSlice informer 事件（Add/Update/Delete）转成 EndpointSliceUpdate 回调到 Proxier
 	endpointSliceConfig := config.NewEndpointSliceConfig(ctx, informerFactory.Discovery().V1().EndpointSlices(), s.Config.ConfigSyncPeriod.Duration)
 	endpointSliceConfig.RegisterEventHandler(s.Proxier)
 	go endpointSliceConfig.Run(ctx.Done())
 
+	// 可选）ServiceCIDRConfig 仅当 FeatureGate MultiCIDRServiceAllocator 打开时才 watch ServiceCIDRs（K8s 1.24+ 特性），同样回调 Proxier
 	if utilfeature.DefaultFeatureGate.Enabled(features.MultiCIDRServiceAllocator) {
 		serviceCIDRConfig := config.NewServiceCIDRConfig(ctx, informerFactory.Networking().V1().ServiceCIDRs(), s.Config.ConfigSyncPeriod.Duration)
 		serviceCIDRConfig.RegisterEventHandler(s.Proxier)
@@ -600,6 +637,7 @@ func (s *ProxyServer) Run(ctx context.Context) error {
 	}
 	// This has to start after the calls to NewServiceConfig because that
 	// function must configure its shared informer event handlers first.
+	// 启动两个 informer factory，开始 watch API Server 对象变化
 	informerFactory.Start(wait.NeverStop)
 	serviceInformerFactory.Start(wait.NeverStop)
 
@@ -614,10 +652,17 @@ func (s *ProxyServer) Run(ctx context.Context) error {
 	}
 
 	// Birth Cry after the birth is successful
+	// 发送事件，通知 kubelet kube-proxy 已经启动
 	s.birthCry()
 
+	// 启动 Proxier 的核心同步循环，开始处理事件循环，
+	// iptables 或 ipvs Proxier 会定时同步规则、防抖更新
 	go s.Proxier.SyncLoop()
 
+	// 启动阶段完成所有后台组件（指标、healthz、informer、proxier）的初始化后，就只剩两件事：
+	// 1. 后台 goroutine 们持续处理 Service/Endpoints 变化并同步代理规则；
+	// 2. 主线程阻塞等待端口启动失败的错误信号或进程被 kubelet / systemd 终止
+	// 阻塞等待健康检查或 metrics 端口启动失败
 	select {
 	case err = <-healthzErrCh:
 		s.Recorder.Eventf(s.NodeRef, nil, api.EventTypeWarning, "FailedToStartProxierHealthcheck", "StartKubeProxy", err.Error())
@@ -644,19 +689,39 @@ func (s *ProxyServer) birthCry() {
 //  1. if bindAddress is not 0.0.0.0 or ::, then it is used as the primary IP.
 //  2. if rawNodeIPs is not empty, then its address(es) is/are used
 //  3. otherwise the node IPs are 127.0.0.1 and ::1
+// detectNodeIPs 返回 proxier 使用的 “节点 IP”(一个或多个)，并在节点无法支持双栈时给出要使用的 IP 家族。
+// （注意：只要底层实现同时支持 IPv4 与 IPv6，kube-proxy 默认就按双栈运行，不管节点本身是否真正配置为双栈。）
+
+// （另请注意：在 Linux 上，这些节点 IP 仅用于判断某个 LoadBalancerSourceRanges值是否匹配本节点；尤其 **不用于** NodePort 的处理。）
+
+// 优先级顺序：
+//  1. 如果 bindAddress 不是 0.0.0.0 或 :: ，则将其作为主 IP；
+//  2. 若 rawNodeIPs 非空，则使用其中的地址；
+//  3. 否则使用 127.0.0.1 和 ::1 作为节点 IP。
 func detectNodeIPs(ctx context.Context, rawNodeIPs []net.IP, bindAddress string) (v1.IPFamily, map[v1.IPFamily]net.IP) {
 	logger := klog.FromContext(ctx)
+	// v1.IPFamily：K8s API 类型，可能值 IPv4Protocol 或 IPv6Protocol。
+	// primaryFamily：kube-proxy 认定的“主”IP 家族，决定很多默认行为。
+	// nodeIPs：以家族为键，存放“本节点在该家族下使用的一条代表 IP”
+	// 默认 IPv4
 	primaryFamily := v1.IPv4Protocol
+	// 默认值
 	nodeIPs := map[v1.IPFamily]net.IP{
-		v1.IPv4Protocol: net.IPv4(127, 0, 0, 1),
-		v1.IPv6Protocol: net.IPv6loopback,
+		v1.IPv4Protocol: net.IPv4(127, 0, 0, 1), // IPv4 塞入环回地址 127.0.0.1 / ::1，
+		v1.IPv6Protocol: net.IPv6loopback,       // IPv6 塞入环回地址 ::1
 	}
 
+	// rawNodeIPs 非空，使用其中的地址
+	// rawNodeIPs 来源：s.NodeManager.NodeIPs() 会读取 Node.Status.Addresses（type=InternalIP、ExternalIP）或通过本机接口探测得到，最多两个元素：
+	// 第 0 个：被视为“最好”的地址（通常与 kubelet 同 IP），用于判断 primaryFamily。
+	// 第 1 个（若存在）：必定是另一家族，实现双栈
 	if len(rawNodeIPs) > 0 {
+		// 第 0 个：被视为“最好”的地址（通常与 kubelet 同 IP），用于判断 primaryFamily。
 		if !netutils.IsIPv4(rawNodeIPs[0]) {
 			primaryFamily = v1.IPv6Protocol
 		}
 		nodeIPs[primaryFamily] = rawNodeIPs[0]
+		// 第 1 个（若存在）：必定是另一家族，实现双栈
 		if len(rawNodeIPs) > 1 {
 			// If more than one address is returned, they are guaranteed to be of different families
 			family := v1.IPv4Protocol
@@ -667,17 +732,18 @@ func detectNodeIPs(ctx context.Context, rawNodeIPs []net.IP, bindAddress string)
 		}
 	}
 
-	// If a bindAddress is passed, override the primary IP
+	// 如果 bindAddress 非空，覆盖主 IP,用户手动指定时具有最高优先级。
 	bindIP := netutils.ParseIPSloppy(bindAddress)
 	if bindIP != nil && !bindIP.IsUnspecified() {
-		if netutils.IsIPv4(bindIP) {
+		if netutils.IsIPv4(bindIP) { // bindAddress 是 IPv4
 			primaryFamily = v1.IPv4Protocol
-		} else {
+		} else { // bindAddress 是 IPv6
 			primaryFamily = v1.IPv6Protocol
 		}
 		nodeIPs[primaryFamily] = bindIP
 	}
 
+	// 如果主 IP 是回环地址，日志提示
 	if nodeIPs[primaryFamily].IsLoopback() {
 		logger.Info("Can't determine this node's IP, assuming loopback; if this is incorrect, please set the --bind-address flag")
 	}

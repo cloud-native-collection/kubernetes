@@ -41,13 +41,16 @@ import (
 // NodeManager handles the life cycle of kube-proxy based on the NodeIPs and PodCIDRs handles
 // node watch events and crashes kube-proxy if there are any changes in NodeIPs or PodCIDRs.
 // Note: It only crashes on change on PodCIDR when watchPodCIDRs is set to true.
+// NodeManager 处理 kube-proxy 的生命周期，基于 NodeIPs 和 PodCIDRs 处理
+// 节点事件并崩溃 kube-proxy 如果 NodeIPs 或 PodCIDRs 发生变化。
+// 注意：当 watchPodCIDRs 设置为 true 时，仅在 PodCIDR 发生变化时崩溃。
 type NodeManager struct {
-	mu            sync.Mutex
-	node          *v1.Node
-	nodeInformer  v1informers.NodeInformer
-	nodeLister    corelisters.NodeLister
-	watchPodCIDRs bool
-	exitFunc      func(exitCode int)
+	mu            sync.Mutex               // 互斥锁
+	node          *v1.Node                 //  当前节点的 Node 对象
+	nodeInformer  v1informers.NodeInformer // 节点 informer
+	nodeLister    corelisters.NodeLister   // 用于列出和获取 Node 资源
+	watchPodCIDRs bool                     // 是否监控 PodCIDRs
+	exitFunc      func(exitCode int)       // 退出函数
 }
 
 // NewNodeManager initializes node informer that selects for the given node, waits for cache

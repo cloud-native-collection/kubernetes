@@ -84,7 +84,7 @@ func (sct *ServiceChangeTracker) Update(previous, current *v1.Service) bool {
 		svc = previous
 	}
 	metrics.ServiceChangesTotal.Inc()
-	namespacedName := types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}
+	namespacedName := types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name} // 服务名称：生成唯一标识
 
 	sct.lock.Lock()
 	defer sct.lock.Unlock()

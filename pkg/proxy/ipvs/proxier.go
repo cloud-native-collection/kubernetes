@@ -56,55 +56,57 @@ import (
 	netutils "k8s.io/utils/net"
 )
 
+// 定义了kube-proxy在IPVS模式下使用的各种iptables链
 const (
 	// kubeServicesChain is the services portal chain
-	kubeServicesChain utiliptables.Chain = "KUBE-SERVICES"
+	kubeServicesChain utiliptables.Chain = "KUBE-SERVICES" // 服务入口链 NAT (PREROUTING, OUTPUT)，作为服务流量的入口点，将流量分发到对应的服务链
 
 	// kubeProxyFirewallChain is the kube-proxy firewall chain.
-	kubeProxyFirewallChain utiliptables.Chain = "KUBE-PROXY-FIREWALL"
+	kubeProxyFirewallChain utiliptables.Chain = "KUBE-PROXY-FIREWALL" //FILTER (FORWARD) 防火墙链，实现kube-proxy的防火墙功能
 
 	// kubeSourceRangesFirewallChain is the firewall subchain for LoadBalancerSourceRanges.
-	kubeSourceRangesFirewallChain utiliptables.Chain = "KUBE-SOURCE-RANGES-FIREWALL"
+	kubeSourceRangesFirewallChain utiliptables.Chain = "KUBE-SOURCE-RANGES-FIREWALL" //FILTER (FORWARD) 防火墙链，实现LoadBalancerSourceRanges的源IP过滤
 
 	// kubePostroutingChain is the kubernetes postrouting chain
-	kubePostroutingChain utiliptables.Chain = "KUBE-POSTROUTING"
+	kubePostroutingChain utiliptables.Chain = "KUBE-POSTROUTING" //NAT (POSTROUTING) 后置路由链，用于SNAT，在数据包离开节点前进行SNAT/MASQUERADE操作
 
 	// kubeMarkMasqChain is the mark-for-masquerade chain
-	kubeMarkMasqChain utiliptables.Chain = "KUBE-MARK-MASQ"
+	kubeMarkMasqChain utiliptables.Chain = "KUBE-MARK-MASQ" //NAT (POSTROUTING) 标记需要做源地址转换(SNAT)的流量
 
 	// kubeNodePortChain is the kubernetes node port chain
-	kubeNodePortChain utiliptables.Chain = "KUBE-NODE-PORT"
+	kubeNodePortChain utiliptables.Chain = "KUBE-NODE-PORT" //NAT (PREROUTING) 节点端口链，用于将NodePort流量转发到对应的服务
 
 	// kubeForwardChain is the kubernetes forward chain
-	kubeForwardChain utiliptables.Chain = "KUBE-FORWARD"
+	kubeForwardChain utiliptables.Chain = "KUBE-FORWARD" //FILTER (FORWARD) 转发链，处理转发到其他pod的流量
 
 	// kubeLoadBalancerChain is the kubernetes chain for loadbalancer type service
-	kubeLoadBalancerChain utiliptables.Chain = "KUBE-LOAD-BALANCER"
+	kubeLoadBalancerChain utiliptables.Chain = "KUBE-LOAD-BALANCER" //NAT (PREROUTING) 负载均衡链，用于将LoadBalancer流量转发到对应的服务
 
 	// kubeIPVSFilterChain filters external access to main netns
 	// https://github.com/kubernetes/kubernetes/issues/72236
-	kubeIPVSFilterChain utiliptables.Chain = "KUBE-IPVS-FILTER"
+	kubeIPVSFilterChain utiliptables.Chain = "KUBE-IPVS-FILTER" //FILTER (FORWARD，OUTPUT) 过滤对主网络命名空间的访问，解决特定网络问题
 
 	// kubeIPVSOutFilterChain filters access to load balancer services from node.
 	// https://github.com/kubernetes/kubernetes/issues/119656
-	kubeIPVSOutFilterChain utiliptables.Chain = "KUBE-IPVS-OUT-FILTER"
+	kubeIPVSOutFilterChain utiliptables.Chain = "KUBE-IPVS-OUT-FILTER" //FILTER (OUTPUT) 过滤对负载均衡器服务的访问，过滤从节点发往负载均衡器服务的流量，解决特定网络问题
 
 	// defaultScheduler is the default ipvs scheduler algorithm - round robin.
-	defaultScheduler = "rr"
+	defaultScheduler = "rr" //IPVS默认调度算法
 
 	// defaultDummyDevice is the default dummy interface which ipvs service address will bind to it.
-	defaultDummyDevice = "kube-ipvs0"
+	defaultDummyDevice = "kube-ipvs0" //IPVS默认虚拟设备
 )
 
 // In IPVS proxy mode, the following flags need to be set
+// Linux内核的sysctl参数，用于配置Kubernetes中IPVS（IP虚拟服务器）和网络设置
 const (
-	sysctlVSConnTrack             = "net/ipv4/vs/conntrack"
-	sysctlConnReuse               = "net/ipv4/vs/conn_reuse_mode"
-	sysctlExpireNoDestConn        = "net/ipv4/vs/expire_nodest_conn"
-	sysctlExpireQuiescentTemplate = "net/ipv4/vs/expire_quiescent_template"
-	sysctlForward                 = "net/ipv4/ip_forward"
-	sysctlArpIgnore               = "net/ipv4/conf/all/arp_ignore"
-	sysctlArpAnnounce             = "net/ipv4/conf/all/arp_announce"
+	sysctlVSConnTrack             = "net/ipv4/vs/conntrack"                 //IPVS连接跟踪
+	sysctlConnReuse               = "net/ipv4/vs/conn_reuse_mode"           //IPVS连接复用模式
+	sysctlExpireNoDestConn        = "net/ipv4/vs/expire_nodest_conn"        //IPVS无目的连接超时时间
+	sysctlExpireQuiescentTemplate = "net/ipv4/vs/expire_quiescent_template" //IPVS静默模板超时时间
+	sysctlForward                 = "net/ipv4/ip_forward"                   //IP转发
+	sysctlArpIgnore               = "net/ipv4/conf/all/arp_ignore"          //ARP忽略
+	sysctlArpAnnounce             = "net/ipv4/conf/all/arp_announce"        //ARP通告
 )
 
 // NewDualStackProxier returns a new Proxier for dual-stack operation
@@ -162,90 +164,90 @@ func NewDualStackProxier(
 // Proxier is an ipvs-based proxy
 type Proxier struct {
 	// the ipfamily on which this proxy is operating on.
-	ipFamily v1.IPFamily
+	ipFamily v1.IPFamily //IPV4或IPV6
 	// endpointsChanges and serviceChanges contains all changes to endpoints and
 	// services that happened since last syncProxyRules call. For a single object,
 	// changes are accumulated, i.e. previous is state from before all of them,
 	// current is state after applying all of those.
-	endpointsChanges *proxy.EndpointsChangeTracker
-	serviceChanges   *proxy.ServiceChangeTracker
+	endpointsChanges *proxy.EndpointsChangeTracker //端点变化
+	serviceChanges   *proxy.ServiceChangeTracker   //服务变化
 
-	mu             sync.Mutex // protects the following fields
-	svcPortMap     proxy.ServicePortMap
-	endpointsMap   proxy.EndpointsMap
-	topologyLabels map[string]string
+	mu             sync.Mutex           // protects the following fields
+	svcPortMap     proxy.ServicePortMap //服务端口映射
+	endpointsMap   proxy.EndpointsMap   //端点映射
+	topologyLabels map[string]string    //拓扑标签
 	// initialSync is a bool indicating if the proxier is syncing for the first time.
 	// It is set to true when a new proxier is initialized and then set to false on all
 	// future syncs.
 	// This lets us run specific logic that's required only during proxy startup.
 	// For eg: it enables us to update weights of existing destinations only on startup
 	// saving us the cost of querying and updating real servers during every sync.
-	initialSync bool
+	initialSync bool //是否是第一次同步
 	// endpointSlicesSynced, and servicesSynced are set to true when
 	// corresponding objects are synced after startup. This is used to avoid updating
 	// ipvs rules with some partial data after kube-proxy restart.
-	endpointSlicesSynced bool
-	servicesSynced       bool
-	initialized          int32
+	endpointSlicesSynced bool                           //端点切片是否同步
+	servicesSynced       bool                           //服务是否同步
+	initialized          int32                          //是否初始化
 	syncRunner           *runner.BoundedFrequencyRunner // governs calls to syncProxyRules
 
 	// These are effectively const and do not need the mutex to be held.
-	syncPeriod    time.Duration
-	minSyncPeriod time.Duration
+	syncPeriod    time.Duration //同步周期
+	minSyncPeriod time.Duration //最小同步周期
 	// Values are CIDR's to exclude when cleaning up IPVS rules.
-	excludeCIDRs []*net.IPNet
+	excludeCIDRs []*net.IPNet //排除的CIDR
 
-	iptables       utiliptables.Interface
-	ipvs           utilipvs.Interface
-	ipset          utilipset.Interface
-	conntrack      conntrack.Interface
-	masqueradeAll  bool
-	masqueradeMark string
-	localDetector  proxyutil.LocalTrafficDetector
-	nodeName       string
-	nodeIP         net.IP
+	iptables       utiliptables.Interface         //iptables接口
+	ipvs           utilipvs.Interface             //ipvs接口
+	ipset          utilipset.Interface            //ipset接口
+	conntrack      conntrack.Interface            //conntrack接口
+	masqueradeAll  bool                           //是否 masquerade 所有流量
+	masqueradeMark string                         //masquerade 标记
+	localDetector  proxyutil.LocalTrafficDetector //本地流量检测器
+	nodeName       string                         //节点名称
+	nodeIP         net.IP                         //节点IP
 
-	serviceHealthServer healthcheck.ServiceHealthServer
-	healthzServer       *healthcheck.ProxyHealthServer
+	serviceHealthServer healthcheck.ServiceHealthServer //服务健康检查服务器
+	healthzServer       *healthcheck.ProxyHealthServer  //健康检查服务器
 
-	ipvsScheduler string
+	ipvsScheduler string //IPVS调度器
 	// The following buffers are used to reuse memory and avoid allocations
 	// that are significantly impacting performance.
-	iptablesData     *bytes.Buffer
-	filterChainsData *bytes.Buffer
-	natChains        proxyutil.LineBuffer
-	filterChains     proxyutil.LineBuffer
-	natRules         proxyutil.LineBuffer
-	filterRules      proxyutil.LineBuffer
+	iptablesData     *bytes.Buffer        //iptables数据
+	filterChainsData *bytes.Buffer        //filter链数据
+	natChains        proxyutil.LineBuffer //nat链
+	filterChains     proxyutil.LineBuffer //filter链
+	natRules         proxyutil.LineBuffer //nat规则
+	filterRules      proxyutil.LineBuffer //filter规则
 	// Added as a member to the struct to allow injection for testing.
-	netlinkHandle NetLinkHandle
+	netlinkHandle NetLinkHandle //netlink句柄
 	// ipsetList is the list of ipsets that ipvs proxier used.
-	ipsetList map[string]*IPSet
+	ipsetList map[string]*IPSet //ipset列表
 	// nodePortAddresses selects the interfaces where nodePort works.
-	nodePortAddresses *proxyutil.NodePortAddresses
+	nodePortAddresses *proxyutil.NodePortAddresses //nodePort地址
 	// networkInterfacer defines an interface for several net library functions.
 	// Inject for test purpose.
-	networkInterfacer     proxyutil.NetworkInterfacer
-	gracefuldeleteManager *GracefulTerminationManager
+	networkInterfacer     proxyutil.NetworkInterfacer //网络接口
+	gracefuldeleteManager *GracefulTerminationManager //优雅删除管理器
 	// serviceNoLocalEndpointsInternal represents the set of services that couldn't be applied
 	// due to the absence of local endpoints when the internal traffic policy is "Local".
 	// It is used to publish the sync_proxy_rules_no_endpoints_total
 	// metric with the traffic_policy label set to "internal".
 	// A Set is used here since we end up calculating endpoint topology multiple times for the same Service
 	// if it has multiple ports but each Service should only be counted once.
-	serviceNoLocalEndpointsInternal sets.Set[string]
+	serviceNoLocalEndpointsInternal sets.Set[string] //服务无本地端点
 	// serviceNoLocalEndpointsExternal represents the set of services that couldn't be applied
 	// due to the absence of any endpoints when the external traffic policy is "Local".
 	// It is used to publish the sync_proxy_rules_no_endpoints_total
 	// metric with the traffic_policy label set to "external".
 	// A Set is used here since we end up calculating endpoint topology multiple times for the same Service
 	// if it has multiple ports but each Service should only be counted once.
-	serviceNoLocalEndpointsExternal sets.Set[string]
+	serviceNoLocalEndpointsExternal sets.Set[string] //服务无本地端点
 	// lbNoNodeAccessIPPortProtocolEntries represents the set of loadBalancers IP + Port + Protocol that should not be accessible from K8s nodes
 	// We cannot directly restrict LB access from node using LoadBalancerSourceRanges, we need to install
 	// additional iptables rules.
 	// (ref: https://github.com/kubernetes/kubernetes/issues/119656)
-	lbNoNodeAccessIPPortProtocolEntries []*utilipset.Entry
+	lbNoNodeAccessIPPortProtocolEntries []*utilipset.Entry //负载均衡器IP + 端口 + 协议
 
 	logger klog.Logger
 }
@@ -281,6 +283,7 @@ func NewProxier(
 ) (*Proxier, error) {
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "ipFamily", ipFamily)
 	// Set the conntrack sysctl we need for
+	// 启用IPVS连接跟踪
 	if err := proxyutil.EnsureSysctl(sysctl, sysctlVSConnTrack, 1); err != nil {
 		return nil, err
 	}
@@ -290,6 +293,7 @@ func NewProxier(
 		return nil, fmt.Errorf("failed to get kernel version: %w", err)
 	}
 
+	// 设置连接重用模式（根据内核版本）
 	if kernelVersion.LessThan(version.MustParseGeneric(utilkernel.IPVSConnReuseModeMinSupportedKernelVersion)) {
 		logger.Error(nil, "Can't set sysctl, kernel version doesn't satisfy minimum version requirements", "sysctl", sysctlConnReuse, "minimumKernelVersion", utilkernel.IPVSConnReuseModeMinSupportedKernelVersion)
 	} else if kernelVersion.AtLeast(version.MustParseGeneric(utilkernel.IPVSConnReuseModeFixedKernelVersion)) {
@@ -303,27 +307,32 @@ func NewProxier(
 	}
 
 	// Set the expire_nodest_conn sysctl we need for
+	// 设置过期无目的连接
 	if err := proxyutil.EnsureSysctl(sysctl, sysctlExpireNoDestConn, 1); err != nil {
 		return nil, err
 	}
 
 	// Set the expire_quiescent_template sysctl we need for
+	// 设置静默模板过期时间
 	if err := proxyutil.EnsureSysctl(sysctl, sysctlExpireQuiescentTemplate, 1); err != nil {
 		return nil, err
 	}
 
 	// Set the ip_forward sysctl we need for
+	// 启用IP转发
 	if err := proxyutil.EnsureSysctl(sysctl, sysctlForward, 1); err != nil {
 		return nil, err
 	}
 
 	if strictARP {
 		// Set the arp_ignore sysctl we need for
+		// 设置ARP忽略
 		if err := proxyutil.EnsureSysctl(sysctl, sysctlArpIgnore, 1); err != nil {
 			return nil, err
 		}
 
 		// Set the arp_announce sysctl we need for
+		// 设置ARP通告
 		if err := proxyutil.EnsureSysctl(sysctl, sysctlArpAnnounce, 2); err != nil {
 			return nil, err
 		}
@@ -332,6 +341,7 @@ func NewProxier(
 	// Configure IPVS timeouts if any one of the timeout parameters have been set.
 	// This is the equivalent to running ipvsadm --set, a value of 0 indicates the
 	// current system timeout should be preserved
+	// 配置IPVS超时
 	if tcpTimeout > 0 || tcpFinTimeout > 0 || udpTimeout > 0 {
 		if err := ipvs.ConfigureTimeouts(tcpTimeout, tcpFinTimeout, udpTimeout); err != nil {
 			logger.Error(err, "Failed to configure IPVS timeouts")
@@ -344,21 +354,26 @@ func NewProxier(
 	}
 
 	// Generate the masquerade mark to use for SNAT rules.
+	// 生成masquerade标记
 	masqueradeValue := 1 << uint(masqueradeBit)
 	masqueradeMark := fmt.Sprintf("%#08x", masqueradeValue)
 
 	logger.V(2).Info("Record nodeIP and family", "nodeIP", nodeIP, "family", ipFamily)
 
+	// 设置调度器
 	if len(scheduler) == 0 {
 		logger.Info("IPVS scheduler not specified, use rr by default")
 		scheduler = defaultScheduler
 	}
 
+	// 设置NodePort地址
 	nodePortAddresses := proxyutil.NewNodePortAddresses(ipFamily, nodePortAddressStrings)
 
+	// 创建服务健康检查服务器
 	serviceHealthServer := healthcheck.NewServiceHealthServer(nodeName, recorder, nodePortAddresses, healthzServer)
 
 	// excludeCIDRs has been validated before, here we just parse it to IPNet list
+	// 解析excludeCIDRs
 	parsedExcludeCIDRs, _ := netutils.ParseCIDRs(excludeCIDRs)
 
 	proxier := &Proxier{
@@ -396,18 +411,22 @@ func NewProxier(
 		logger:                logger,
 	}
 	// initialize ipsetList with all sets we needed
+	// 初始化ipsetList
 	proxier.ipsetList = make(map[string]*IPSet)
 	for _, is := range ipsetInfo {
 		proxier.ipsetList[is.name] = NewIPSet(ipset, is.name, is.setType, (ipFamily == v1.IPv6Protocol), is.comment)
 	}
 
 	logger.V(2).Info("ipvs sync params", "minSyncPeriod", minSyncPeriod, "syncPeriod", syncPeriod, "maxSyncPeriod", proxyutil.FullSyncPeriod)
+	// 启动同步器，由runner 执行syncProxyRules
 	proxier.syncRunner = runner.NewBoundedFrequencyRunner("sync-runner", proxier.syncProxyRules, minSyncPeriod, syncPeriod, proxyutil.FullSyncPeriod)
 
+	// 启动优雅删除管理器
 	proxier.gracefuldeleteManager.Run()
 	return proxier, nil
 }
 
+// 过滤CIDRs
 func filterCIDRs(wantIPv6 bool, cidrs []string) []string {
 	var filteredCIDRs []string
 	for _, cidr := range cidrs {
@@ -526,10 +545,11 @@ var ipsetWithIptablesChain = []struct {
 }
 
 // internal struct for string service information
+// 用于存储字符串服务信息
 type servicePortInfo struct {
-	*proxy.BaseServicePortInfo
+	*proxy.BaseServicePortInfo // 基础服务端口信息
 	// The following fields are computed and stored for performance reasons.
-	nameString string
+	nameString string // 服务端口名称字符串
 }
 
 // returns a new proxy.ServicePort which abstracts a serviceInfo
@@ -863,6 +883,7 @@ func (proxier *Proxier) OnTopologyChange(topologyLabels map[string]string) {
 func (proxier *Proxier) OnServiceCIDRsChanged(_ []string) {}
 
 // This is where all of the ipvs calls happen.
+// 由runner 执行syncProxyRules
 func (proxier *Proxier) syncProxyRules() (retryError error) {
 	proxier.mu.Lock()
 	defer proxier.mu.Unlock()
@@ -889,15 +910,15 @@ func (proxier *Proxier) syncProxyRules() (retryError error) {
 	// We assume that if this was called, we really want to sync them,
 	// even if nothing changed in the meantime. In other words, callers are
 	// responsible for detecting no-op changes and not calling this function.
-	_ = proxier.svcPortMap.Update(proxier.serviceChanges)
-	endpointUpdateResult := proxier.endpointsMap.Update(proxier.endpointsChanges)
+	_ = proxier.svcPortMap.Update(proxier.serviceChanges)                         // 更新服务端口映射
+	endpointUpdateResult := proxier.endpointsMap.Update(proxier.endpointsChanges) // 更新端点映射
 
 	proxier.logger.V(3).Info("Syncing ipvs proxier rules")
 
-	proxier.serviceNoLocalEndpointsInternal = sets.New[string]()
-	proxier.serviceNoLocalEndpointsExternal = sets.New[string]()
+	proxier.serviceNoLocalEndpointsInternal = sets.New[string]() // 无本地端点的服务
+	proxier.serviceNoLocalEndpointsExternal = sets.New[string]() // 无本地端点的服务
 
-	proxier.lbNoNodeAccessIPPortProtocolEntries = make([]*utilipset.Entry, 0)
+	proxier.lbNoNodeAccessIPPortProtocolEntries = make([]*utilipset.Entry, 0) // 无节点访问的负载均衡器条目
 
 	// Begin install iptables
 
@@ -912,9 +933,10 @@ func (proxier *Proxier) syncProxyRules() (retryError error) {
 	proxier.filterChains.Write("*filter")
 	proxier.natChains.Write("*nat")
 
-	proxier.createAndLinkKubeChain()
+	proxier.createAndLinkKubeChain() // 创建并链接 kube 链
 
 	// make sure dummy interface exists in the system where ipvs Proxier will bind service address on it
+	// 获取节点上除了 dummy 设备外的所有本地 IP 地址
 	_, err := proxier.netlinkHandle.EnsureDummyDevice(defaultDummyDevice)
 	if err != nil {
 		proxier.logger.Error(err, "Failed to create dummy interface", "interface", defaultDummyDevice)
@@ -1379,6 +1401,7 @@ func (proxier *Proxier) syncProxyRules() (retryError error) {
 
 	// Tail call iptables rules for ipset, make sure only call iptables once
 	// in a single loop per ip set.
+	// 写入 iptables 规则
 	proxier.writeIptablesRules()
 
 	// Sync iptables rules.
@@ -1742,6 +1765,7 @@ func (proxier *Proxier) createAndLinkKubeChain() {
 
 }
 
+// syncService syncs the IPVS service.
 func (proxier *Proxier) syncService(svcName string, vs *utilipvs.VirtualServer, bindAddr bool, alreadyBoundAddrs sets.Set[string]) error {
 	appliedVirtualServer, _ := proxier.ipvs.GetVirtualServer(vs)
 	if appliedVirtualServer == nil || !appliedVirtualServer.Equal(vs) {
@@ -1783,6 +1807,7 @@ func (proxier *Proxier) syncService(svcName string, vs *utilipvs.VirtualServer, 
 }
 
 func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNodeLocalEndpoints bool, vs *utilipvs.VirtualServer) error {
+	// 获取当前系统中的虚拟 IPVS 服务
 	appliedVirtualServer, err := proxier.ipvs.GetVirtualServer(vs)
 	if err != nil {
 		proxier.logger.Error(err, "Failed to get IPVS service")
@@ -1793,6 +1818,7 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 	}
 
 	// curEndpoints represents IPVS destinations listed from current system.
+	// 获取当前系统中的 IPVS 目标
 	curEndpoints := sets.New[string]()
 	curDests, err := proxier.ipvs.GetRealServers(appliedVirtualServer)
 	if err != nil {
@@ -1803,6 +1829,7 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 		curEndpoints.Insert(des.String())
 	}
 
+	// 端点过滤与分类
 	endpoints := proxier.endpointsMap[svcPortName]
 
 	// Filtering for topology aware endpoints. This function will only
@@ -1843,8 +1870,9 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 	}
 
 	// Create new endpoints
+	// 创建新的端点
 	for _, ep := range newEndpoints.UnsortedList() {
-		ip, port, err := net.SplitHostPort(ep)
+		ip, port, err := net.SplitHostPort(ep) // 解析 IP 和端口
 		if err != nil {
 			proxier.logger.Error(err, "Failed to parse endpoint", "endpoint", ep)
 			continue
@@ -1855,6 +1883,7 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 			continue
 		}
 
+		// 创建新的端点
 		newDest := &utilipvs.RealServer{
 			Address: netutils.ParseIPSloppy(ip),
 			Port:    uint16(portNum),
@@ -1887,6 +1916,7 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 				continue
 			}
 		}
+		// 添加新的端点
 		err = proxier.ipvs.AddRealServer(appliedVirtualServer, newDest)
 		if err != nil {
 			proxier.logger.Error(err, "Failed to add destination", "newDest", newDest)
@@ -1895,13 +1925,14 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 	}
 
 	// Delete old endpoints
+	// 删除旧的端点
 	for _, ep := range curEndpoints.Difference(newEndpoints).UnsortedList() {
 		// if curEndpoint is in gracefulDelete, skip
 		uniqueRS := vs.String() + "/" + ep
 		if proxier.gracefuldeleteManager.InTerminationList(uniqueRS) {
 			continue
 		}
-		ip, port, err := net.SplitHostPort(ep)
+		ip, port, err := net.SplitHostPort(ep) // 解析 IP 和端口
 		if err != nil {
 			proxier.logger.Error(err, "Failed to parse endpoint", "endpoint", ep)
 			continue
@@ -1912,12 +1943,14 @@ func (proxier *Proxier) syncEndpoint(svcPortName proxy.ServicePortName, onlyNode
 			continue
 		}
 
+		// 创建要删除的 RealServer 配置
 		delDest := &utilipvs.RealServer{
 			Address: netutils.ParseIPSloppy(ip),
 			Port:    uint16(portNum),
 		}
 
 		proxier.logger.V(5).Info("Using graceful delete", "uniqueRealServer", uniqueRS)
+		// 软优雅删除
 		err = proxier.gracefuldeleteManager.GracefulDeleteRS(appliedVirtualServer, delDest)
 		if err != nil {
 			proxier.logger.Error(err, "Failed to delete destination", "uniqueRealServer", uniqueRS)

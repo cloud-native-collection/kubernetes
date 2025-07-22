@@ -92,12 +92,13 @@ type IPSetVersioner interface {
 }
 
 // IPSet wraps util/ipset which is used by IPVS proxier.
+// IPSet结构体包装了util/ipset，用于IPVS代理器
 type IPSet struct {
-	utilipset.IPSet
+	utilipset.IPSet // ipset
 	// activeEntries is the current active entries of the ipset.
-	activeEntries sets.Set[string]
+	activeEntries sets.Set[string] // 当前活动条目
 	// handle is the util ipset interface handle.
-	handle utilipset.Interface
+	handle utilipset.Interface // util ipset接口句柄
 }
 
 // NewIPSet initialize a new IPSet struct
