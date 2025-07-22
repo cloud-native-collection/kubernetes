@@ -178,6 +178,9 @@ func (hs *ProxyHealthServer) NodeEligible() bool {
 	defer hs.lock.Unlock()
 
 	node := hs.nodeManager.Node()
+	if node == nil {
+		return false
+	}
 	if !node.DeletionTimestamp.IsZero() {
 		return false
 	}

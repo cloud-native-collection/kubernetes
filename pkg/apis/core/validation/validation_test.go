@@ -2333,6 +2333,7 @@ func TestAlphaPVVolumeModeUpdate(t *testing.T) {
 }
 
 func TestValidatePersistentVolumeClaimUpdate(t *testing.T) {
+	featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
 	block := core.PersistentVolumeBlock
 	file := core.PersistentVolumeFilesystem
 	invalidAPIGroup := "^invalid"
@@ -10880,6 +10881,63 @@ func TestValidatePod(t *testing.T) {
 				},
 			}),
 		),
+		"valid PodCertificate projected volume source, minimal": *podtest.MakePod("valid-podcertificate-1",
+			podtest.SetVolumes(core.Volume{
+				Name: "projected-volume",
+				VolumeSource: core.VolumeSource{
+					Projected: &core.ProjectedVolumeSource{
+						Sources: []core.VolumeProjection{
+							{
+								PodCertificate: &core.PodCertificateProjection{
+									SignerName:           "example.com/foo",
+									KeyType:              "ED25519",
+									CredentialBundlePath: "credbundle.pem",
+								},
+							},
+						},
+					},
+				},
+			}),
+		),
+		"valid PodCertificate projected volume source, explicit max expiration": *podtest.MakePod("valid-podcertificate-3",
+			podtest.SetVolumes(core.Volume{
+				Name: "projected-volume",
+				VolumeSource: core.VolumeSource{
+					Projected: &core.ProjectedVolumeSource{
+						Sources: []core.VolumeProjection{
+							{
+								PodCertificate: &core.PodCertificateProjection{
+									SignerName:           "example.com/foo",
+									KeyType:              "ED25519",
+									MaxExpirationSeconds: ptr.To[int32](3600),
+									CredentialBundlePath: "credbundle.pem",
+								},
+							},
+						},
+					},
+				},
+			}),
+		),
+		"valid PodCertificate projected volume source, separate key/cert": *podtest.MakePod("valid-podcertificate-4",
+			podtest.SetVolumes(core.Volume{
+				Name: "projected-volume",
+				VolumeSource: core.VolumeSource{
+					Projected: &core.ProjectedVolumeSource{
+						Sources: []core.VolumeProjection{
+							{
+								PodCertificate: &core.PodCertificateProjection{
+									SignerName:           "example.com/foo",
+									KeyType:              "ED25519",
+									MaxExpirationSeconds: ptr.To[int32](3600),
+									KeyPath:              "key.pem",
+									CertificateChainPath: "certificates.pem",
+								},
+							},
+						},
+					},
+				},
+			}),
+		),
 		"ephemeral volume + PVC, no conflict between them": *podtest.MakePod("valid-extended",
 			podtest.SetVolumes(
 				core.Volume{Name: "pvc", VolumeSource: core.VolumeSource{PersistentVolumeClaim: &core.PersistentVolumeClaimVolumeSource{ClaimName: "my-pvc"}}},
@@ -12354,6 +12412,172 @@ func TestValidatePod(t *testing.T) {
 									ClusterTrustBundle: &core.ClusterTrustBundleProjection{
 										Path:       "foo-path",
 										SignerName: ptr.To("example.com/foo/invalid"),
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with no signer name": {
+			expectedError: "Required value",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										KeyType:              "ED25519",
+										CredentialBundlePath: "credbundle.pem",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with bad signer name": {
+			expectedError: "must be a fully qualified domain and path of the form",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName:           "example.com/foo/invalid",
+										KeyType:              "ED25519",
+										CredentialBundlePath: "credbundle.pem",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with bad key type": {
+			expectedError: "Unsupported value: \"BAD\"",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName:           "example.com/foo",
+										KeyType:              "BAD",
+										CredentialBundlePath: "credbundle.pem",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with no paths": {
+			expectedError: "Required value: specify at least one of credentialBundlePath, keyPath, and certificateChainPath",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName: "example.com/foo",
+										KeyType:    "ED25519",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with conflicting paths": {
+			expectedError: "conflicting duplicate paths",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName:           "example.com/foo",
+										KeyType:              "ED25519",
+										KeyPath:              "same.pem",
+										CertificateChainPath: "same.pem",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with bad cred bundle path": {
+			expectedError: "must be a relative path",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName:           "example.com/foo",
+										CredentialBundlePath: "/absolute.pem",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with bad key path": {
+			expectedError: "must be a relative path",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName:           "example.com/foo",
+										KeyPath:              "/absolute.pem",
+										CertificateChainPath: "certificates.pem",
+									},
+								},
+							},
+						},
+					},
+				}),
+			),
+		},
+		"PodCertificate projected volume with bad certificates path": {
+			expectedError: "must be a relative path",
+			spec: *podtest.MakePod("pod1",
+				podtest.SetVolumes(core.Volume{
+					Name: "projected-volume",
+					VolumeSource: core.VolumeSource{
+						Projected: &core.ProjectedVolumeSource{
+							Sources: []core.VolumeProjection{
+								{
+									PodCertificate: &core.PodCertificateProjection{
+										SignerName:           "example.com/foo",
+										KeyPath:              "key.pem",
+										CertificateChainPath: "/certificates.pem",
 									},
 								},
 							},
@@ -20140,6 +20364,7 @@ func TestValidateLimitRange(t *testing.T) {
 }
 
 func TestValidatePersistentVolumeClaimStatusUpdate(t *testing.T) {
+	featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
 	validClaim := testVolumeClaim("foo", "ns", core.PersistentVolumeClaimSpec{
 		AccessModes: []core.PersistentVolumeAccessMode{
 			core.ReadWriteOnce,
@@ -26880,12 +27105,12 @@ func TestValidatePodResize(t *testing.T) {
 			test: "no restart policy: memory limit decrease",
 			old:  mkPod(core.ResourceList{}, getResources("100m", "200Mi", "", "")),
 			new:  mkPod(core.ResourceList{}, getResources("100m", "100Mi", "", "")),
-			err:  "memory limits cannot be decreased",
+			err:  "",
 		}, {
 			test: "restart NotRequired: memory limit decrease",
 			old:  mkPod(core.ResourceList{}, getResources("100m", "200Mi", "", ""), resizePolicy("memory", core.NotRequired)),
 			new:  mkPod(core.ResourceList{}, getResources("100m", "100Mi", "", ""), resizePolicy("memory", core.NotRequired)),
-			err:  "memory limits cannot be decreased",
+			err:  "",
 		}, {
 			test: "RestartContainer: memory limit decrease",
 			old:  mkPod(core.ResourceList{}, getResources("100m", "200Mi", "", ""), resizePolicy("memory", core.RestartContainer)),
@@ -27104,19 +27329,9 @@ func TestValidatePodResize(t *testing.T) {
 			new:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "200Mi", "", ""), core.ContainerRestartPolicyAlways),
 			err:  "",
 		}, {
-			test: "memory limit decrease for sidecar containers, no resize policy",
+			test: "memory limit decrease for sidecar containers",
 			old:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "200Mi", "", ""), core.ContainerRestartPolicyAlways),
 			new:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "100Mi", "", ""), core.ContainerRestartPolicyAlways),
-			err:  "memory limits cannot be decreased",
-		}, {
-			test: "memory limit decrease for sidecar containers, resize policy NotRequired",
-			old:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "200Mi", "", ""), core.ContainerRestartPolicyAlways, resizePolicy(core.ResourceMemory, core.NotRequired)),
-			new:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "100Mi", "", ""), core.ContainerRestartPolicyAlways, resizePolicy(core.ResourceMemory, core.NotRequired)),
-			err:  "memory limits cannot be decreased",
-		}, {
-			test: "memory limit decrease for sidecar containers, resize policy RestartContainer",
-			old:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "200Mi", "", ""), core.ContainerRestartPolicyAlways, resizePolicy(core.ResourceMemory, core.RestartContainer)),
-			new:  mkPodWithInitContainers(core.ResourceList{}, getResources("100m", "100Mi", "", ""), core.ContainerRestartPolicyAlways, resizePolicy(core.ResourceMemory, core.RestartContainer)),
 			err:  "",
 		}, {
 			test: "storage limit change for sidecar containers",

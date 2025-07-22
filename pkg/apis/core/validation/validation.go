@@ -51,6 +51,7 @@ import (
 	resourcehelper "k8s.io/component-helpers/resource"
 	schedulinghelper "k8s.io/component-helpers/scheduling/corev1"
 	kubeletapis "k8s.io/kubelet/pkg/apis"
+	"k8s.io/kubernetes/pkg/apis/certificates"
 
 	apiservice "k8s.io/kubernetes/pkg/api/service"
 	"k8s.io/kubernetes/pkg/apis/core"
@@ -1248,6 +1249,69 @@ func validateProjectionSources(projection *core.ProjectedVolumeSource, projectio
 				allErrs = append(allErrs, field.Invalid(fldPath, curPath, "conflicting duplicate paths"))
 			}
 		}
+		if projPath := srcPath.Child("podCertificate"); source.PodCertificate != nil {
+			numSources++
+
+			allErrs = append(allErrs, ValidateSignerName(projPath.Child("signerName"), source.PodCertificate.SignerName)...)
+
+			switch source.PodCertificate.KeyType {
+			case "RSA3072", "RSA4096", "ECDSAP256", "ECDSAP384", "ECDSAP521", "ED25519":
+				// ok
+			default:
+				allErrs = append(allErrs, field.NotSupported(projPath.Child("keyType"), source.PodCertificate.KeyType, []string{"RSA3072", "RSA4096", "ECDSAP256", "ECDSAP384", "ECDSAP521", "ED25519"}))
+			}
+
+			if source.PodCertificate.MaxExpirationSeconds != nil {
+				if *source.PodCertificate.MaxExpirationSeconds < 3600 {
+					allErrs = append(allErrs, field.Invalid(projPath.Child("maxExpirationSeconds"), *source.PodCertificate.MaxExpirationSeconds, "if provided, maxExpirationSeconds must be >= 3600"))
+				}
+				maxMaxExpirationSeconds := certificates.MaxMaxExpirationSeconds
+				if IsKubernetesSignerName(source.PodCertificate.SignerName) {
+					maxMaxExpirationSeconds = certificates.KubernetesMaxMaxExpirationSeconds
+				}
+				if *source.PodCertificate.MaxExpirationSeconds > int32(maxMaxExpirationSeconds) {
+					allErrs = append(allErrs, field.Invalid(projPath.Child("maxExpirationSeconds"), *source.PodCertificate.MaxExpirationSeconds, fmt.Sprintf("if provided, maxExpirationSeconds must be <= %d", maxMaxExpirationSeconds)))
+				}
+			}
+
+			numPaths := 0
+			if len(source.PodCertificate.CredentialBundlePath) != 0 {
+				numPaths++
+				// Credential bundle path must not be weird.
+				allErrs = append(allErrs, ValidateLocalNonReservedPath(source.PodCertificate.CredentialBundlePath, projPath.Child("credentialBundlePath"))...)
+				// Credential bundle path must not collide with a path from another source.
+				if !allPaths.Has(source.PodCertificate.CredentialBundlePath) {
+					allPaths.Insert(source.PodCertificate.CredentialBundlePath)
+				} else {
+					allErrs = append(allErrs, field.Invalid(fldPath, source.PodCertificate.CredentialBundlePath, "conflicting duplicate paths"))
+				}
+			}
+
+			if len(source.PodCertificate.KeyPath) != 0 {
+				numPaths++
+				allErrs = append(allErrs, ValidateLocalNonReservedPath(source.PodCertificate.KeyPath, projPath.Child("keyPath"))...)
+				if !allPaths.Has(source.PodCertificate.KeyPath) {
+					allPaths.Insert(source.PodCertificate.KeyPath)
+				} else {
+					allErrs = append(allErrs, field.Invalid(fldPath, source.PodCertificate.KeyPath, "conflicting duplicate paths"))
+				}
+
+			}
+
+			if len(source.PodCertificate.CertificateChainPath) != 0 {
+				numPaths++
+				allErrs = append(allErrs, ValidateLocalNonReservedPath(source.PodCertificate.CertificateChainPath, projPath.Child("certificateChainPath"))...)
+				if !allPaths.Has(source.PodCertificate.CertificateChainPath) {
+					allPaths.Insert(source.PodCertificate.CertificateChainPath)
+				} else {
+					allErrs = append(allErrs, field.Invalid(fldPath, source.PodCertificate.CertificateChainPath, "conflicting duplicate paths"))
+				}
+			}
+
+			if numPaths == 0 {
+				allErrs = append(allErrs, field.Required(projPath, "specify at least one of credentialBundlePath, keyPath, and certificateChainPath"))
+			}
+		}
 		if numSources > 1 {
 			allErrs = append(allErrs, field.Forbidden(srcPath, "may not specify more than 1 volume type per source"))
 		}
@@ -2185,12 +2249,16 @@ type PersistentVolumeClaimSpecValidationOptions struct {
 	EnableVolumeAttributesClass bool
 }
 
-func ValidationOptionsForPersistentVolumeClaim(pvc, oldPvc *core.PersistentVolumeClaim) PersistentVolumeClaimSpecValidationOptions {
-	opts := PersistentVolumeClaimSpecValidationOptions{
+func ValidationOptionsForPersistentVolumeClaimCreate() PersistentVolumeClaimSpecValidationOptions {
+	return PersistentVolumeClaimSpecValidationOptions{
 		EnableRecoverFromExpansionFailure: utilfeature.DefaultFeatureGate.Enabled(features.RecoverVolumeExpansionFailure),
 		AllowInvalidLabelValueInSelector:  false,
 		EnableVolumeAttributesClass:       utilfeature.DefaultFeatureGate.Enabled(features.VolumeAttributesClass),
 	}
+}
+
+func ValidationOptionsForPersistentVolumeClaim(pvc, oldPvc *core.PersistentVolumeClaim) PersistentVolumeClaimSpecValidationOptions {
+	opts := ValidationOptionsForPersistentVolumeClaimCreate()
 	if oldPvc == nil {
 		// If there's no old PVC, use the options based solely on feature enablement
 		return opts
@@ -5839,31 +5907,6 @@ func validateContainerResize(newRequirements, oldRequirements *core.ResourceRequ
 	}
 	if resourcesRemoved(newRequirements.Limits, oldRequirements.Limits) {
 		allErrs = append(allErrs, field.Forbidden(fldPath.Child("limits"), "resource limits cannot be removed"))
-	}
-
-	// Special case: memory limits may not be decreased if resize policy is NotRequired.
-	var memRestartPolicy core.ResourceResizeRestartPolicy
-	for _, policy := range resizePolicies {
-		if policy.ResourceName == core.ResourceMemory {
-			memRestartPolicy = policy.RestartPolicy
-			break
-		}
-	}
-	if memRestartPolicy == core.NotRequired || memRestartPolicy == "" {
-		newLimit, hasNewLimit := newRequirements.Limits[core.ResourceMemory]
-		oldLimit, hasOldLimit := oldRequirements.Limits[core.ResourceMemory]
-		if hasNewLimit && hasOldLimit {
-			if newLimit.Cmp(oldLimit) < 0 {
-				allErrs = append(allErrs, field.Forbidden(
-					fldPath.Child("limits").Key(core.ResourceMemory.String()),
-					fmt.Sprintf("memory limits cannot be decreased unless resizePolicy is %s", core.RestartContainer)))
-			}
-		} else if hasNewLimit && !hasOldLimit {
-			// Adding a memory limit is implicitly decreasing the memory limit (from 'max')
-			allErrs = append(allErrs, field.Forbidden(
-				fldPath.Child("limits").Key(core.ResourceMemory.String()),
-				fmt.Sprintf("memory limits cannot be added unless resizePolicy is %s", core.RestartContainer)))
-		}
 	}
 
 	// TODO(tallclair): Move resizable resource checks here.

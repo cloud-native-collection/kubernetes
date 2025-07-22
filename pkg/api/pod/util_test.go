@@ -25,10 +25,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"k8s.io/component-base/featuregate"
 
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -849,103 +847,6 @@ func TestDropProcMount(t *testing.T) {
 	}
 }
 
-func TestDropAppArmor(t *testing.T) {
-	tests := []struct {
-		description    string
-		hasAnnotations bool
-		hasFields      bool
-		pod            api.Pod
-	}{{
-		description:    "with AppArmor Annotations",
-		hasAnnotations: true,
-		pod: api.Pod{
-			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"a": "1", v1.DeprecatedAppArmorBetaContainerAnnotationKeyPrefix + "foo": "default"}},
-			Spec:       api.PodSpec{},
-		},
-	}, {
-		description:    "with AppArmor Annotations & fields",
-		hasAnnotations: true,
-		hasFields:      true,
-		pod: api.Pod{
-			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"a": "1", v1.DeprecatedAppArmorBetaContainerAnnotationKeyPrefix + "foo": "default"}},
-			Spec: api.PodSpec{
-				SecurityContext: &api.PodSecurityContext{
-					AppArmorProfile: &api.AppArmorProfile{
-						Type: api.AppArmorProfileTypeRuntimeDefault,
-					},
-				},
-			},
-		},
-	}, {
-		description: "with pod AppArmor profile",
-		hasFields:   true,
-		pod: api.Pod{
-			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"a": "1"}},
-			Spec: api.PodSpec{
-				SecurityContext: &api.PodSecurityContext{
-					AppArmorProfile: &api.AppArmorProfile{
-						Type: api.AppArmorProfileTypeRuntimeDefault,
-					},
-				},
-			},
-		},
-	}, {
-		description: "with container AppArmor profile",
-		hasFields:   true,
-		pod: api.Pod{
-			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"a": "1"}},
-			Spec: api.PodSpec{
-				Containers: []api.Container{{
-					SecurityContext: &api.SecurityContext{
-						AppArmorProfile: &api.AppArmorProfile{
-							Type: api.AppArmorProfileTypeRuntimeDefault,
-						},
-					},
-				}},
-			},
-		},
-	}, {
-		description: "without AppArmor",
-		pod: api.Pod{
-			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"a": "1"}},
-			Spec:       api.PodSpec{},
-		},
-	}}
-
-	for _, test := range tests {
-
-		t.Run(fmt.Sprintf("%v", test.description), func(t *testing.T) {
-			newPod := test.pod.DeepCopy()
-
-			if hasAnnotations := appArmorAnnotationsInUse(newPod.Annotations); hasAnnotations != test.hasAnnotations {
-				t.Errorf("appArmorAnnotationsInUse does not match expectation: %t != %t", hasAnnotations, test.hasAnnotations)
-			}
-			if hasFields := appArmorFieldsInUse(&newPod.Spec); hasFields != test.hasFields {
-				t.Errorf("appArmorFieldsInUse does not match expectation: %t != %t", hasFields, test.hasFields)
-			}
-
-			DropDisabledPodFields(newPod, newPod)
-			require.Equal(t, &test.pod, newPod, "unchanged pod should never be mutated")
-
-			DropDisabledPodFields(newPod, nil)
-			assert.Equal(t, &test.pod, newPod, "pod should not be mutated when both feature gates are enabled")
-
-			expectAnnotations := test.hasAnnotations
-			assert.Equal(t, expectAnnotations, appArmorAnnotationsInUse(newPod.Annotations), "AppArmor annotations expectation")
-			if expectAnnotations == test.hasAnnotations {
-				assert.Equal(t, test.pod.Annotations, newPod.Annotations, "annotations should not be mutated")
-			}
-
-			expectFields := test.hasFields
-			assert.Equal(t, expectFields, appArmorFieldsInUse(&newPod.Spec), "AppArmor fields expectation")
-			if expectFields == test.hasFields {
-				assert.Equal(t, &test.pod.Spec, &newPod.Spec, "PodSpec should not be mutated")
-			}
-		})
-
-	}
-}
-
 func TestDropDynamicResourceAllocation(t *testing.T) {
 	resourceClaimName := "external-claim"
 
@@ -1259,62 +1160,98 @@ func TestDropDisabledPodStatusFields_ObservedGeneration(t *testing.T) {
 		name          string
 		podStatus     *api.PodStatus
 		oldPodStatus  *api.PodStatus
+		featureGateOn bool
 		wantPodStatus *api.PodStatus
 	}{
 		{
-			name:         "old=without, new=without",
-			oldPodStatus: podWithoutObservedGen(),
-			podStatus:    podWithoutObservedGen(),
-
+			name:          "old=without, new=without / feature gate off",
+			oldPodStatus:  podWithoutObservedGen(),
+			podStatus:     podWithoutObservedGen(),
+			featureGateOn: false,
 			wantPodStatus: podWithoutObservedGen(),
 		},
 		{
-			name:         "old=without, new=with",
-			oldPodStatus: podWithoutObservedGen(),
-			podStatus:    podWithObservedGen(),
-
+			name:          "old=without, new=without / feature gate on",
+			oldPodStatus:  podWithoutObservedGen(),
+			podStatus:     podWithoutObservedGen(),
+			featureGateOn: true,
 			wantPodStatus: podWithoutObservedGen(),
 		},
 		{
-			name:         "old=with, new=without",
-			oldPodStatus: podWithObservedGen(),
-			podStatus:    podWithoutObservedGen(),
-
+			name:          "old=without, new=with / feature gate off",
+			oldPodStatus:  podWithoutObservedGen(),
+			podStatus:     podWithObservedGen(),
+			featureGateOn: false,
 			wantPodStatus: podWithoutObservedGen(),
 		},
 		{
-			name:         "old=with, new=with",
-			oldPodStatus: podWithObservedGen(),
-			podStatus:    podWithObservedGen(),
-
+			name:          "old=with, new=without / feature gate on",
+			oldPodStatus:  podWithObservedGen(),
+			podStatus:     podWithoutObservedGen(),
+			featureGateOn: true,
+			wantPodStatus: podWithoutObservedGen(),
+		},
+		{
+			name:          "old=with, new=with / feature gate off",
+			oldPodStatus:  podWithObservedGen(),
+			podStatus:     podWithObservedGen(),
+			featureGateOn: false,
 			wantPodStatus: podWithObservedGen(),
 		},
 		{
-			name:         "old=without, new=withInConditions",
-			oldPodStatus: podWithoutObservedGen(),
-			podStatus:    podWithObservedGenInConditions(),
-
+			name:          "old=with, new=with / feature gate on",
+			oldPodStatus:  podWithObservedGen(),
+			podStatus:     podWithObservedGen(),
+			featureGateOn: true,
+			wantPodStatus: podWithObservedGen(),
+		},
+		{
+			name:          "old=without, new=withInConditions / feature gate off",
+			oldPodStatus:  podWithoutObservedGen(),
+			podStatus:     podWithObservedGenInConditions(),
+			featureGateOn: false,
 			wantPodStatus: podWithoutObservedGen(),
 		},
 		{
-			name:         "old=withInConditions, new=without",
-			oldPodStatus: podWithObservedGenInConditions(),
-			podStatus:    podWithoutObservedGen(),
-
+			name:          "old=without, new=withInConditions / feature gate on",
+			oldPodStatus:  podWithoutObservedGen(),
+			podStatus:     podWithObservedGenInConditions(),
+			featureGateOn: true,
+			wantPodStatus: podWithObservedGenInConditions(),
+		},
+		{
+			name:          "old=withInConditions, new=without / feature gate off",
+			oldPodStatus:  podWithObservedGenInConditions(),
+			podStatus:     podWithoutObservedGen(),
+			featureGateOn: false,
 			wantPodStatus: podWithoutObservedGen(),
 		},
 		{
-			name:         "old=withInConditions, new=withInCondtions",
-			oldPodStatus: podWithObservedGenInConditions(),
-			podStatus:    podWithObservedGenInConditions(),
-
+			name:          "old=withInConditions, new=without / feature gate on",
+			oldPodStatus:  podWithObservedGenInConditions(),
+			podStatus:     podWithoutObservedGen(),
+			featureGateOn: true,
+			wantPodStatus: podWithoutObservedGen(),
+		},
+		{
+			name:          "old=withInConditions, new=withInCondtions / feature gate off",
+			oldPodStatus:  podWithObservedGenInConditions(),
+			podStatus:     podWithObservedGenInConditions(),
+			featureGateOn: false,
+			wantPodStatus: podWithObservedGenInConditions(),
+		},
+		{
+			name:          "old=withInConditions, new=withInCondtions / feature gate on",
+			oldPodStatus:  podWithObservedGenInConditions(),
+			podStatus:     podWithObservedGenInConditions(),
+			featureGateOn: true,
 			wantPodStatus: podWithObservedGenInConditions(),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodObservedGenerationTracking, tt.featureGateOn)
 			dropDisabledPodStatusFields(tt.podStatus, tt.oldPodStatus, &api.PodSpec{}, &api.PodSpec{})
-
 			if !reflect.DeepEqual(tt.podStatus, tt.wantPodStatus) {
 				t.Errorf("dropDisabledStatusFields() = %v, want %v", tt.podStatus, tt.wantPodStatus)
 			}
@@ -3477,6 +3414,159 @@ func TestDropClusterTrustBundleProjectedVolumes(t *testing.T) {
 	}
 }
 
+func TestDropPodCertificateProjectedVolumes(t *testing.T) {
+	testCases := []struct {
+		description                     string
+		podCertificateProjectionEnabled bool
+		oldPod                          *api.PodSpec
+		newPod                          *api.PodSpec
+		wantPod                         *api.PodSpec
+	}{
+		{
+			description: "feature gate disabled, cannot add volume to pod",
+			oldPod: &api.PodSpec{
+				Volumes: []api.Volume{},
+			},
+			newPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{
+										PodCertificate: &api.PodCertificateProjection{
+											SignerName: "foo.example.com/bar",
+										},
+									},
+								},
+							}},
+					},
+				},
+			},
+			wantPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{},
+								},
+							}},
+					},
+				},
+			},
+		},
+		{
+			description: "feature gate disabled, can keep volume on pod",
+			oldPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{
+										PodCertificate: &api.PodCertificateProjection{
+											SignerName: "foo.example.com/bar",
+										},
+									},
+								},
+							}},
+					},
+				},
+			},
+			newPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{
+										PodCertificate: &api.PodCertificateProjection{
+											SignerName: "foo.example.com/bar",
+										},
+									},
+								},
+							}},
+					},
+				},
+			},
+			wantPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{
+										PodCertificate: &api.PodCertificateProjection{
+											SignerName: "foo.example.com/bar",
+										},
+									},
+								},
+							}},
+					},
+				},
+			},
+		},
+		{
+			description:                     "feature gate enabled, can add volume to pod",
+			podCertificateProjectionEnabled: true,
+			oldPod: &api.PodSpec{
+				Volumes: []api.Volume{},
+			},
+			newPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{
+										PodCertificate: &api.PodCertificateProjection{
+											SignerName: "foo.example.com/bar",
+										},
+									},
+								},
+							}},
+					},
+				},
+			},
+			wantPod: &api.PodSpec{
+				Volumes: []api.Volume{
+					{
+						Name: "foo",
+						VolumeSource: api.VolumeSource{
+							Projected: &api.ProjectedVolumeSource{
+								Sources: []api.VolumeProjection{
+									{
+										PodCertificate: &api.PodCertificateProjection{
+											SignerName: "foo.example.com/bar",
+										},
+									},
+								},
+							}},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodCertificateRequest, tc.podCertificateProjectionEnabled)
+
+			dropDisabledPodCertificateProjection(tc.newPod, tc.oldPod)
+			if diff := cmp.Diff(tc.newPod, tc.wantPod); diff != "" {
+				t.Fatalf("Unexpected modification to new pod; diff (-got +want)\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestDropPodLifecycleSleepAction(t *testing.T) {
 	makeSleepHandler := func() *api.LifecycleHandler {
 		return &api.LifecycleHandler{
@@ -3642,6 +3732,7 @@ func TestDropPodLifecycleSleepAction(t *testing.T) {
 
 	for i, tc := range testCases {
 		t.Run(fmt.Sprintf("test_%d", i), func(t *testing.T) {
+			featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodLifecycleSleepAction, tc.gateEnabled)
 
 			// preStop
@@ -4690,6 +4781,7 @@ func TestValidateAllowPodLifecycleSleepActionZeroValue(t *testing.T) {
 			expectAllowPodLifecycleSleepActionZeroValue: true,
 		},
 	}
+	featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, utilfeature.DefaultFeatureGate, version.MustParse("1.33"))
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4897,6 +4989,14 @@ func TestHasAPIReferences(t *testing.T) {
 			}}},
 			expectRejection: true,
 			resource:        "clustertrustbundles",
+		},
+		{
+			name: "Non empty volume list with Projected volume with podcertificates",
+			pod: &api.Pod{Spec: api.PodSpec{Volumes: []api.Volume{
+				{Name: "test-volume-projected", VolumeSource: api.VolumeSource{Projected: &api.ProjectedVolumeSource{Sources: []api.VolumeProjection{{PodCertificate: &api.PodCertificateProjection{}}}}}},
+			}}},
+			expectRejection: true,
+			resource:        "podcertificates",
 		},
 		{
 			name: "Non empty volume list with Projected volume with secrets",

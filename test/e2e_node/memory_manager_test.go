@@ -1,6 +1,3 @@
-//go:build linux
-// +build linux
-
 /*
 Copyright 2017 The Kubernetes Authors.
 
@@ -242,7 +239,7 @@ func getAllNUMANodes() []int {
 }
 
 // Serial because the test updates kubelet configuration.
-var _ = SIGDescribe("Memory Manager", framework.WithDisruptive(), framework.WithSerial(), feature.MemoryManager, func() {
+var _ = SIGDescribe("Memory Manager", "[LinuxOnly]", framework.WithDisruptive(), framework.WithSerial(), feature.MemoryManager, func() {
 	// TODO: add more complex tests that will include interaction between CPUManager, MemoryManager and TopologyManager
 	var (
 		allNUMANodes             []int
@@ -411,7 +408,7 @@ var _ = SIGDescribe("Memory Manager", framework.WithDisruptive(), framework.With
 						continue
 					}
 
-					gomega.Expect(containerMemory.Size_).To(gomega.BeEquivalentTo(numaStateMemory.Size))
+					gomega.Expect(containerMemory.Size).To(gomega.BeEquivalentTo(numaStateMemory.Size))
 				}
 			}
 
@@ -544,7 +541,7 @@ var _ = SIGDescribe("Memory Manager", framework.WithDisruptive(), framework.With
 									q := c.Resources.Limits[v1.ResourceName(containerMemory.MemoryType)]
 									value, ok := q.AsInt64()
 									gomega.Expect(ok).To(gomega.BeTrueBecause("cannot convert value to integer"))
-									gomega.Expect(value).To(gomega.BeEquivalentTo(containerMemory.Size_))
+									gomega.Expect(value).To(gomega.BeEquivalentTo(containerMemory.Size))
 								}
 							}
 						}

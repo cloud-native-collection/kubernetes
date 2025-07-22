@@ -337,6 +337,7 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 	cm.topologyManager.AddHintProvider(cm.cpuManager)
 
 	cm.memoryManager, err = memorymanager.NewManager(
+		context.TODO(),
 		nodeConfig.MemoryManagerPolicy,
 		machineInfo,
 		cm.GetNodeAllocatableReservation(),
@@ -591,7 +592,7 @@ func (cm *containerManagerImpl) Start(ctx context.Context, node *v1.Node,
 	}
 
 	// Initialize memory manager
-	err = cm.memoryManager.Start(memorymanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap.Clone())
+	err = cm.memoryManager.Start(ctx, memorymanager.ActivePodsFunc(activePods), sourcesReady, podStatusProvider, runtimeService, containerMap.Clone())
 	if err != nil {
 		return fmt.Errorf("start memory manager error: %w", err)
 	}
@@ -954,7 +955,9 @@ func (cm *containerManagerImpl) GetMemory(podUID, containerName string) []*podre
 		return []*podresourcesapi.ContainerMemory{}
 	}
 
-	return containerMemoryFromBlock(cm.memoryManager.GetMemory(podUID, containerName))
+	// This is tempporary as part of migration of memory manager to Contextual logging.
+	// Direct context to be passed when container manager is migrated.
+	return containerMemoryFromBlock(cm.memoryManager.GetMemory(context.TODO(), podUID, containerName))
 }
 
 func (cm *containerManagerImpl) GetAllocatableMemory() []*podresourcesapi.ContainerMemory {
@@ -962,7 +965,9 @@ func (cm *containerManagerImpl) GetAllocatableMemory() []*podresourcesapi.Contai
 		return []*podresourcesapi.ContainerMemory{}
 	}
 
-	return containerMemoryFromBlock(cm.memoryManager.GetAllocatableMemory())
+	// This is tempporary as part of migration of memory manager to Contextual logging.
+	// Direct context to be passed when container manager is migrated.
+	return containerMemoryFromBlock(cm.memoryManager.GetAllocatableMemory(context.TODO()))
 }
 
 func (cm *containerManagerImpl) GetDynamicResources(pod *v1.Pod, container *v1.Container) []*podresourcesapi.DynamicResource {
@@ -985,7 +990,7 @@ func (cm *containerManagerImpl) GetDynamicResources(pod *v1.Pod, container *v1.C
 					cdiDevices = append(cdiDevices, &podresourcesapi.CDIDevice{Name: cdiDeviceID})
 				}
 				resources := &podresourcesapi.ClaimResource{
-					CDIDevices: cdiDevices,
+					CdiDevices: cdiDevices,
 					DriverName: driverName,
 					PoolName:   device.PoolName,
 					DeviceName: device.DeviceName,
@@ -1017,7 +1022,7 @@ func containerMemoryFromBlock(blocks []memorymanagerstate.Block) []*podresources
 	for _, b := range blocks {
 		containerMemory := podresourcesapi.ContainerMemory{
 			MemoryType: string(b.Type),
-			Size_:      b.Size,
+			Size:       b.Size,
 			Topology: &podresourcesapi.TopologyInfo{
 				Nodes: []*podresourcesapi.NUMANode{},
 			},

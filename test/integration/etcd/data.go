@@ -224,6 +224,13 @@ func GetEtcdStorageDataForNamespaceServedAt(namespace string, v string, isEmulat
 			IntroducedVersion: "1.26",
 			RemovedVersion:    "1.37",
 		},
+		gvr("certificates.k8s.io", "v1alpha1", "podcertificaterequests"): {
+			Stub:              `{"metadata": {"name": "req-1"}, "spec": {"signerName":"example.com/signer", "podName":"pod-1", "podUID":"pod-uid-1", "serviceAccountName":"sa-1", "serviceAccountUID":"sa-uid-1", "nodeName":"node-1", "nodeUID":"node-uid-1", "maxExpirationSeconds":86400, "pkixPublicKey":"MCowBQYDK2VwAyEA5g+rk9q/hjojtc2nwHJ660RdX5w1f4AK0/kP391QyLY=", "proofOfPossession":"SuGHX7SMyPHuN5cD5wjKLXGNbhdlCYUnTH65JkTx17iWlLynQ/g9GiTYObftSHNzqRh0ofdgAGqK6a379O7RBw=="}}`,
+			ExpectedEtcdPath:  "/registry/podcertificaterequests/" + namespace + "/req-1",
+			ExpectedGVK:       gvkP("certificates.k8s.io", "v1alpha1", "PodCertificateRequest"),
+			IntroducedVersion: "1.34",
+			RemovedVersion:    "1.37",
+		},
 		// --
 
 		// k8s.io/kubernetes/pkg/apis/certificates/v1beta1
@@ -483,6 +490,20 @@ func GetEtcdStorageDataForNamespaceServedAt(namespace string, v string, isEmulat
 			IntroducedVersion: "1.28",
 			RemovedVersion:    "1.34",
 		},
+		gvr("admissionregistration.k8s.io", "v1beta1", "mutatingadmissionpolicies"): {
+			Stub:              `{"metadata":{"name":"map1b1"},"spec":{"paramKind":{"apiVersion":"test.example.com/v1","kind":"Example"},"matchConstraints":{"resourceRules": [{"resourceNames": ["fakeName"], "apiGroups":["apps"],"apiVersions":["v1"],"operations":["CREATE", "UPDATE"], "resources":["deployments"]}]},"reinvocationPolicy": "IfNeeded","mutations":[{"applyConfiguration": {"expression":"Object{metadata: Object.metadata{labels: {'example':'true'}}}"}, "patchType":"ApplyConfiguration"}]}}`,
+			ExpectedEtcdPath:  "/registry/mutatingadmissionpolicies/map1b1",
+			ExpectedGVK:       gvkP("admissionregistration.k8s.io", "v1alpha1", "MutatingAdmissionPolicy"),
+			IntroducedVersion: "1.34",
+			RemovedVersion:    "1.40",
+		},
+		gvr("admissionregistration.k8s.io", "v1beta1", "mutatingadmissionpolicybindings"): {
+			Stub:              `{"metadata":{"name":"mpb1b1"},"spec":{"policyName":"replicalimit-policy.example.com","paramRef":{"name":"replica-limit-test.example.com", "parameterNotFoundAction": "Allow"}}}`,
+			ExpectedEtcdPath:  "/registry/mutatingadmissionpolicybindings/mpb1b1",
+			ExpectedGVK:       gvkP("admissionregistration.k8s.io", "v1alpha1", "MutatingAdmissionPolicyBinding"),
+			IntroducedVersion: "1.34",
+			RemovedVersion:    "1.40",
+		},
 		// --
 
 		// k8s.io/kubernetes/pkg/apis/admissionregistration/v1alpha1
@@ -493,7 +514,7 @@ func GetEtcdStorageDataForNamespaceServedAt(namespace string, v string, isEmulat
 			RemovedVersion:    "1.38",
 		},
 		gvr("admissionregistration.k8s.io", "v1alpha1", "mutatingadmissionpolicybindings"): {
-			Stub:              `{"metadata":{"name":"mpb1"},"spec":{"policyName":"replicalimit-policy.example.com","paramRef":{"name":"replica-limit-test.example.com"}}}`,
+			Stub:              `{"metadata":{"name":"mpb1"},"spec":{"policyName":"replicalimit-policy.example.com","paramRef":{"name":"replica-limit-test.example.com", "parameterNotFoundAction": "Allow"}}}`,
 			ExpectedEtcdPath:  "/registry/mutatingadmissionpolicybindings/mpb1",
 			IntroducedVersion: "1.32",
 			RemovedVersion:    "1.38",

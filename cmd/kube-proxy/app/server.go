@@ -163,21 +163,17 @@ type ProxyServer struct {
 	// 配置和客户端
 	Config *kubeproxyconfig.KubeProxyConfiguration
 
-	Client clientset.Interface // API Server 客户端
-	// 事件处理
-	Broadcaster   events.EventBroadcaster
-	Recorder      events.EventRecorder
-	NodeRef       *v1.ObjectReference
-	HealthzServer *healthcheck.ProxyHealthServer
-	// 节点信息
+	Client          clientset.Interface
+	Broadcaster     events.EventBroadcaster
+	Recorder        events.EventRecorder
+	NodeRef         *v1.ObjectReference
+	HealthzServer   *healthcheck.ProxyHealthServer
 	NodeName        string
-	PrimaryIPFamily v1.IPFamily            // 节点主要 IP 家族
-	NodeIPs         map[v1.IPFamily]net.IP // 节点 IP 地址
-	flagz           flagz.Reader           // flagz HTTP 端点
+	PrimaryIPFamily v1.IPFamily
+	NodeIPs         map[v1.IPFamily]net.IP
+	flagz           flagz.Reader
 
-	// Pod 的 CIDR 范围
-	podCIDRs []string // only used for LocalModeNodeCIDR
-	// 节点管理接口
+	podCIDRs    []string // only used for LocalModeNodeCIDR
 	NodeManager *proxy.NodeManager
 
 	// Proxier 是 Proxier 的接口，
@@ -226,11 +222,13 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 	}
 
 	// 获取节点 IP节点网络信息并确定主 IPFamily
-	rawNodeIPs := s.NodeManager.NodeIPs() // 获取节点 IP
-	s.podCIDRs = s.NodeManager.PodCIDRs() // 获取节点 Pod CIDR
-	logger.Info("Successfully retrieved NodeIPs", "NodeIPs", rawNodeIPs)
+	rawNodeIPs := s.NodeManager.NodeIPs()
+	if len(rawNodeIPs) > 0 {
+		logger.Info("Successfully retrieved NodeIPs", "NodeIPs", rawNodeIPs)
+	}
 	//--bind-address > NodeIPs > 默认环回地址。确定单/双栈及主 IP 家族。
 	s.PrimaryIPFamily, s.NodeIPs = detectNodeIPs(ctx, rawNodeIPs, config.BindAddress)
+	s.podCIDRs = s.NodeManager.PodCIDRs() // 获取节点 Pod CIDR
 
 	// 如果 NodePortAddresses 设置为 NodePortAddressesPrimary，就自动设置为本节点 IP
 	if len(config.NodePortAddresses) == 1 && config.NodePortAddresses[0] == kubeproxyconfig.NodePortAddressesPrimary {

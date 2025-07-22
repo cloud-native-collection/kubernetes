@@ -1131,6 +1131,19 @@ func (c *Cacher) isStopped() bool {
 	return c.stopped
 }
 
+func (c *Cacher) Compact(resourceVersion string) error {
+	rv, err := c.versioner.ParseResourceVersion(resourceVersion)
+	if err != nil {
+		return err
+	}
+	c.watchCache.Compact(rv)
+	return nil
+}
+
+func (c *Cacher) MarkConsistent(consistent bool) {
+	c.watchCache.MarkConsistent(consistent)
+}
+
 // Stop implements the graceful termination.
 func (c *Cacher) Stop() {
 	c.stopLock.Lock()

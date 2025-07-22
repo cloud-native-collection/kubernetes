@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/kubernetes/pkg/kubelet/cm"
+	"k8s.io/kubernetes/test/utils/ktesting"
 	"k8s.io/utils/ptr"
 )
 
@@ -35,7 +36,8 @@ func seccompLocalhostRef(profileName string) string {
 }
 
 func TestGetSeccompProfile(t *testing.T) {
-	_, _, m, err := createTestRuntimeManager()
+	tCtx := ktesting.Init(t)
+	_, _, m, err := createTestRuntimeManager(tCtx)
 	require.NoError(t, err)
 
 	unconfinedProfile := &runtimeapi.SecurityProfile{
@@ -81,7 +83,7 @@ func TestGetSeccompProfile(t *testing.T) {
 		},
 		{
 			description: "pod seccomp profile set to SeccompProfileTypeLocalhost returns 'localhost/' + LocalhostProfile",
-			podSc:       &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("filename")}},
+			podSc:       &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("filename")}},
 			expectedProfile: &runtimeapi.SecurityProfile{
 				ProfileType:  runtimeapi.SecurityProfile_Localhost,
 				LocalhostRef: seccompLocalhostRef("filename"),
@@ -99,7 +101,7 @@ func TestGetSeccompProfile(t *testing.T) {
 		},
 		{
 			description: "container seccomp profile set to SeccompProfileTypeLocalhost returns 'localhost/' + LocalhostProfile",
-			containerSc: &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("filename2")}},
+			containerSc: &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("filename2")}},
 			expectedProfile: &runtimeapi.SecurityProfile{
 				ProfileType:  runtimeapi.SecurityProfile_Localhost,
 				LocalhostRef: seccompLocalhostRef("filename2"),
@@ -113,8 +115,8 @@ func TestGetSeccompProfile(t *testing.T) {
 		},
 		{
 			description:   "prioritise container field over pod field",
-			podSc:         &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("field-pod-profile.json")}},
-			containerSc:   &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("field-cont-profile.json")}},
+			podSc:         &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("field-pod-profile.json")}},
+			containerSc:   &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("field-cont-profile.json")}},
 			containerName: "container1",
 			expectedProfile: &runtimeapi.SecurityProfile{
 				ProfileType:  runtimeapi.SecurityProfile_Localhost,
@@ -135,7 +137,8 @@ func TestGetSeccompProfile(t *testing.T) {
 }
 
 func TestGetSeccompProfileDefaultSeccomp(t *testing.T) {
-	_, _, m, err := createTestRuntimeManager()
+	tCtx := ktesting.Init(t)
+	_, _, m, err := createTestRuntimeManager(tCtx)
 	require.NoError(t, err)
 
 	unconfinedProfile := &runtimeapi.SecurityProfile{
@@ -181,7 +184,7 @@ func TestGetSeccompProfileDefaultSeccomp(t *testing.T) {
 		},
 		{
 			description: "pod seccomp profile set to SeccompProfileTypeLocalhost returns 'localhost/' + LocalhostProfile",
-			podSc:       &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("filename")}},
+			podSc:       &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("filename")}},
 			expectedProfile: &runtimeapi.SecurityProfile{
 				ProfileType:  runtimeapi.SecurityProfile_Localhost,
 				LocalhostRef: seccompLocalhostRef("filename"),
@@ -199,7 +202,7 @@ func TestGetSeccompProfileDefaultSeccomp(t *testing.T) {
 		},
 		{
 			description: "container seccomp profile set to SeccompProfileTypeLocalhost returns 'localhost/' + LocalhostProfile",
-			containerSc: &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("filename2")}},
+			containerSc: &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("filename2")}},
 			expectedProfile: &runtimeapi.SecurityProfile{
 				ProfileType:  runtimeapi.SecurityProfile_Localhost,
 				LocalhostRef: seccompLocalhostRef("filename2"),
@@ -213,8 +216,8 @@ func TestGetSeccompProfileDefaultSeccomp(t *testing.T) {
 		},
 		{
 			description:   "prioritise container field over pod field",
-			podSc:         &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("field-pod-profile.json")}},
-			containerSc:   &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: getLocal("field-cont-profile.json")}},
+			podSc:         &v1.PodSecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("field-pod-profile.json")}},
+			containerSc:   &v1.SecurityContext{SeccompProfile: &v1.SeccompProfile{Type: v1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("field-cont-profile.json")}},
 			containerName: "container1",
 			expectedProfile: &runtimeapi.SecurityProfile{
 				ProfileType:  runtimeapi.SecurityProfile_Localhost,
@@ -232,10 +235,6 @@ func TestGetSeccompProfileDefaultSeccomp(t *testing.T) {
 			assert.Equal(t, test.expectedProfile, seccompProfile, "TestCase[%d]: %s", i, test.description)
 		}
 	}
-}
-
-func getLocal(v string) *string {
-	return &v
 }
 
 func TestSharesToMilliCPU(t *testing.T) {

@@ -683,6 +683,7 @@ func dropDisabledFields(
 	dropDisabledMatchLabelKeysFieldInPodAffinity(podSpec, oldPodSpec)
 	dropDisabledDynamicResourceAllocationFields(podSpec, oldPodSpec)
 	dropDisabledClusterTrustBundleProjection(podSpec, oldPodSpec)
+	dropDisabledPodCertificateProjection(podSpec, oldPodSpec)
 
 	if !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) && !inPlacePodVerticalScalingInUse(oldPodSpec) {
 		// Drop ResizePolicy fields. Don't drop updates to Resources field as template.spec.resources
@@ -1232,35 +1233,6 @@ func procMountInUse(podSpec *api.PodSpec) bool {
 	return inUse
 }
 
-// appArmorAnnotationsInUse returns true if the pod has apparmor annotations
-func appArmorAnnotationsInUse(podAnnotations map[string]string) bool {
-	for k := range podAnnotations {
-		if strings.HasPrefix(k, api.DeprecatedAppArmorAnnotationKeyPrefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// appArmorFieldsInUse returns true if the pod has apparmor fields set
-func appArmorFieldsInUse(podSpec *api.PodSpec) bool {
-	if podSpec == nil {
-		return false
-	}
-	if podSpec.SecurityContext != nil && podSpec.SecurityContext.AppArmorProfile != nil {
-		return true
-	}
-	hasAppArmorContainer := false
-	VisitContainers(podSpec, AllContainers, func(c *api.Container, _ ContainerType) bool {
-		if c.SecurityContext != nil && c.SecurityContext.AppArmorProfile != nil {
-			hasAppArmorContainer = true
-			return false
-		}
-		return true
-	})
-	return hasAppArmorContainer
-}
-
 // restartableInitContainersInUse returns true if the pod spec is non-nil and
 // it has any init container with ContainerRestartPolicyAlways.
 func restartableInitContainersInUse(podSpec *api.PodSpec) bool {
@@ -1334,6 +1306,49 @@ func dropDisabledClusterTrustBundleProjection(podSpec, oldPodSpec *api.PodSpec) 
 
 		for j := range podSpec.Volumes[i].Projected.Sources {
 			podSpec.Volumes[i].Projected.Sources[j].ClusterTrustBundle = nil
+		}
+	}
+}
+
+func podCertificateProjectionInUse(podSpec *api.PodSpec) bool {
+	if podSpec == nil {
+		return false
+	}
+	for _, v := range podSpec.Volumes {
+		if v.Projected == nil {
+			continue
+		}
+
+		for _, s := range v.Projected.Sources {
+			if s.PodCertificate != nil {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func dropDisabledPodCertificateProjection(podSpec, oldPodSpec *api.PodSpec) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.PodCertificateRequest) {
+		return
+	}
+	if podSpec == nil {
+		return
+	}
+
+	// If the pod was already using it, it can keep using it.
+	if podCertificateProjectionInUse(oldPodSpec) {
+		return
+	}
+
+	for i := range podSpec.Volumes {
+		if podSpec.Volumes[i].Projected == nil {
+			continue
+		}
+
+		for j := range podSpec.Volumes[i].Projected.Sources {
+			podSpec.Volumes[i].Projected.Sources[j].PodCertificate = nil
 		}
 	}
 }
@@ -1546,6 +1561,8 @@ func HasAPIObjectReference(pod *api.Pod) (bool, string, error) {
 					return true, "serviceaccounts (via projected volumes)", nil
 				case s.ClusterTrustBundle != nil:
 					return true, "clustertrustbundles", nil
+				case s.PodCertificate != nil:
+					return true, "podcertificates", nil
 				case s.DownwardAPI != nil:
 					// Allow projected volume sources that don't require the Kubernetes API
 					continue
@@ -1560,4 +1577,30 @@ func HasAPIObjectReference(pod *api.Pod) (bool, string, error) {
 	}
 
 	return false, "", nil
+}
+
+// ApparmorFieldForAnnotation takes a pod annotation and returns the converted
+// apparmor profile field.
+func ApparmorFieldForAnnotation(annotation string) *api.AppArmorProfile {
+	if annotation == api.DeprecatedAppArmorAnnotationValueUnconfined {
+		return &api.AppArmorProfile{Type: api.AppArmorProfileTypeUnconfined}
+	}
+
+	if annotation == api.DeprecatedAppArmorAnnotationValueRuntimeDefault {
+		return &api.AppArmorProfile{Type: api.AppArmorProfileTypeRuntimeDefault}
+	}
+
+	if strings.HasPrefix(annotation, api.DeprecatedAppArmorAnnotationValueLocalhostPrefix) {
+		localhostProfile := strings.TrimPrefix(annotation, api.DeprecatedAppArmorAnnotationValueLocalhostPrefix)
+		if localhostProfile != "" {
+			return &api.AppArmorProfile{
+				Type:             api.AppArmorProfileTypeLocalhost,
+				LocalhostProfile: &localhostProfile,
+			}
+		}
+	}
+
+	// we can only reach this code path if the localhostProfile name has a zero
+	// length or if the annotation has an unrecognized value
+	return nil
 }
