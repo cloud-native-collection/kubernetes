@@ -121,6 +121,10 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Admissionregistration().V1alpha1().ValidatingAdmissionPolicyBindings().Informer()}, nil
 
 		// Group=admissionregistration.k8s.io, Version=v1beta1
+	case v1beta1.SchemeGroupVersion.WithResource("mutatingadmissionpolicies"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Admissionregistration().V1beta1().MutatingAdmissionPolicies().Informer()}, nil
+	case v1beta1.SchemeGroupVersion.WithResource("mutatingadmissionpolicybindings"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Admissionregistration().V1beta1().MutatingAdmissionPolicyBindings().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("mutatingwebhookconfigurations"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Admissionregistration().V1beta1().MutatingWebhookConfigurations().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("validatingadmissionpolicies"):
@@ -195,6 +199,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		// Group=certificates.k8s.io, Version=v1alpha1
 	case certificatesv1alpha1.SchemeGroupVersion.WithResource("clustertrustbundles"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Certificates().V1alpha1().ClusterTrustBundles().Informer()}, nil
+	case certificatesv1alpha1.SchemeGroupVersion.WithResource("podcertificaterequests"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Certificates().V1alpha1().PodCertificateRequests().Informer()}, nil
 
 		// Group=certificates.k8s.io, Version=v1beta1
 	case certificatesv1beta1.SchemeGroupVersion.WithResource("certificatesigningrequests"):

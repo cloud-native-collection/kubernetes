@@ -606,9 +606,11 @@ func getReservedCPUs(machineInfo *cadvisorapi.MachineInfo, cpus string) (cpuset.
 }
 
 func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Dependencies, featureGate featuregate.FeatureGate) (err error) {
+	// systemd watchdog 健康检查功能
 	if utilfeature.DefaultFeatureGate.Enabled(features.SystemdWatchdog) {
 		// NewHealthChecker returns an error indicating that the watchdog is configured but the configuration is incorrect,
 		// the kubelet will not be started.
+		// NewHealthChecker() 会创建一个健康检查器，用于检查 systemd 的 watchdog 是否正常工作
 		healthChecker, err := watchdog.NewHealthChecker()
 		if err != nil {
 			return fmt.Errorf("create health checker: %w", err)
@@ -618,6 +620,8 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 	logger := klog.FromContext(ctx)
 	// Set global feature gates based on the value on the initial KubeletServer
+	// utilfeature.DefaultMutableFeatureGate.SetFromMap() 会将 s.KubeletConfiguration.FeatureGates 设置到 utilfeature.DefaultMutableFeatureGate 中
+	// utilfeature.DefaultMutableFeatureGate 是一个可变的 feature gate，用于控制 kubelet 的功能，用于控制实验性功能的开关
 	err = utilfeature.DefaultMutableFeatureGate.SetFromMap(s.KubeletConfiguration.FeatureGates)
 	if err != nil {
 		return err
@@ -628,44 +632,88 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 
 	// Warn if MemoryQoS enabled with cgroups v1
+	// MemoryQoS feature only works with cgroups v2 on Linux, but enabled with cgroups v1
+	// kubeletutil.IsCgroup2UnifiedMode() 会检查是否使用 cgroups v2
+	// utilfeature.DefaultFeatureGate.Enabled(features.MemoryQoS) 会检查是否启用 MemoryQoS feature
 	if utilfeature.DefaultFeatureGate.Enabled(features.MemoryQoS) &&
 		!kubeletutil.IsCgroup2UnifiedMode() {
 		logger.Info("Warning: MemoryQoS feature only works with cgroups v2 on Linux, but enabled with cgroups v1")
 	}
 	// Obtain Kubelet Lock File
+	// 防止多个 kubelet 实例在同一个节点上运行
+	//  1. 参数验证
+	// 检查如果启用了锁竞争退出功能(ExitOnLockContention)，但未指定锁文件路径，则返回错误
 	if s.ExitOnLockContention && s.LockFilePath == "" {
 		return errors.New("cannot exit on lock file contention: no lock file specified")
 	}
+	// 2. 创建用于通知的 channel
 	done := make(chan struct{})
+	// 3. 获取文件锁
 	if s.LockFilePath != "" {
 		logger.Info("Acquiring file lock", "path", s.LockFilePath)
-		if err := flock.Acquire(s.LockFilePath); err != nil {
+		if err := flock.Acquire(s.LockFilePath); err != nil { // 获取文件锁失败，创建并锁定文件
 			return fmt.Errorf("unable to acquire file lock on %q: %w", s.LockFilePath, err)
 		}
+		// 4. 监控锁竞争
 		if s.ExitOnLockContention {
 			logger.Info("Watching for inotify events", "path", s.LockFilePath)
-			if err := watchForLockfileContention(ctx, s.LockFilePath, done); err != nil {
+			if err := watchForLockfileContention(ctx, s.LockFilePath, done); err != nil { // 启动监控协程，使用 inotify 监控锁文件的变化
 				return err
 			}
 		}
 	}
 
 	// Register current configuration with /configz endpoint
+	// initConfigz() 会注册当前配置到 /configz endpoint
 	err = initConfigz(ctx, &s.KubeletConfiguration)
 	if err != nil {
 		logger.Error(err, "Failed to register kubelet configuration with configz")
 	}
 
+	// s.ShowHiddenMetricsForVersion 会检查是否显示隐藏指标
 	if len(s.ShowHiddenMetricsForVersion) > 0 {
 		metrics.SetShowHidden()
 	}
 
 	// About to get clients and such, detect standaloneMode
+	// s.KubeConfig 会检查是否指定 KubeConfig
+	// standaloneMode := true 会设置 standaloneMode 为 true，
+	// 以独立模式运行：
+	//   不连接 Kubernetes API Server
+	//   主要用于测试和开发环境
+	//   不需要 kubeconfig 文件
+	//   不会执行节点状态上报等需要与集群交互的操作
+	// 集群模式：
+	//   需要提供 kubeconfig 文件
+	//   会与 Kubernetes API Server 通信
+	//   是生产环境的推荐配置
+	//   可以接收来自 API Server 的 Pod 调度指令
 	standaloneMode := true
 	if len(s.KubeConfig) > 0 {
 		standaloneMode = false
 	}
 
+	// 创建 kubelet 运行所需的各种依赖项
+	//   认证相关：
+	//     认证器（Authenticator）
+	//     授权器（Authorizer）
+	//     准入控制器（Admission）
+	//  客户端：
+	//    Kubelet 客户端
+	//    事件客户端
+	//    心跳客户端
+	//  容器运行时：
+	//    容器运行时服务
+	//    镜像服务
+	//    运行时服务
+	//  监控和指标：
+	//    cAdvisor 接口
+	//    容器管理器
+	//    OOM 调节器
+	//  其他服务：
+	//    卷插件管理器
+	//    插件管理器
+	//    探针管理器
 	if kubeDeps == nil {
 		kubeDeps, err = UnsecuredDependencies(ctx, s, featureGate)
 		if err != nil {
@@ -683,12 +731,14 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	// kubelet 的两种模式： standalone不需要和 APIServer 交互
 	switch {
 	case standaloneMode:
+		// standalone 模式下，所有客户端都设置为 nil
 		kubeDeps.KubeClient = nil
 		kubeDeps.EventClient = nil
 		kubeDeps.HeartbeatClient = nil
 		logger.Info("Standalone mode, no API client")
 
 	case kubeDeps.KubeClient == nil, kubeDeps.EventClient == nil, kubeDeps.HeartbeatClient == nil:
+		// 非 standalone 模式下，创建客户端
 		clientConfig, onHeartbeatFailure, err := buildKubeletClientConfig(ctx, s, kubeDeps.TracerProvider, nodeName)
 		if err != nil {
 			return err
@@ -696,32 +746,37 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		if onHeartbeatFailure == nil {
 			return errors.New("onHeartbeatFailure must be a valid function other than nil")
 		}
+		// 设置心跳失败处理函数
 		kubeDeps.OnHeartbeatFailure = onHeartbeatFailure
 
+		// 创建 kubelet  主客户端初始化
 		kubeDeps.KubeClient, err = clientset.NewForConfig(clientConfig)
 		if err != nil {
 			return fmt.Errorf("failed to initialize kubelet client: %w", err)
 		}
 
 		// make a separate client for events
+		// 创建事件客户端(带限流)
 		eventClientConfig := *clientConfig
-		eventClientConfig.QPS = float32(s.EventRecordQPS)
-		eventClientConfig.Burst = int(s.EventBurst)
-		kubeDeps.EventClient, err = v1core.NewForConfig(&eventClientConfig)
+		eventClientConfig.QPS = float32(s.EventRecordQPS)                   // 事件记录 QPS
+		eventClientConfig.Burst = int(s.EventBurst)                         // 事件记录突发数
+		kubeDeps.EventClient, err = v1core.NewForConfig(&eventClientConfig) // 创建事件客户端
 		if err != nil {
 			return fmt.Errorf("failed to initialize kubelet event client: %w", err)
 		}
 
 		// make a separate client for heartbeat with throttling disabled and a timeout attached
+		// 3. 心跳客户端（带超时）
 		heartbeatClientConfig := *clientConfig
 		heartbeatClientConfig.Timeout = s.KubeletConfiguration.NodeStatusUpdateFrequency.Duration
 		// The timeout is the minimum of the lease duration and status update frequency
+		// 设置超时时间为租约时间和状态更新频率中的较小值
 		leaseTimeout := time.Duration(s.KubeletConfiguration.NodeLeaseDurationSeconds) * time.Second
 		if heartbeatClientConfig.Timeout > leaseTimeout {
 			heartbeatClientConfig.Timeout = leaseTimeout
 		}
 
-		heartbeatClientConfig.QPS = float32(-1)
+		heartbeatClientConfig.QPS = float32(-1) // 禁用限流
 		kubeDeps.HeartbeatClient, err = clientset.NewForConfig(&heartbeatClientConfig)
 		if err != nil {
 			return fmt.Errorf("failed to initialize kubelet heartbeat client: %w", err)
@@ -743,15 +798,21 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 
 	// Get cgroup driver setting from CRI
+	// 4. 获取 cgroup driver 设置
 	if utilfeature.DefaultFeatureGate.Enabled(features.KubeletCgroupDriverFromCRI) {
+		// 从 CRI 获取 cgroup driver 配置
 		if err := getCgroupDriverFromCRI(ctx, s, kubeDeps); err != nil {
 			return err
 		}
 	}
 
+	// 收集所有需要监控的 cgroup 路径,包括：节点可分配资源、kubelet 自身、运行时和系统 cgroup
+	//  设置 cgroup 根目录
 	var cgroupRoots []string
+	//  获取节点可分配资源的 cgroup 根路径
 	nodeAllocatableRoot := cm.NodeAllocatableRoot(s.CgroupRoot, s.CgroupsPerQOS, s.CgroupDriver)
 	cgroupRoots = append(cgroupRoots, nodeAllocatableRoot)
+	//  获取 kubelet 自身的 cgroup 路径
 	kubeletCgroup, err := cm.GetKubeletContainer(s.KubeletCgroups)
 	if err != nil {
 		logger.Info("Failed to get the kubelet's cgroup. Kubelet system container metrics may be missing", "err", err)
@@ -759,37 +820,52 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		cgroupRoots = append(cgroupRoots, kubeletCgroup)
 	}
 
+	// 设置运行时 cgroup
 	if s.RuntimeCgroups != "" {
 		// RuntimeCgroups is optional, so ignore if it isn't specified
 		cgroupRoots = append(cgroupRoots, s.RuntimeCgroups)
 	}
 
+	// 设置系统 cgroup
 	if s.SystemCgroups != "" {
 		// SystemCgroups is optional, so ignore if it isn't specified
 		cgroupRoots = append(cgroupRoots, s.SystemCgroups)
 	}
 
+	// 初始化 cadvisor
 	if kubeDeps.CAdvisorInterface == nil {
+		// 创建镜像文件系统信息提供者
 		imageFsInfoProvider := cadvisor.NewImageFsInfoProvider(s.ContainerRuntimeEndpoint)
-		kubeDeps.CAdvisorInterface, err = cadvisor.New(imageFsInfoProvider, s.RootDirectory, cgroupRoots, cadvisor.UsingLegacyCadvisorStats(s.ContainerRuntimeEndpoint), s.LocalStorageCapacityIsolation)
+		// 创建 cadvisor 实例
+		kubeDeps.CAdvisorInterface, err = cadvisor.New(
+			imageFsInfoProvider, // 镜像文件系统信息提供者
+			s.RootDirectory,     // 根目录
+			cgroupRoots,         // cgroup 根目录
+			cadvisor.UsingLegacyCadvisorStats(s.ContainerRuntimeEndpoint), // 是否使用旧版统计信息
+			s.LocalStorageCapacityIsolation)                               // 本地存储容量隔离
 		if err != nil {
 			return err
 		}
 	}
 
 	// Setup event recorder if required.
+	// 设置事件记录器
 	makeEventRecorder(ctx, kubeDeps, nodeName)
 
+	// 6. 初始化容器管理器
 	if kubeDeps.ContainerManager == nil {
+		// 如果启用了 QoS cgroup，但未指定 cgroup 根目录，则默认使用 /
 		if s.CgroupsPerQOS && s.CgroupRoot == "" {
 			logger.Info("--cgroups-per-qos enabled, but --cgroup-root was not specified.  Defaulting to /")
 			s.CgroupRoot = "/"
 		}
 
+		// 获取机器信息
 		machineInfo, err := kubeDeps.CAdvisorInterface.MachineInfo()
 		if err != nil {
 			return err
 		}
+		// 获取保留的 CPU 核心数
 		reservedSystemCPUs, err := getReservedCPUs(machineInfo, s.ReservedSystemCPUs)
 		if err != nil {
 			return err
@@ -797,16 +873,19 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		if reservedSystemCPUs.Size() > 0 {
 			// at cmd option validation phase it is tested either --system-reserved-cgroup or --kube-reserved-cgroup is specified, so overwrite should be ok
 			logger.Info("Option --reserved-cpus is specified, it will overwrite the cpu setting in KubeReserved and SystemReserved", "kubeReserved", s.KubeReserved, "systemReserved", s.SystemReserved)
+			// 处理 CPU 预留设置，如果 KubeReserved 或 SystemReserved 为空，则创建
 			if s.KubeReserved != nil {
 				delete(s.KubeReserved, "cpu")
 			}
 			if s.SystemReserved == nil {
 				s.SystemReserved = make(map[string]string)
 			}
+			// 更新系统预留资源
 			s.SystemReserved["cpu"] = strconv.Itoa(reservedSystemCPUs.Size())
 			logger.Info("After cpu setting is overwritten", "kubeReserved", s.KubeReserved, "systemReserved", s.SystemReserved)
 		}
 
+		// 解析 KubeReserved 和 SystemReserved
 		kubeReserved, err := parseResourceList(s.KubeReserved)
 		if err != nil {
 			return fmt.Errorf("--kube-reserved value failed to parse: %w", err)
@@ -816,19 +895,36 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 			return fmt.Errorf("--system-reserved value failed to parse: %w", err)
 		}
 
+		// 解析 evictionHard
 		var hardEvictionThresholds []evictionapi.Threshold
 		// If the user requested to ignore eviction thresholds, then do not set valid values for hardEvictionThresholds here.
 		if !s.ExperimentalNodeAllocatableIgnoreEvictionThreshold {
+			// 解析配置硬驱逐阈值，在节点资源不足时驱逐 Pod
 			hardEvictionThresholds, err = eviction.ParseThresholdConfig([]string{}, s.EvictionHard, nil, nil, nil)
 			if err != nil {
 				return err
 			}
 		}
+
+		// 解析 QOSReserved
 		experimentalQOSReserved, err := cm.ParseQOSReserved(s.QOSReserved)
 		if err != nil {
 			return fmt.Errorf("--qos-reserved value failed to parse: %w", err)
 		}
 
+		/*** 拓扑管理器：是优化工作负载在 NUMA（非一致性内存访问）架构下的性能
+			NUMA 感知：
+				确保容器工作负载的 CPU 和内存分配在同一个 NUMA 节点上
+				减少跨 NUMA 节点访问内存带来的性能损耗
+			资源对齐：
+				协调 CPU、内存、设备（如 GPU、NIC）等资源的分配
+				确保这些资源位于最优的物理位置
+			性能优化：
+				减少 CPU 访问内存的延迟
+				提高内存带宽利用率
+				优化设备访问性能
+		***/
+		// 声明拓扑管理器策略
 		var topologyManagerPolicyOptions map[string]string
 		if utilfeature.DefaultFeatureGate.Enabled(features.TopologyManagerPolicyOptions) {
 			topologyManagerPolicyOptions = s.TopologyManagerPolicyOptions
@@ -847,45 +943,46 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 			}
 		}
 
+		// 创建容器管理器
 		kubeDeps.ContainerManager, err = cm.NewContainerManager(
-			kubeDeps.Mounter,
-			kubeDeps.CAdvisorInterface,
+			kubeDeps.Mounter,           // 挂载器
+			kubeDeps.CAdvisorInterface, // cadvisor
 			cm.NodeConfig{
-				NodeName:              nodeName,
-				RuntimeCgroupsName:    s.RuntimeCgroups,
-				SystemCgroupsName:     s.SystemCgroups,
-				KubeletCgroupsName:    s.KubeletCgroups,
-				KubeletOOMScoreAdj:    s.OOMScoreAdj,
-				CgroupsPerQOS:         s.CgroupsPerQOS,
-				CgroupRoot:            s.CgroupRoot,
-				CgroupDriver:          s.CgroupDriver,
-				KubeletRootDir:        s.RootDirectory,
-				ProtectKernelDefaults: s.ProtectKernelDefaults,
-				NodeAllocatableConfig: cm.NodeAllocatableConfig{
-					KubeReservedCgroupName:   s.KubeReservedCgroup,
-					SystemReservedCgroupName: s.SystemReservedCgroup,
-					EnforceNodeAllocatable:   sets.New(s.EnforceNodeAllocatable...),
-					KubeReserved:             kubeReserved,
-					SystemReserved:           systemReserved,
-					ReservedSystemCPUs:       reservedSystemCPUs,
-					HardEvictionThresholds:   hardEvictionThresholds,
+				NodeName:              nodeName,                // 节点名称
+				RuntimeCgroupsName:    s.RuntimeCgroups,        // 运行时 cgroup
+				SystemCgroupsName:     s.SystemCgroups,         // 系统 cgroup
+				KubeletCgroupsName:    s.KubeletCgroups,        // kubelet cgroup
+				KubeletOOMScoreAdj:    s.OOMScoreAdj,           // kubelet oom score adj
+				CgroupsPerQOS:         s.CgroupsPerQOS,         // cgroups per qos
+				CgroupRoot:            s.CgroupRoot,            // cgroup 根目录
+				CgroupDriver:          s.CgroupDriver,          // cgroup driver
+				KubeletRootDir:        s.RootDirectory,         // kubelet 根目录
+				ProtectKernelDefaults: s.ProtectKernelDefaults, // 保护内核默认值
+				NodeAllocatableConfig: cm.NodeAllocatableConfig{ //  资源预留配置
+					KubeReservedCgroupName:   s.KubeReservedCgroup,                  //  k8s 组件预留 cgroup
+					SystemReservedCgroupName: s.SystemReservedCgroup,                // 系统预留 cgroup
+					EnforceNodeAllocatable:   sets.New(s.EnforceNodeAllocatable...), // 强制节点预留
+					KubeReserved:             kubeReserved,                          // k8s 组件预留资源
+					SystemReserved:           systemReserved,                        // 系统预留资源
+					ReservedSystemCPUs:       reservedSystemCPUs,                    // 保留的 CPU 核心数
+					HardEvictionThresholds:   hardEvictionThresholds,                // 硬驱逐阈值
 				},
-				QOSReserved:                  *experimentalQOSReserved,
-				CPUManagerPolicy:             s.CPUManagerPolicy,
-				CPUManagerPolicyOptions:      s.CPUManagerPolicyOptions,
-				CPUManagerReconcilePeriod:    s.CPUManagerReconcilePeriod.Duration,
-				MemoryManagerPolicy:          s.MemoryManagerPolicy,
-				MemoryManagerReservedMemory:  s.ReservedMemory,
-				PodPidsLimit:                 s.PodPidsLimit,
-				EnforceCPULimits:             s.CPUCFSQuota,
-				CPUCFSQuotaPeriod:            s.CPUCFSQuotaPeriod.Duration,
-				TopologyManagerPolicy:        s.TopologyManagerPolicy,
-				TopologyManagerScope:         s.TopologyManagerScope,
-				TopologyManagerPolicyOptions: topologyManagerPolicyOptions,
+				QOSReserved:                  *experimentalQOSReserved,             // QoS 预留资源
+				CPUManagerPolicy:             s.CPUManagerPolicy,                   // CPU 管理器策略
+				CPUManagerPolicyOptions:      s.CPUManagerPolicyOptions,            // CPU 管理器策略选项
+				CPUManagerReconcilePeriod:    s.CPUManagerReconcilePeriod.Duration, // CPU 管理器重新同步周期
+				MemoryManagerPolicy:          s.MemoryManagerPolicy,                // 内存管理器策略
+				MemoryManagerReservedMemory:  s.ReservedMemory,                     // 内存管理器预留内存
+				PodPidsLimit:                 s.PodPidsLimit,                       // Pod PID 限制
+				EnforceCPULimits:             s.CPUCFSQuota,                        // CPU CFS 配额
+				CPUCFSQuotaPeriod:            s.CPUCFSQuotaPeriod.Duration,         // CPU CFS 配额周期
+				TopologyManagerPolicy:        s.TopologyManagerPolicy,              // 拓扑管理器策略
+				TopologyManagerScope:         s.TopologyManagerScope,               // 拓扑管理器范围
+				TopologyManagerPolicyOptions: topologyManagerPolicyOptions,         // 拓扑管理器策略选项
 			},
-			s.FailSwapOn,
-			kubeDeps.Recorder,
-			kubeDeps.KubeClient,
+			s.FailSwapOn,        // 是否失败
+			kubeDeps.Recorder,   // 事件记录器
+			kubeDeps.KubeClient, // kube client
 		)
 
 		if err != nil {
@@ -893,24 +990,31 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		}
 	}
 
+	// 初始化 Pod 启动延迟追踪器
 	if kubeDeps.PodStartupLatencyTracker == nil {
-		kubeDeps.PodStartupLatencyTracker = kubeletutil.NewPodStartupLatencyTracker()
+		kubeDeps.PodStartupLatencyTracker = kubeletutil.NewPodStartupLatencyTracker() // 初始化 Pod 启动延迟追踪器
 	}
 
+	// 初始化节点启动延迟追踪器
 	if kubeDeps.NodeStartupLatencyTracker == nil {
-		kubeDeps.NodeStartupLatencyTracker = kubeletutil.NewNodeStartupLatencyTracker()
+		kubeDeps.NodeStartupLatencyTracker = kubeletutil.NewNodeStartupLatencyTracker() // 初始化节点启动延迟追踪器
 	}
 
 	// TODO(vmarmol): Do this through container config.
+	// 设置 OOMScoreAdj，调整 kubelet 进程的 OOM (Out-Of-Memory) 分数
 	oomAdjuster := kubeDeps.OOMAdjuster
+	// s.OOMScoreAdj 是要调整的 OOM 分数
+	//   第一个参数 0 是进程 ID，0 表示当前进程，调整 kubelet 进程的 OOM 分数，确保其在系统内存不足时有适当的优先级
 	if err := oomAdjuster.ApplyOOMScoreAdj(0, int(s.OOMScoreAdj)); err != nil {
 		logger.Info("Failed to ApplyOOMScoreAdj", "err", err)
 	}
 
+	// 运行 kubelet 启动 Kubelet 主循环
 	if err := RunKubelet(ctx, s, kubeDeps); err != nil {
 		return err
 	}
 
+	// 启动健康检查服务器
 	if s.HealthzPort > 0 {
 		mux := http.NewServeMux()
 		healthz.InstallHandler(mux)
@@ -923,6 +1027,9 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 
 	// If systemd is used, notify it that we have started
+	// 通过 sd_notify 系统调用通知 systemd
+	// 将服务状态更新为 "active (running)"
+	// 触发依赖于此服务的其他服务启动
 	go daemon.SdNotify(false, "READY=1")
 
 	select {
@@ -1212,6 +1319,13 @@ func setContentTypeForClient(cfg *restclient.Config, contentType string) {
 //	3 Standalone 'kubernetes' binary
 //
 // Eventually, #2 will be replaced with instances of #3
+// RunKubelet 负责设置和运行 kubelet。它在三个不同的应用中使用：
+//
+// 1. 集成测试
+// 2. Kubelet 二进制文件
+// 3. 独立的 'kubernetes' 二进制文件
+//
+// 最终，#2 将被 #3 的实例替代
 func RunKubelet(ctx context.Context, kubeServer *options.KubeletServer, kubeDeps *kubelet.Dependencies) error {
 	logger := klog.FromContext(ctx)
 	hostname, err := nodeutil.GetHostname(kubeServer.HostnameOverride)
@@ -1222,6 +1336,7 @@ func RunKubelet(ctx context.Context, kubeServer *options.KubeletServer, kubeDeps
 	// Setup event recorder if required.
 	makeEventRecorder(ctx, kubeDeps, nodeName)
 
+	// 解析 NodeIP 参数
 	nodeIPs, invalidNodeIps, err := nodeutil.ParseNodeIPArgument(kubeServer.NodeIP, kubeServer.CloudProvider)
 	if err != nil {
 		return fmt.Errorf("bad --node-ip %q: %v", kubeServer.NodeIP, err)
@@ -1230,17 +1345,21 @@ func RunKubelet(ctx context.Context, kubeServer *options.KubeletServer, kubeDeps
 		logger.Info("Could not parse some node IP(s), ignoring them", "IPs", invalidNodeIps)
 	}
 
+	// 初始化 capabilities
 	capabilities.Initialize(capabilities.Capabilities{
 		AllowPrivileged: true,
 	})
 
+	// 设置 Docker 配置路径，凭证提供者配置
 	credentialprovider.SetPreferredDockercfgPath(kubeServer.RootDirectory)
 	logger.V(2).Info("Using root directory", "path", kubeServer.RootDirectory)
 
+	// 设置 OSInterface，如果未设置则使用 RealOS
 	if kubeDeps.OSInterface == nil {
 		kubeDeps.OSInterface = kubecontainer.RealOS{}
 	}
 
+	// 创建并初始化 kubelet
 	k, err := createAndInitKubelet(ctx,
 		kubeServer,
 		kubeDeps,
@@ -1256,29 +1375,36 @@ func RunKubelet(ctx context.Context, kubeServer *options.KubeletServer, kubeDeps
 	if kubeDeps.PodConfig == nil {
 		return fmt.Errorf("failed to create kubelet, pod source config was nil")
 	}
-	podCfg := kubeDeps.PodConfig
+	podCfg := kubeDeps.PodConfig // 获取 PodConfig
 
+	// 设置文件描述符限制，进程可以打开的最大文件描述符数量
 	if err := rlimit.SetNumFiles(uint64(kubeServer.MaxOpenFiles)); err != nil {
 		logger.Error(err, "Failed to set rlimit on max file handles")
 	}
 
+	// 启动 kubelet主循环
 	startKubelet(ctx, k, podCfg, &kubeServer.KubeletConfiguration, kubeDeps, kubeServer.EnableServer)
 	logger.Info("Started kubelet")
 
 	return nil
 }
 
+// 启动 kubelet 的各个组件
 func startKubelet(ctx context.Context, k kubelet.Bootstrap, podCfg *config.PodConfig, kubeCfg *kubeletconfiginternal.KubeletConfiguration, kubeDeps *kubelet.Dependencies, enableServer bool) {
 	// start the kubelet
+	// 启动 kubelet 的主循环，在单独的 goroutine 中运行,podCfg.Updates() 返回一个通道，用于接收 Pod 配置更新
 	go k.Run(podCfg.Updates())
 
 	// start the kubelet server
+	// 启用了服务器,在单独的 goroutine 中启动 HTTPS 服务器,处理 API 请求，如 exec、logs、port-forward
 	if enableServer {
 		go k.ListenAndServe(kubeCfg, kubeDeps.TLSOptions, kubeDeps.Auth, kubeDeps.TracerProvider)
 	}
+	// 只读端口,启动一个只读的 HTTP 服务器,用于监控和健康检查，不提供修改集群状态的接口
 	if kubeCfg.ReadOnlyPort > 0 {
 		go k.ListenAndServeReadOnly(netutils.ParseIPSloppy(kubeCfg.Address), uint(kubeCfg.ReadOnlyPort), kubeDeps.TracerProvider)
 	}
+	// 启动 Pod 资源服务器,处理 Pod 资源的请求
 	go k.ListenAndServePodResources(ctx)
 }
 
@@ -1292,6 +1418,7 @@ func createAndInitKubelet(
 	// TODO: block until all sources have delivered at least one update to the channel, or break the sync loop
 	// up into "per source" synchronizations
 
+	//  创建主 Kubelet 实例
 	k, err = kubelet.NewMainKubelet(
 		ctx,
 		&kubeServer.KubeletConfiguration,
@@ -1325,6 +1452,10 @@ func createAndInitKubelet(
 
 	k.BirthCry()
 
+	// 启动垃圾回收
+	// 	启动容器和镜像的垃圾回收
+	// 	定期清理未使用的容器和镜像
+	// 	根据配置的策略进行资源回收
 	k.StartGarbageCollection()
 
 	return k, nil

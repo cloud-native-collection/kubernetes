@@ -226,18 +226,32 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &admissionregistrationv1alpha1.VariableApplyConfiguration{}
 
 		// Group=admissionregistration.k8s.io, Version=v1beta1
+	case v1beta1.SchemeGroupVersion.WithKind("ApplyConfiguration"):
+		return &admissionregistrationv1beta1.ApplyConfigurationApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("AuditAnnotation"):
 		return &admissionregistrationv1beta1.AuditAnnotationApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ExpressionWarning"):
 		return &admissionregistrationv1beta1.ExpressionWarningApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("JSONPatch"):
+		return &admissionregistrationv1beta1.JSONPatchApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("MatchCondition"):
 		return &admissionregistrationv1beta1.MatchConditionApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("MatchResources"):
 		return &admissionregistrationv1beta1.MatchResourcesApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("MutatingAdmissionPolicy"):
+		return &admissionregistrationv1beta1.MutatingAdmissionPolicyApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("MutatingAdmissionPolicyBinding"):
+		return &admissionregistrationv1beta1.MutatingAdmissionPolicyBindingApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("MutatingAdmissionPolicyBindingSpec"):
+		return &admissionregistrationv1beta1.MutatingAdmissionPolicyBindingSpecApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("MutatingAdmissionPolicySpec"):
+		return &admissionregistrationv1beta1.MutatingAdmissionPolicySpecApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("MutatingWebhook"):
 		return &admissionregistrationv1beta1.MutatingWebhookApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("MutatingWebhookConfiguration"):
 		return &admissionregistrationv1beta1.MutatingWebhookConfigurationApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("Mutation"):
+		return &admissionregistrationv1beta1.MutationApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("NamedRuleWithOperations"):
 		return &admissionregistrationv1beta1.NamedRuleWithOperationsApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ParamKind"):
@@ -614,6 +628,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationscertificatesv1alpha1.ClusterTrustBundleApplyConfiguration{}
 	case certificatesv1alpha1.SchemeGroupVersion.WithKind("ClusterTrustBundleSpec"):
 		return &applyconfigurationscertificatesv1alpha1.ClusterTrustBundleSpecApplyConfiguration{}
+	case certificatesv1alpha1.SchemeGroupVersion.WithKind("PodCertificateRequest"):
+		return &applyconfigurationscertificatesv1alpha1.PodCertificateRequestApplyConfiguration{}
+	case certificatesv1alpha1.SchemeGroupVersion.WithKind("PodCertificateRequestSpec"):
+		return &applyconfigurationscertificatesv1alpha1.PodCertificateRequestSpecApplyConfiguration{}
+	case certificatesv1alpha1.SchemeGroupVersion.WithKind("PodCertificateRequestStatus"):
+		return &applyconfigurationscertificatesv1alpha1.PodCertificateRequestStatusApplyConfiguration{}
 
 		// Group=certificates.k8s.io, Version=v1beta1
 	case certificatesv1beta1.SchemeGroupVersion.WithKind("CertificateSigningRequest"):
@@ -894,6 +914,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationscorev1.PodAffinityTermApplyConfiguration{}
 	case corev1.SchemeGroupVersion.WithKind("PodAntiAffinity"):
 		return &applyconfigurationscorev1.PodAntiAffinityApplyConfiguration{}
+	case corev1.SchemeGroupVersion.WithKind("PodCertificateProjection"):
+		return &applyconfigurationscorev1.PodCertificateProjectionApplyConfiguration{}
 	case corev1.SchemeGroupVersion.WithKind("PodCondition"):
 		return &applyconfigurationscorev1.PodConditionApplyConfiguration{}
 	case corev1.SchemeGroupVersion.WithKind("PodDNSConfig"):

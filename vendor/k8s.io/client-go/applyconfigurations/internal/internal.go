@@ -22,7 +22,7 @@ import (
 	fmt "fmt"
 	sync "sync"
 
-	typed "sigs.k8s.io/structured-merge-diff/v4/typed"
+	typed "sigs.k8s.io/structured-merge-diff/v6/typed"
 )
 
 func Parser() *typed.Parser {
@@ -888,6 +888,12 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: string
       default: ""
+- name: io.k8s.api.admissionregistration.v1beta1.ApplyConfiguration
+  map:
+    fields:
+    - name: expression
+      type:
+        scalar: string
 - name: io.k8s.api.admissionregistration.v1beta1.AuditAnnotation
   map:
     fields:
@@ -910,6 +916,12 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: string
       default: ""
+- name: io.k8s.api.admissionregistration.v1beta1.JSONPatch
+  map:
+    fields:
+    - name: expression
+      type:
+        scalar: string
 - name: io.k8s.api.admissionregistration.v1beta1.MatchCondition
   map:
     fields:
@@ -946,6 +958,87 @@ var schemaYAML = typed.YAMLObject(`types:
             namedType: io.k8s.api.admissionregistration.v1beta1.NamedRuleWithOperations
           elementRelationship: atomic
     elementRelationship: atomic
+- name: io.k8s.api.admissionregistration.v1beta1.MutatingAdmissionPolicy
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+      default: {}
+    - name: spec
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.MutatingAdmissionPolicySpec
+      default: {}
+- name: io.k8s.api.admissionregistration.v1beta1.MutatingAdmissionPolicyBinding
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+      default: {}
+    - name: spec
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.MutatingAdmissionPolicyBindingSpec
+      default: {}
+- name: io.k8s.api.admissionregistration.v1beta1.MutatingAdmissionPolicyBindingSpec
+  map:
+    fields:
+    - name: matchResources
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.MatchResources
+    - name: paramRef
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.ParamRef
+    - name: policyName
+      type:
+        scalar: string
+- name: io.k8s.api.admissionregistration.v1beta1.MutatingAdmissionPolicySpec
+  map:
+    fields:
+    - name: failurePolicy
+      type:
+        scalar: string
+    - name: matchConditions
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.api.admissionregistration.v1beta1.MatchCondition
+          elementRelationship: associative
+          keys:
+          - name
+    - name: matchConstraints
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.MatchResources
+    - name: mutations
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.api.admissionregistration.v1beta1.Mutation
+          elementRelationship: atomic
+    - name: paramKind
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.ParamKind
+    - name: reinvocationPolicy
+      type:
+        scalar: string
+    - name: variables
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.api.admissionregistration.v1beta1.Variable
+          elementRelationship: atomic
 - name: io.k8s.api.admissionregistration.v1beta1.MutatingWebhook
   map:
     fields:
@@ -1019,6 +1112,19 @@ var schemaYAML = typed.YAMLObject(`types:
           elementRelationship: associative
           keys:
           - name
+- name: io.k8s.api.admissionregistration.v1beta1.Mutation
+  map:
+    fields:
+    - name: applyConfiguration
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.ApplyConfiguration
+    - name: jsonPatch
+      type:
+        namedType: io.k8s.api.admissionregistration.v1beta1.JSONPatch
+    - name: patchType
+      type:
+        scalar: string
+      default: ""
 - name: io.k8s.api.admissionregistration.v1beta1.NamedRuleWithOperations
   map:
     fields:
@@ -4352,6 +4458,91 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: string
       default: ""
+- name: io.k8s.api.certificates.v1alpha1.PodCertificateRequest
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+      default: {}
+    - name: spec
+      type:
+        namedType: io.k8s.api.certificates.v1alpha1.PodCertificateRequestSpec
+      default: {}
+    - name: status
+      type:
+        namedType: io.k8s.api.certificates.v1alpha1.PodCertificateRequestStatus
+      default: {}
+- name: io.k8s.api.certificates.v1alpha1.PodCertificateRequestSpec
+  map:
+    fields:
+    - name: maxExpirationSeconds
+      type:
+        scalar: numeric
+      default: 86400
+    - name: nodeName
+      type:
+        scalar: string
+      default: ""
+    - name: nodeUID
+      type:
+        scalar: string
+      default: ""
+    - name: pkixPublicKey
+      type:
+        scalar: string
+    - name: podName
+      type:
+        scalar: string
+      default: ""
+    - name: podUID
+      type:
+        scalar: string
+      default: ""
+    - name: proofOfPossession
+      type:
+        scalar: string
+    - name: serviceAccountName
+      type:
+        scalar: string
+      default: ""
+    - name: serviceAccountUID
+      type:
+        scalar: string
+      default: ""
+    - name: signerName
+      type:
+        scalar: string
+      default: ""
+- name: io.k8s.api.certificates.v1alpha1.PodCertificateRequestStatus
+  map:
+    fields:
+    - name: beginRefreshAt
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Time
+    - name: certificateChain
+      type:
+        scalar: string
+    - name: conditions
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Condition
+          elementRelationship: associative
+          keys:
+          - type
+    - name: notAfter
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Time
+    - name: notBefore
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Time
 - name: io.k8s.api.certificates.v1beta1.CertificateSigningRequest
   map:
     fields:
@@ -6999,6 +7190,27 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             namedType: io.k8s.api.core.v1.PodAffinityTerm
           elementRelationship: atomic
+- name: io.k8s.api.core.v1.PodCertificateProjection
+  map:
+    fields:
+    - name: certificateChainPath
+      type:
+        scalar: string
+    - name: credentialBundlePath
+      type:
+        scalar: string
+    - name: keyPath
+      type:
+        scalar: string
+    - name: keyType
+      type:
+        scalar: string
+    - name: maxExpirationSeconds
+      type:
+        scalar: numeric
+    - name: signerName
+      type:
+        scalar: string
 - name: io.k8s.api.core.v1.PodCondition
   map:
     fields:
@@ -8641,6 +8853,9 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: downwardAPI
       type:
         namedType: io.k8s.api.core.v1.DownwardAPIProjection
+    - name: podCertificate
+      type:
+        namedType: io.k8s.api.core.v1.PodCertificateProjection
     - name: secret
       type:
         namedType: io.k8s.api.core.v1.SecretProjection
