@@ -1176,6 +1176,7 @@ func (m *kubeGenericRuntimeManager) computePodActions(ctx context.Context, pod *
 func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, podStatus *kubecontainer.PodStatus, pullSecrets []v1.Secret, backOff *flowcontrol.Backoff) (result kubecontainer.PodSyncResult) {
 	logger := klog.FromContext(ctx)
 	// Step 1: Compute sandbox and container changes.
+	// 1. 计算变更
 	podContainerChanges := m.computePodActions(ctx, pod, podStatus)
 	logger.V(3).Info("computePodActions got for pod", "podActions", podContainerChanges, "pod", klog.KObj(pod))
 	if podContainerChanges.CreateSandbox {
@@ -1191,6 +1192,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	}
 
 	// Step 2: Kill the pod if the sandbox has changed.
+	// 2. 处理沙箱变更
 	if podContainerChanges.KillPod {
 		if podContainerChanges.CreateSandbox {
 			logger.V(4).Info("Stopping PodSandbox for pod, will start new one", "pod", klog.KObj(pod))
@@ -1198,6 +1200,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 			logger.V(4).Info("Stopping PodSandbox for pod, because all other containers are dead", "pod", klog.KObj(pod))
 		}
 
+		// 先终止现有沙箱
 		killResult := m.killPodWithSyncResult(ctx, pod, kubecontainer.ConvertPodStatusToRunningPod(m.runtimeName, podStatus), nil)
 		result.AddPodSyncResult(killResult)
 		if killResult.Error() != nil {
@@ -1205,13 +1208,16 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 			return
 		}
 
+		// 清理相关资源
 		if podContainerChanges.CreateSandbox {
 			m.purgeInitContainers(ctx, pod, podStatus)
 		}
 	} else {
 		// Step 3: kill any running containers in this pod which are not to keep.
+		// 3. 杀死 Pod 中不需要的容器
 		for containerID, containerInfo := range podContainerChanges.ContainersToKill {
 			logger.V(3).Info("Killing unwanted container for pod", "containerName", containerInfo.name, "containerID", containerID, "pod", klog.KObj(pod))
+			// 杀死容器
 			killContainerResult := kubecontainer.NewSyncResult(kubecontainer.KillContainer, containerInfo.name)
 			result.AddSyncResult(killContainerResult)
 			if err := m.killContainer(ctx, pod, containerID, containerInfo.name, containerInfo.message, containerInfo.reason, nil, nil); err != nil {
@@ -1225,6 +1231,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	// Keep terminated init containers fairly aggressively controlled
 	// This is an optimization because container removals are typically handled
 	// by container garbage collector.
+	// 清理 init 容器
 	m.pruneInitContainersBeforeStart(ctx, pod, podStatus)
 
 	// We pass the value of the PRIMARY podIP and list of podIPs down to
@@ -1243,6 +1250,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	}
 
 	// Step 4: Create a sandbox for the pod if necessary.
+	// 4. 创建沙盒: 创建新的 Pod 沙箱,设置网络命名空间,分配 IP 地址
 	podSandboxID := podContainerChanges.SandboxID
 	if podContainerChanges.CreateSandbox {
 		var msg string
@@ -1261,10 +1269,14 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		// and the podSandBox cannot be successfully created. Therefore, before calling runc,
 		// we need to convert the sysctl variable, the dot is used as a separator to separate the kernel namespace.
 		// When runc supports slash as sysctl separator, this function can no longer be used.
+		// 将 Pod 安全上下文中的 sysctl 变量从斜杠(/)转换为点(.)
+		// 因为 runc 使用点作为命名空间分隔符
 		sysctl.ConvertPodSysctlsVariableToDotsSeparator(pod.Spec.SecurityContext)
 
 		// Prepare resources allocated by the Dynammic Resource Allocation feature for the pod
+		// 准备动态资源分配
 		if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
+			// 准备动态资源分配
 			if err := m.runtimeHelper.PrepareDynamicResources(ctx, pod); err != nil {
 				ref, referr := ref.GetReference(legacyscheme.Scheme, pod)
 				if referr != nil {
@@ -1277,6 +1289,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 			}
 		}
 
+		// 创建 Pod 沙箱
 		podSandboxID, msg, err = m.createPodSandbox(ctx, pod, podContainerChanges.Attempt)
 		if err != nil {
 			// createPodSandbox can return an error from CNI, CSI,
@@ -1286,6 +1299,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 			//
 			// SyncPod can still be running when we get here, which
 			// means the PodWorker has not acked the deletion.
+			// 如果 Pod 已被删除，返回错误
 			if m.podStateProvider.IsPodTerminationRequested(pod.UID) {
 				logger.V(4).Info("Pod was deleted and sandbox failed to be created", "pod", klog.KObj(pod), "podUID", pod.UID)
 				return
@@ -1302,6 +1316,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		}
 		logger.V(4).Info("Created PodSandbox for pod", "podSandboxID", podSandboxID, "pod", klog.KObj(pod))
 
+		// 获取沙箱状态
 		resp, err := m.runtimeService.PodSandboxStatus(ctx, podSandboxID, false)
 		if err != nil {
 			ref, referr := ref.GetReference(legacyscheme.Scheme, pod)
@@ -1320,8 +1335,10 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 
 		// If we ever allow updating a pod from non-host-network to
 		// host-network, we may use a stale IP.
+		// 如果 Pod 使用非 host 网络，使用沙箱 IP
 		if !kubecontainer.IsHostNetworkPod(pod) {
 			// Overwrite the podIPs passed in the pod status, since we just started the pod sandbox.
+			// 从沙箱状态中提取 IP，重写 Pod IP
 			podIPs = m.determinePodSandboxIPs(ctx, pod.Namespace, pod.Name, resp.GetStatus())
 			logger.V(4).Info("Determined the ip for pod after sandbox changed", "IPs", podIPs, "pod", klog.KObj(pod))
 		}
@@ -1330,14 +1347,17 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	// the start containers routines depend on pod ip(as in primary pod ip)
 	// instead of trying to figure out if we have 0 < len(podIPs)
 	// everytime, we short circuit it here
+	// 获取 Pod IP
 	podIP := ""
 	if len(podIPs) != 0 {
 		podIP = podIPs[0]
 	}
 
 	// Get podSandboxConfig for containers to start.
+	// 准备 Pod 沙箱配置和镜像卷
 	configPodSandboxResult := kubecontainer.NewSyncResult(kubecontainer.ConfigPodSandbox, podSandboxID)
 	result.AddSyncResult(configPodSandboxResult)
+	// 生成沙箱配置
 	podSandboxConfig, err := m.generatePodSandboxConfig(ctx, pod, podContainerChanges.Attempt)
 	if err != nil {
 		message := fmt.Sprintf("GeneratePodSandboxConfig for pod %q failed: %v", format.Pod(pod), err)
@@ -1346,6 +1366,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		return
 	}
 
+	// 获取镜像卷
 	imageVolumePullResults, err := m.getImageVolumes(ctx, pod, podSandboxConfig, pullSecrets)
 	if err != nil {
 		logger.Error(err, "Get image volumes for pod failed", "pod", klog.KObj(pod))
@@ -1358,10 +1379,13 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	// currently: "container", "init container" or "ephemeral container"
 	// metricLabel is the label used to describe this type of container in monitoring metrics.
 	// currently: "container", "init_container" or "ephemeral_container"
+	// 封装启动容器的通用逻辑
 	start := func(ctx context.Context, typeName, metricLabel string, spec *startSpec) error {
+		// 始化结果跟踪
 		startContainerResult := kubecontainer.NewSyncResult(kubecontainer.StartContainer, spec.container.Name)
 		result.AddSyncResult(startContainerResult)
 
+		// 检查是否需要回退
 		isInBackOff, msg, err := m.doBackOff(ctx, pod, spec.container, podStatus, backOff)
 		if isInBackOff {
 			startContainerResult.Fail(err, msg)
@@ -1369,6 +1393,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 			return err
 		}
 
+		// 记录容器启动次数
 		metrics.StartedContainersTotal.WithLabelValues(metricLabel).Inc()
 		if sc.HasWindowsHostProcessRequest(pod, spec.container) {
 			metrics.StartedHostProcessContainersTotal.WithLabelValues(metricLabel).Inc()
@@ -1376,12 +1401,14 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 		logger.V(4).Info("Creating container in pod", "containerType", typeName, "container", spec.container.Name, "pod", klog.KObj(pod))
 
 		// We fail late here to populate the "ErrImagePull" and "ImagePullBackOff" correctly to the end user.
+		// 准备镜像卷，将镜像卷转换为 kubeContainerImageVolumes
 		imageVolumes, err := m.toKubeContainerImageVolumes(ctx, imageVolumePullResults, spec.container, pod, startContainerResult)
 		if err != nil {
 			return err
 		}
 
 		// NOTE (aramase) podIPs are populated for single stack and dual stack clusters. Send only podIPs.
+		// 启动容器
 		msg, err = m.startContainer(ctx, podSandboxID, podSandboxConfig, spec, pod, podStatus, pullSecrets, podIP, podIPs, imageVolumes)
 		incrementImageVolumeMetrics(err, msg, spec.container, imageVolumes)
 		if err != nil {
@@ -1410,11 +1437,13 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	// These are started "prior" to init containers to allow running ephemeral containers even when there
 	// are errors starting an init container. In practice init containers will start first since ephemeral
 	// containers cannot be specified on pod creation.
+	// 5. 启动临时容器:启动临时容器（用于调试等场景）,容器在 Pod 的生命周期内可以动态添加
 	for _, idx := range podContainerChanges.EphemeralContainersToStart {
 		start(ctx, "ephemeral container", metrics.EphemeralContainer, ephemeralContainerStartSpec(&pod.Spec.EphemeralContainers[idx]))
 	}
 
 	// Step 6: start init containers.
+	// 6. 启动初始化容器,按顺序启动初始化容器,等待每个初始化容器成功完成,如果初始化容器失败，Pod 启动过程将终止
 	for _, idx := range podContainerChanges.InitContainersToStart {
 		container := &pod.Spec.InitContainers[idx]
 		// Start the next init container.
@@ -1432,6 +1461,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	}
 
 	// Step 7: For containers in podContainerChanges.ContainersToUpdate[CPU,Memory] list, invoke UpdateContainerResources
+	// 7.调整容器资源,如果启用了原地垂直扩缩容特性或调整容器的 CPU 和内存资源限制
 	if resizable, _, _ := allocation.IsInPlacePodVerticalScalingAllowed(pod); resizable {
 		if len(podContainerChanges.ContainersToUpdate) > 0 || podContainerChanges.UpdatePodResources {
 			result.SyncResults = append(result.SyncResults, m.doPodResizeAction(ctx, pod, podStatus, podContainerChanges))
@@ -1439,7 +1469,9 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 	}
 
 	// Step 8: start containers in podContainerChanges.ContainersToStart.
+	// 8. 启动主容器,按顺序启动主容器,等待每个主容器成功完成,如果主容器失败，Pod 启动过程将终止
 	for _, idx := range podContainerChanges.ContainersToStart {
+		// 设置容器环境变量、挂载卷
 		start(ctx, "container", metrics.Container, containerStartSpec(&pod.Spec.Containers[idx]))
 	}
 
@@ -1479,16 +1511,19 @@ type imageVolumePullResult struct {
 	msg  string
 }
 
+// 将镜像卷的拉取结果转换为容器运行时可以使用的格式
 func (m *kubeGenericRuntimeManager) toKubeContainerImageVolumes(ctx context.Context, imageVolumePullResults imageVolumePulls, container *v1.Container, pod *v1.Pod, syncResult *kubecontainer.SyncResult) (kubecontainer.ImageVolumes, error) {
 	if len(imageVolumePullResults) == 0 {
 		return nil, nil
 	}
 
+	// 初始化镜像卷映射
 	imageVolumes := kubecontainer.ImageVolumes{}
 	var (
 		lastErr error
 		lastMsg string
 	)
+	// 遍历容器的卷挂载
 	for _, v := range container.VolumeMounts {
 		res, ok := imageVolumePullResults[v.Name]
 		if !ok {
@@ -1514,6 +1549,7 @@ func (m *kubeGenericRuntimeManager) toKubeContainerImageVolumes(ctx context.Cont
 	return imageVolumes, nil
 }
 
+// 获取镜像卷的拉取结果
 func (m *kubeGenericRuntimeManager) getImageVolumes(ctx context.Context, pod *v1.Pod, podSandboxConfig *runtimeapi.PodSandboxConfig, pullSecrets []v1.Secret) (imageVolumePulls, error) {
 	logger := klog.FromContext(ctx)
 	if !utilfeature.DefaultFeatureGate.Enabled(features.ImageVolume) {

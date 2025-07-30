@@ -388,11 +388,13 @@ func (vm *volumeManager) MarkVolumesAsReportedInUse(
 	vm.desiredStateOfWorld.MarkVolumesReportedInUse(volumesReportedAsInUse)
 }
 
+// 等待Pod的所有卷完成挂载
 func (vm *volumeManager) WaitForAttachAndMount(ctx context.Context, pod *v1.Pod) error {
 	if pod == nil {
 		return nil
 	}
 
+	// 获取Pod中声明的卷
 	expectedVolumes := getExpectedVolumes(pod)
 	if len(expectedVolumes) == 0 {
 		// No volumes to verify
@@ -405,8 +407,10 @@ func (vm *volumeManager) WaitForAttachAndMount(ctx context.Context, pod *v1.Pod)
 	// Some pods expect to have Setup called over and over again to update.
 	// Remount plugins for which this is true. (Atomically updating volumes,
 	// like Downward API, depend on this to update the contents of the volume).
+	// 重新处理Pod
 	vm.desiredStateOfWorldPopulator.ReprocessPod(uniquePodName)
 
+	// 等待Pod的所有卷完成挂载
 	err := wait.PollUntilContextTimeout(
 		ctx,
 		podAttachAndMountRetryInterval,
@@ -415,11 +419,14 @@ func (vm *volumeManager) WaitForAttachAndMount(ctx context.Context, pod *v1.Pod)
 		vm.verifyVolumesMountedFunc(uniquePodName, expectedVolumes))
 
 	if err != nil {
+		//收集未挂载的卷
 		unmountedVolumes :=
 			vm.getUnmountedVolumes(uniquePodName, expectedVolumes)
 		// Also get unattached volumes and volumes not in dsw for error message
+		// 收集未附加的卷
 		unattachedVolumes :=
 			vm.getUnattachedVolumes(uniquePodName)
+		// 收集处理失败的卷
 		volumesNotInDSW :=
 			vm.getVolumesNotInDSW(uniquePodName, expectedVolumes)
 
@@ -524,11 +531,14 @@ func (vm *volumeManager) getUnattachedVolumes(uniquePodName types.UniquePodName)
 
 // verifyVolumesMountedFunc returns a method that returns true when all expected
 // volumes are mounted.
+// 验证所有预期卷是否已挂载
 func (vm *volumeManager) verifyVolumesMountedFunc(podName types.UniquePodName, expectedVolumes []string) wait.ConditionWithContextFunc {
 	return func(_ context.Context) (done bool, err error) {
+		// 错误检查
 		if errs := vm.desiredStateOfWorld.PopPodErrors(podName); len(errs) > 0 {
 			return true, errors.New(strings.Join(errs, "; "))
 		}
+		// 检查预期卷是否已挂载
 		for _, expectedVolume := range expectedVolumes {
 			_, found := vm.actualStateOfWorld.GetMountedVolumeForPodByOuterVolumeSpecName(podName, expectedVolume)
 			if !found {

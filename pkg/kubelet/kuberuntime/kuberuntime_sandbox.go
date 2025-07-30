@@ -36,8 +36,10 @@ import (
 )
 
 // createPodSandbox creates a pod sandbox and returns (podSandBoxID, message, error).
+// 创建一个 pod 沙箱环境(容器运行的基础隔离环境)
 func (m *kubeGenericRuntimeManager) createPodSandbox(ctx context.Context, pod *v1.Pod, attempt uint32) (string, string, error) {
 	logger := klog.FromContext(ctx)
+	// 生成沙箱配置
 	podSandboxConfig, err := m.generatePodSandboxConfig(ctx, pod, attempt)
 	if err != nil {
 		message := fmt.Sprintf("Failed to generate sandbox config for pod %q: %v", format.Pod(pod), err)
@@ -46,6 +48,7 @@ func (m *kubeGenericRuntimeManager) createPodSandbox(ctx context.Context, pod *v
 	}
 
 	// Create pod logs directory
+	// 创建 pod 日志目录
 	err = m.osInterface.MkdirAll(podSandboxConfig.LogDirectory, 0755)
 	if err != nil {
 		message := fmt.Sprintf("Failed to create log directory for pod %q: %v", format.Pod(pod), err)
@@ -53,6 +56,7 @@ func (m *kubeGenericRuntimeManager) createPodSandbox(ctx context.Context, pod *v
 		return "", message, err
 	}
 
+	// 获取运行时处理程序
 	runtimeHandler := ""
 	if m.runtimeClassManager != nil {
 		runtimeHandler, err = m.runtimeClassManager.LookupRuntimeHandler(pod.Spec.RuntimeClassName)
@@ -65,6 +69,7 @@ func (m *kubeGenericRuntimeManager) createPodSandbox(ctx context.Context, pod *v
 		}
 	}
 
+	// 创建沙箱
 	podSandBoxID, err := m.runtimeService.RunPodSandbox(ctx, podSandboxConfig, runtimeHandler)
 	if err != nil {
 		message := fmt.Sprintf("Failed to create sandbox for pod %q: %v", format.Pod(pod), err)

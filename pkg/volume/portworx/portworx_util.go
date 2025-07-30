@@ -137,13 +137,16 @@ func (util *portworxVolumeUtil) DeleteVolume(d *portworxVolumeDeleter) error {
 }
 
 // AttachVolume attaches a Portworx Volume
+// 将指定的Portworx卷附加到当前节点
 func (util *portworxVolumeUtil) AttachVolume(m *portworxVolumeMounter, attachOptions map[string]string) (string, error) {
+	// 获取Portworx驱动
 	driver, err := util.getLocalPortworxDriver(m.plugin.host)
 	if err != nil || driver == nil {
 		klog.Errorf("Failed to get portworx driver. Err: %v", err)
 		return "", err
 	}
 
+	// 将Portworx卷附加到当前节点
 	devicePath, err := driver.Attach(m.volName, attachOptions)
 	if err != nil {
 		klog.Errorf("Error attaching Portworx Volume (%v): %v", m.volName, err)
@@ -153,6 +156,7 @@ func (util *portworxVolumeUtil) AttachVolume(m *portworxVolumeMounter, attachOpt
 }
 
 // DetachVolume detaches a Portworx Volume
+// 将指定的Portworx卷从当前节点分离
 func (util *portworxVolumeUtil) DetachVolume(u *portworxVolumeUnmounter) error {
 	driver, err := util.getLocalPortworxDriver(u.plugin.host)
 	if err != nil || driver == nil {

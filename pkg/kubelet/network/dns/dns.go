@@ -175,7 +175,9 @@ func (c *Configurer) generateSearchesForDNSClusterFirst(hostSearch []string, pod
 }
 
 // CheckLimitsForResolvConf checks limits in resolv.conf.
+
 func (c *Configurer) CheckLimitsForResolvConf(logger klog.Logger) {
+	// 1. 打开 resolv.conf 文件
 	f, err := os.Open(c.ResolverConfig)
 	if err != nil {
 		c.recorder.Event(c.nodeRef, v1.EventTypeWarning, "CheckLimitsForResolvConf", err.Error())
@@ -184,6 +186,7 @@ func (c *Configurer) CheckLimitsForResolvConf(logger klog.Logger) {
 	}
 	defer f.Close()
 
+	// 2. 解析 resolv.conf 文件，获取搜索域
 	_, hostSearch, _, err := parseResolvConf(f)
 	if err != nil {
 		c.recorder.Event(c.nodeRef, v1.EventTypeWarning, "CheckLimitsForResolvConf", err.Error())
@@ -191,12 +194,15 @@ func (c *Configurer) CheckLimitsForResolvConf(logger klog.Logger) {
 		return
 	}
 
+	// 3. 检查搜索域数量是否超过限制
 	domainCountLimit, maxDNSSearchListChars := validation.MaxDNSSearchPaths, validation.MaxDNSSearchListChars
 
+	// 4.如果 clusterDomain 不为空，减去 3
 	if c.ClusterDomain != "" {
 		domainCountLimit -= 3
 	}
 
+	// 5. 检查搜索域数量是否超过限制
 	if len(hostSearch) > domainCountLimit {
 		log := fmt.Sprintf("Resolv.conf file '%s' contains search line consisting of more than %d domains!", c.ResolverConfig, domainCountLimit)
 		c.recorder.Event(c.nodeRef, v1.EventTypeWarning, "CheckLimitsForResolvConf", log)
@@ -204,6 +210,7 @@ func (c *Configurer) CheckLimitsForResolvConf(logger klog.Logger) {
 		return
 	}
 
+	// 6. 检查搜索域长度是否超过限制
 	for _, search := range hostSearch {
 		if len(search) > utilvalidation.DNS1123SubdomainMaxLength {
 			log := fmt.Sprintf("Resolv.conf file %q contains a search path which length is more than allowed %d chars!", c.ResolverConfig, utilvalidation.DNS1123SubdomainMaxLength)
@@ -213,6 +220,7 @@ func (c *Configurer) CheckLimitsForResolvConf(logger klog.Logger) {
 		}
 	}
 
+	// 7. 检查搜索域长度是否超过限制
 	if len(strings.Join(hostSearch, " ")) > maxDNSSearchListChars {
 		log := fmt.Sprintf("Resolv.conf file '%s' contains search line which length is more than allowed %d chars!", c.ResolverConfig, maxDNSSearchListChars)
 		c.recorder.Event(c.nodeRef, v1.EventTypeWarning, "CheckLimitsForResolvConf", log)
@@ -223,33 +231,42 @@ func (c *Configurer) CheckLimitsForResolvConf(logger klog.Logger) {
 
 // parseResolvConf reads a resolv.conf file from the given reader, and parses
 // it into nameservers, searches and options, possibly returning an error.
+// parseResolvConf 从给定的读取器读取 resolv.conf 文件，
+// 并将其解析为 nameservers、searches 和 options，可能会返回错误
 func parseResolvConf(reader io.Reader) (nameservers []string, searches []string, options []string, err error) {
+	//
 	file, err := utilio.ReadAtMost(reader, maxResolvConfLength)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
+	// 2. 初始化返回的切片
 	// Lines of the form "nameserver 1.2.3.4" accumulate.
-	nameservers = []string{}
+	nameservers = []string{} // nameservers 切片用于存储解析出的 nameserver
 
 	// Lines of the form "search example.com" overrule - last one wins.
-	searches = []string{}
+	searches = []string{} // searches 切片用于存储解析出的 searches
 
 	// Lines of the form "option ndots:5 attempts:2" overrule - last one wins.
 	// Each option is recorded as an element in the array.
-	options = []string{}
+	options = []string{} // options 切片用于存储解析出的 options
 
 	var allErrors []error
+	// 3. 读取文件内容并解析
 	lines := strings.Split(string(file), "\n")
 	for l := range lines {
+		// 3.1. 去除行首尾的空白字符
 		trimmed := strings.TrimSpace(lines[l])
+		// 3.2. 跳过注释行
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
+		// 3.3. 去除行首尾的空白字符
 		fields := strings.Fields(trimmed)
 		if len(fields) == 0 {
 			continue
 		}
+		// 3.4. 解析 nameserver 行
 		if fields[0] == "nameserver" {
 			if len(fields) >= 2 {
 				nameservers = append(nameservers, fields[1])
@@ -257,20 +274,22 @@ func parseResolvConf(reader io.Reader) (nameservers []string, searches []string,
 				allErrors = append(allErrors, fmt.Errorf("nameserver list is empty "))
 			}
 		}
+		// 3.5. 解析 search 行
 		if fields[0] == "search" {
 			// Normalise search fields so the same domain with and without trailing dot will only count once, to avoid hitting search validation limits.
 			searches = []string{}
-			for _, s := range fields[1:] {
+			for _, s := range fields[1:] { // 重置搜索域，因为最后一条 search 行会覆盖之前的
 				if s != "." {
 					searches = append(searches, strings.TrimSuffix(s, "."))
 				}
 			}
 		}
+		// 3.6. 解析 options 行
 		if fields[0] == "options" {
 			options = appendOptions(options, fields[1:]...)
 		}
 	}
-
+	// 4. 返回解析结果和可能存在的错误
 	return nameservers, searches, options, utilerrors.NewAggregate(allErrors)
 }
 

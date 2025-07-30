@@ -196,21 +196,25 @@ func (m *kubeGenericRuntimeManager) getPodRuntimeHandler(pod *v1.Pod) (podRuntim
 // * create the container
 // * start the container
 // * run the post start lifecycle hooks (if applicable)
+// 启动一个容器
 func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandboxID string, podSandboxConfig *runtimeapi.PodSandboxConfig, spec *startSpec, pod *v1.Pod, podStatus *kubecontainer.PodStatus, pullSecrets []v1.Secret, podIP string, podIPs []string, imageVolumes kubecontainer.ImageVolumes) (string, error) {
 	logger := klog.FromContext(ctx)
 	container := spec.container
 
 	// Step 1: pull the image.
+	// 获取Pod的runtime handler
 	podRuntimeHandler, err := m.getPodRuntimeHandler(pod)
 	if err != nil {
 		return "", err
 	}
 
+	// 生成容器引用
 	ref, err := kubecontainer.GenerateContainerRef(pod, container)
 	if err != nil {
 		logger.Error(err, "Couldn't make a ref to pod", "pod", klog.KObj(pod), "containerName", container.Name)
 	}
 
+	// 确保镜像存在
 	imageRef, msg, err := m.imagePuller.EnsureImageExists(ctx, ref, pod, container.Image, pullSecrets, podSandboxConfig, podRuntimeHandler, container.ImagePullPolicy)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
@@ -219,6 +223,7 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 	}
 
 	// Step 2: create the container.
+	// 创建容器
 	// For a new container, the RestartCount should be 0
 	restartCount := 0
 	containerStatus := podStatus.FindContainerStatusByName(container.Name)
@@ -250,6 +255,7 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 		return s.Message(), ErrCreateContainerConfig
 	}
 
+	// 生成容器配置
 	containerConfig, cleanupAction, err := m.generateContainerConfig(ctx, container, pod, restartCount, podIP, imageRef, podIPs, target, imageVolumes)
 	if cleanupAction != nil {
 		defer cleanupAction()
@@ -261,11 +267,13 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 	}
 
 	// When creating a container, mark the resources as actuated.
+	// 设置资源分配
 	if err := m.allocationManager.SetActuatedResources(pod, container); err != nil {
 		m.recordContainerEvent(ctx, pod, container, "", v1.EventTypeWarning, events.FailedToCreateContainer, "Error: %v", err)
 		return err.Error(), ErrCreateContainerConfig
 	}
 
+	// 执行前置生命周期钩子,预创建容器
 	err = m.internalLifecycle.PreCreateContainer(pod, container, containerConfig)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
@@ -273,12 +281,14 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 		return s.Message(), ErrPreCreateHook
 	}
 
+	// 创建容器
 	containerID, err := m.runtimeService.CreateContainer(ctx, podSandboxID, containerConfig, podSandboxConfig)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
 		m.recordContainerEvent(ctx, pod, container, containerID, v1.EventTypeWarning, events.FailedToCreateContainer, "Error: %v", s.Message())
 		return s.Message(), ErrCreateContainer
 	}
+	//  执行启动前钩子,预启动容器
 	err = m.internalLifecycle.PreStartContainer(pod, container, containerID)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
@@ -288,6 +298,7 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 	m.recordContainerEvent(ctx, pod, container, containerID, v1.EventTypeNormal, events.CreatedContainer, "Created container: %v", container.Name)
 
 	// Step 3: start the container.
+	// 启动容器
 	err = m.runtimeService.StartContainer(ctx, containerID)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
@@ -301,6 +312,7 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 	// TODO(random-liu): Remove this after cluster logging supports CRI container log path.
 	containerMeta := containerConfig.GetMetadata()
 	sandboxMeta := podSandboxConfig.GetMetadata()
+	// 生成容器日志的符号链接
 	legacySymlink := legacyLogSymlink(containerID, containerMeta.Name, sandboxMeta.Name,
 		sandboxMeta.Namespace)
 	containerLog := filepath.Join(podSandboxConfig.LogDirectory, containerConfig.LogPath)
@@ -316,6 +328,7 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 	}
 
 	// Step 4: execute the post start hook.
+	// 执行 post start 钩子
 	if container.Lifecycle != nil && container.Lifecycle.PostStart != nil {
 		kubeContainerID := kubecontainer.ContainerID{
 			Type: m.runtimeName,
@@ -339,22 +352,27 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 }
 
 // generateContainerConfig generates container config for kubelet runtime v1.
+// 生成容器配置
 func (m *kubeGenericRuntimeManager) generateContainerConfig(ctx context.Context, container *v1.Container, pod *v1.Pod, restartCount int, podIP, imageRef string, podIPs []string, nsTarget *kubecontainer.ContainerID, imageVolumes kubecontainer.ImageVolumes) (*runtimeapi.ContainerConfig, func(), error) {
+	// 生成运行容器选项
 	opts, cleanupAction, err := m.runtimeHelper.GenerateRunContainerOptions(ctx, pod, container, podIP, podIPs, imageVolumes)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// 获取容器的用户信息
 	uid, username, err := m.getImageUser(ctx, container.Image)
 	if err != nil {
 		return nil, cleanupAction, err
 	}
 
 	// Verify RunAsNonRoot. Non-root verification only supports numeric user.
+	// 验证 RunAsNonRoot
 	if err := verifyRunAsNonRoot(ctx, pod, container, uid, username); err != nil {
 		return nil, cleanupAction, err
 	}
 
+	// 展开容器命令和参数
 	command, args := kubecontainer.ExpandContainerCommandAndArgs(container, opts.Envs)
 	logDir := BuildContainerLogsDirectory(m.podLogsDirectory, pod.Namespace, pod.Name, pod.UID, container.Name)
 	err = m.osInterface.MkdirAll(logDir, 0755)
@@ -364,6 +382,7 @@ func (m *kubeGenericRuntimeManager) generateContainerConfig(ctx context.Context,
 	containerLogsPath := buildContainerLogsPath(container.Name, restartCount)
 	stopsignal := getContainerConfigStopSignal(container)
 	restartCountUint32 := uint32(restartCount)
+	// 生成容器配置
 	config := &runtimeapi.ContainerConfig{
 		Metadata: &runtimeapi.ContainerMetadata{
 			Name:    container.Name,
@@ -377,7 +396,7 @@ func (m *kubeGenericRuntimeManager) generateContainerConfig(ctx context.Context,
 		Annotations: newContainerAnnotations(ctx, container, pod, restartCount, opts),
 		Devices:     makeDevices(opts),
 		CDIDevices:  makeCDIDevices(opts),
-		Mounts:      m.makeMounts(opts, container),
+		Mounts:      m.makeMounts(opts, container), // 生成挂载配置
 		LogPath:     containerLogsPath,
 		Stdin:       container.Stdin,
 		StdinOnce:   container.StdinOnce,
@@ -388,11 +407,13 @@ func (m *kubeGenericRuntimeManager) generateContainerConfig(ctx context.Context,
 		config.StopSignal = *stopsignal
 	}
 	// set platform specific configurations.
+	// 应用平台特定配置
 	if err := m.applyPlatformSpecificContainerConfig(ctx, config, container, pod, uid, username, nsTarget); err != nil {
 		return nil, cleanupAction, err
 	}
 
 	// set environment variables
+	// 设置环境变量
 	envs := make([]*runtimeapi.KeyValue, len(opts.Envs))
 	for idx := range opts.Envs {
 		e := opts.Envs[idx]
@@ -470,9 +491,11 @@ func makeCDIDevices(opts *kubecontainer.RunContainerOptions) []*runtimeapi.CDIDe
 }
 
 // makeMounts generates container volume mounts for kubelet runtime v1.
+// 创建容器挂载点
 func (m *kubeGenericRuntimeManager) makeMounts(opts *kubecontainer.RunContainerOptions, container *v1.Container) []*runtimeapi.Mount {
 	volumeMounts := []*runtimeapi.Mount{}
 
+	// 遍历容器的挂载点
 	for idx := range opts.Mounts {
 		v := opts.Mounts[idx]
 		selinuxRelabel := v.SELinuxRelabel && selinux.GetEnabled()
@@ -493,6 +516,7 @@ func (m *kubeGenericRuntimeManager) makeMounts(opts *kubecontainer.RunContainerO
 	// The reason we create and mount the log file in here (not in kubelet) is because
 	// the file's location depends on the ID of the container, and we need to create and
 	// mount the file before actually starting the container.
+	// 创建容器日志文件
 	if opts.PodContainerDir != "" && len(container.TerminationMessagePath) != 0 {
 		// Because the PodContainerDir contains pod uid and container name which is unique enough,
 		// here we just add a random id to make the path unique for different instances
@@ -514,6 +538,7 @@ func (m *kubeGenericRuntimeManager) makeMounts(opts *kubecontainer.RunContainerO
 			}
 
 			// Volume Mounts fail on Windows if it is not of the form C:/
+			// 将路径转换为绝对路径
 			containerLogPath = volumeutil.MakeAbsolutePath(goruntime.GOOS, containerLogPath)
 			terminationMessagePath := volumeutil.MakeAbsolutePath(goruntime.GOOS, container.TerminationMessagePath)
 			selinuxRelabel := selinux.GetEnabled()

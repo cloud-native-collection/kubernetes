@@ -304,7 +304,9 @@ func (b *portworxVolumeMounter) SetUp(mounterArgs volume.MounterArgs) error {
 }
 
 // SetUpAt attaches the disk and bind mounts to the volume path.
+// 在指定目录设置Portworx卷
 func (b *portworxVolumeMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
+	// 检查挂载点状态:是否已经挂载
 	notMnt, err := b.mounter.IsLikelyNotMountPoint(dir)
 	klog.Infof("Portworx Volume set up. Dir: %s %v %v", dir, !notMnt, err)
 	if err != nil && !os.IsNotExist(err) {
@@ -315,22 +317,28 @@ func (b *portworxVolumeMounter) SetUpAt(dir string, mounterArgs volume.MounterAr
 		return nil
 	}
 
+	// attach选项
 	attachOptions := make(map[string]string)
 	attachOptions[attachContextKey] = dir
 	attachOptions[attachHostKey] = b.plugin.host.GetHostName()
+	// attach卷
 	if _, err := b.manager.AttachVolume(b, attachOptions); err != nil {
 		return err
 	}
 
 	klog.V(4).Infof("Portworx Volume %s attached", b.volumeID)
 
+	// 创建目录
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return err
 	}
 
+	// 挂载卷
 	if err := b.manager.MountVolume(b, dir); err != nil {
 		return err
 	}
+
+	// 设置权限
 	if !b.readOnly {
 		// Since portworxVolume is in process of being removed from in-tree, we avoid larger refactor to add progress tracking for ownership operation
 		ownershipChanger := volume.NewVolumeOwnership(b, dir, mounterArgs.FsGroup, mounterArgs.FSGroupChangePolicy, util.FSGroupCompleteHook(b.plugin, nil))

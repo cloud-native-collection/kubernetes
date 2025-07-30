@@ -1758,21 +1758,29 @@ func (kl *Kubelet) determinePodResizeStatus(allocatedPod *v1.Pod, podIsTerminal 
 
 // generateAPIPodStatus creates the final API pod status for a pod, given the
 // internal pod status. This method should only be called from within sync*Pod methods.
+// 生成 Pod 的 API 状态
+// 合并运行时状态和期望状态
+// 确定 Pod 的当前阶段（Phase）
+// 设置各种 Pod 条件（Conditions）
 func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.PodStatus, podIsTerminal bool) v1.PodStatus {
 	klog.V(3).InfoS("Generating pod status", "podIsTerminal", podIsTerminal, "pod", klog.KObj(pod))
 	// use the previous pod status, or the api status, as the basis for this pod
+	// 1.获取旧状态
 	oldPodStatus, found := kl.statusManager.GetPodStatus(pod.UID)
 	if !found {
 		oldPodStatus = pod.Status
 	}
+	// 2.转换状态
 	s := kl.convertStatusToAPIStatus(pod, podStatus, oldPodStatus)
 	// calculate the next phase and preserve reason
+	// 3.计算Pod阶段
 	allStatus := append(append([]v1.ContainerStatus{}, s.ContainerStatuses...), s.InitContainerStatuses...)
 	s.Phase = getPhase(pod, allStatus, podIsTerminal, kubecontainer.HasAnyActiveRegularContainerStarted(&pod.Spec, podStatus))
 	klog.V(4).InfoS("Got phase for pod", "pod", klog.KObj(pod), "oldPhase", oldPodStatus.Phase, "phase", s.Phase)
 
 	// Perform a three-way merge between the statuses from the status manager,
 	// runtime, and generated status to ensure terminal status is correctly set.
+	// 4.合并状态,处理terminal，确保终态正确
 	if s.Phase != v1.PodFailed && s.Phase != v1.PodSucceeded {
 		switch {
 		case oldPodStatus.Phase == v1.PodFailed || oldPodStatus.Phase == v1.PodSucceeded:
@@ -1784,6 +1792,7 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 		}
 	}
 
+	// 5.保留原因和消息
 	if s.Phase == oldPodStatus.Phase {
 		// preserve the reason and message which is associated with the phase
 		s.Reason = oldPodStatus.Reason
@@ -1797,6 +1806,7 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 	}
 
 	// check if an internal module has requested the pod is evicted and override the reason and message
+	// 6.检查是否需要驱逐Pod
 	for _, podSyncHandler := range kl.PodSyncHandlers {
 		if result := podSyncHandler.ShouldEvict(pod); result.Evict {
 			s.Phase = v1.PodFailed
@@ -1807,6 +1817,7 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 	}
 
 	// pods are not allowed to transition out of terminal phases
+	// 7.检查是否允许状态转换，处理terminal
 	if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
 		// API server shows terminal phase; transitions are not allowed
 		if s.Phase != pod.Status.Phase {
@@ -1817,20 +1828,25 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 	}
 
 	// ensure the probe managers have up to date status for containers
+	// 8.更新探针状态
 	kl.probeManager.UpdatePodStatus(pod, s)
 
 	// update the allocated resources status
+	// 9.更新分配资源状态
 	if utilfeature.DefaultFeatureGate.Enabled(features.ResourceHealthStatus) {
 		kl.containerManager.UpdateAllocatedResourcesStatus(pod, s)
 	}
 
 	// preserve all conditions not owned by the kubelet
+	// 10.保留非Kubelet拥有的条件
 	s.Conditions = make([]v1.PodCondition, 0, len(pod.Status.Conditions)+1)
 	for _, c := range pod.Status.Conditions {
+		// 10.1.添加 kubelet 管理的条件
 		if !kubetypes.PodConditionByKubelet(c.Type) {
 			s.Conditions = append(s.Conditions, c)
 		}
 	}
+	// 10.2.添加 InPlacePodVerticalScaling 条件
 	if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
 		resizeStatus := kl.determinePodResizeStatus(pod, podIsTerminal)
 		for _, c := range resizeStatus {
@@ -1868,11 +1884,14 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 		Status:             v1.ConditionTrue,
 	})
 	// set HostIP/HostIPs and initialize PodIP/PodIPs for host network pods
+	// 11.处理 Pod 的 IP，针对主机网络（HostNetwork）模式的 Po
 	if kl.kubeClient != nil {
+		// 11.1.获取主机 IP
 		hostIPs, err := kl.getHostIPsAnyWay()
 		if err != nil {
 			klog.V(4).InfoS("Cannot get host IPs", "err", err)
 		} else {
+			// 11.2.检查 IP 地址族是否匹配
 			if s.HostIP != "" {
 				if utilnet.IPFamilyOfString(s.HostIP) != utilnet.IPFamilyOf(hostIPs[0]) {
 					kl.recorder.Eventf(pod, v1.EventTypeWarning, "HostIPsIPFamilyMismatch",
@@ -1880,6 +1899,7 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 						utilnet.IPFamilyOfString(s.HostIP), s.HostIP, utilnet.IPFamilyOf(hostIPs[0]), hostIPs[0].String())
 				}
 			}
+			// 11.3.设置 HostIP 和 HostIPs
 			s.HostIP = hostIPs[0].String()
 			s.HostIPs = []v1.HostIP{{IP: s.HostIP}}
 			if len(hostIPs) == 2 {
@@ -1888,13 +1908,16 @@ func (kl *Kubelet) generateAPIPodStatus(pod *v1.Pod, podStatus *kubecontainer.Po
 
 			// HostNetwork Pods inherit the node IPs as PodIPs. They are immutable once set,
 			// other than that if the node becomes dual-stack, we add the secondary IP.
+			// 11.4.处理主机网络模式的 Pod IP
 			if kubecontainer.IsHostNetworkPod(pod) {
 				// Primary IP is not set
+				// 11.4.1.设置主 PodIP
 				if s.PodIP == "" {
 					s.PodIP = hostIPs[0].String()
 					s.PodIPs = []v1.PodIP{{IP: s.PodIP}}
 				}
 				// Secondary IP is not set #105320
+				// 11.4.2.设置副 PodIP
 				if len(hostIPs) == 2 && len(s.PodIPs) == 1 {
 					if utilnet.IPFamilyOfString(s.PodIPs[0].IP) != utilnet.IPFamilyOf(hostIPs[1]) {
 						s.PodIPs = append(s.PodIPs, v1.PodIP{IP: hostIPs[1].String()})

@@ -1234,23 +1234,32 @@ func podUIDAndRefForUpdate(update UpdatePodOptions) (types.UID, klog.ObjectRef) 
 // to trigger new UpdatePod calls. SyncKnownPods will only retry pods that are no longer known to the
 // caller. When a pod transitions working->terminating or terminating->terminated, the next update is
 // queued immediately and no kubelet action is required.
+// 管理Pod生命周期的状态转换，在一个goroutine中按顺序处理Pod的状态更新，直到达到最终状态
+// 等待启动：确保相同UID或全名的Pod不会同时运行
+// 同步：通过协调期望的Pod spec与运行时状态来设置Pod
+// 终止中：确保Pod中所有运行中的容器停止
+// 已终止：清理Pod删除前必须释放的资源
 func (p *podWorkers) podWorkerLoop(podUID types.UID, podUpdates <-chan struct{}) {
 	var lastSyncTime time.Time
 	for range podUpdates {
+		// 获取Pod的更新状态
 		ctx, update, canStart, canEverStart, ok := p.startPodSync(podUID)
 		// If we had no update waiting, it means someone initialized the channel without filling out pendingUpdate.
 		if !ok {
 			continue
 		}
 		// If the pod was terminated prior to the pod being allowed to start, we exit the loop.
+		// 如果Pod在允许启动之前就被终止，我们退出循环
 		if !canEverStart {
 			return
 		}
 		// If the pod is not yet ready to start, continue and wait for more updates.
+		// 如果Pod还没有准备好启动，继续等待更多更新
 		if !canStart {
 			continue
 		}
 
+		// 获取Pod的UID和引用
 		podUID, podRef := podUIDAndRefForUpdate(update.Options)
 
 		klog.V(4).InfoS("Processing pod event", "pod", podRef, "podUID", podUID, "updateType", update.WorkType)
@@ -1263,6 +1272,7 @@ func (p *podWorkers) podWorkerLoop(podUID types.UID, podUpdates <-chan struct{})
 			// pods ensure the most recent status makes it to the api server.
 			var status *kubecontainer.PodStatus
 			var err error
+			// 获取Pod的当前状态
 			switch {
 			case update.Options.RunningPod != nil:
 				// when we receive a running pod, we don't need status at all because we are
@@ -1287,6 +1297,7 @@ func (p *podWorkers) podWorkerLoop(podUID types.UID, podUpdates <-chan struct{})
 			}
 
 			// Take the appropriate action (illegal phases are prevented by UpdatePod)
+			// 处理Pod事件类型进行不同的处理
 			switch {
 			case update.WorkType == TerminatedPod:
 				err = p.podSyncer.SyncTerminatedPod(ctx, update.Options.Pod, status)
@@ -1314,17 +1325,21 @@ func (p *podWorkers) podWorkerLoop(podUID types.UID, podUpdates <-chan struct{})
 		}()
 
 		var phaseTransition bool
+		// 处理Pod同步后的状态转换和清理工作
 		switch {
 		case err == context.Canceled:
 			// when the context is cancelled we expect an update to already be queued
+			// 上下文取消处理：当同步操作被取消时记录日志，通常发生在Pod被删除或节点关闭时
 			klog.V(2).InfoS("Sync exited with context cancellation error", "pod", podRef, "podUID", podUID, "updateType", update.WorkType)
 
 		case err != nil:
 			// we will queue a retry
+			// 错误处理
 			klog.ErrorS(err, "Error syncing pod, skipping", "pod", podRef, "podUID", podUID)
 
 		case update.WorkType == TerminatedPod:
 			// we can shut down the worker
+			// 已终止Pod处理，调用completeTerminated完成Pod终止后的清理
 			p.completeTerminated(podUID)
 			if start := update.Options.StartTime; !start.IsZero() {
 				metrics.PodWorkerDuration.WithLabelValues("terminated").Observe(metrics.SinceInSeconds(start))
@@ -1334,6 +1349,7 @@ func (p *podWorkers) podWorkerLoop(podUID types.UID, podUpdates <-chan struct{})
 
 		case update.WorkType == TerminatingPod:
 			// pods that don't exist in config don't need to be terminated, other loops will clean them up
+			// 终止中Pod处理，对于正在终止的Pod，区分普通Pod和RuntimePod，设置phaseTransition标志表示状态转换
 			if update.Options.RunningPod != nil {
 				p.completeTerminatingRuntimePod(podUID)
 				if start := update.Options.StartTime; !start.IsZero() {
@@ -1348,6 +1364,7 @@ func (p *podWorkers) podWorkerLoop(podUID types.UID, podUpdates <-chan struct{})
 
 		case isTerminal:
 			// if syncPod indicated we are now terminal, set the appropriate pod status to move to terminating
+			// 终止处理：如果syncPod指示Pod现在是终止状态，设置适当的Pod状态以移动到终止状态
 			klog.V(4).InfoS("Pod is terminal", "pod", podRef, "podUID", podUID, "updateType", update.WorkType)
 			p.completeSync(podUID)
 			phaseTransition = true
