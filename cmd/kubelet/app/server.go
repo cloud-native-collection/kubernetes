@@ -651,7 +651,7 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	// 3. 获取文件锁
 	if s.LockFilePath != "" {
 		logger.Info("Acquiring file lock", "path", s.LockFilePath)
-		if err := flock.Acquire(s.LockFilePath); err != nil { // 获取文件锁失败，创建并锁定文件
+		if err := flock.Acquire(s.LockFilePath); err != nil {
 			return fmt.Errorf("unable to acquire file lock on %q: %w", s.LockFilePath, err)
 		}
 		// 4. 监控锁竞争
@@ -798,12 +798,9 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 
 	// Get cgroup driver setting from CRI
-	// 4. 获取 cgroup driver 设置
-	if utilfeature.DefaultFeatureGate.Enabled(features.KubeletCgroupDriverFromCRI) {
-		// 从 CRI 获取 cgroup driver 配置
-		if err := getCgroupDriverFromCRI(ctx, s, kubeDeps); err != nil {
-			return err
-		}
+	//  4. 获取 cgroup driver 设置
+	if err := getCgroupDriverFromCRI(ctx, s, kubeDeps); err != nil {
+		return err
 	}
 
 	// 收集所有需要监控的 cgroup 路径,包括：节点可分配资源、kubelet 自身、运行时和系统 cgroup
@@ -945,44 +942,44 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 
 		// 创建容器管理器
 		kubeDeps.ContainerManager, err = cm.NewContainerManager(
-			kubeDeps.Mounter,           // 挂载器
-			kubeDeps.CAdvisorInterface, // cadvisor
+			kubeDeps.Mounter,
+			kubeDeps.CAdvisorInterface,
 			cm.NodeConfig{
-				NodeName:              nodeName,                // 节点名称
-				RuntimeCgroupsName:    s.RuntimeCgroups,        // 运行时 cgroup
-				SystemCgroupsName:     s.SystemCgroups,         // 系统 cgroup
-				KubeletCgroupsName:    s.KubeletCgroups,        // kubelet cgroup
-				KubeletOOMScoreAdj:    s.OOMScoreAdj,           // kubelet oom score adj
-				CgroupsPerQOS:         s.CgroupsPerQOS,         // cgroups per qos
-				CgroupRoot:            s.CgroupRoot,            // cgroup 根目录
-				CgroupDriver:          s.CgroupDriver,          // cgroup driver
-				KubeletRootDir:        s.RootDirectory,         // kubelet 根目录
-				ProtectKernelDefaults: s.ProtectKernelDefaults, // 保护内核默认值
-				NodeAllocatableConfig: cm.NodeAllocatableConfig{ //  资源预留配置
-					KubeReservedCgroupName:   s.KubeReservedCgroup,                  //  k8s 组件预留 cgroup
-					SystemReservedCgroupName: s.SystemReservedCgroup,                // 系统预留 cgroup
-					EnforceNodeAllocatable:   sets.New(s.EnforceNodeAllocatable...), // 强制节点预留
-					KubeReserved:             kubeReserved,                          // k8s 组件预留资源
-					SystemReserved:           systemReserved,                        // 系统预留资源
-					ReservedSystemCPUs:       reservedSystemCPUs,                    // 保留的 CPU 核心数
-					HardEvictionThresholds:   hardEvictionThresholds,                // 硬驱逐阈值
+				NodeName:              nodeName,
+				RuntimeCgroupsName:    s.RuntimeCgroups,
+				SystemCgroupsName:     s.SystemCgroups,
+				KubeletCgroupsName:    s.KubeletCgroups,
+				KubeletOOMScoreAdj:    s.OOMScoreAdj,
+				CgroupsPerQOS:         s.CgroupsPerQOS,
+				CgroupRoot:            s.CgroupRoot,
+				CgroupDriver:          s.CgroupDriver,
+				KubeletRootDir:        s.RootDirectory,
+				ProtectKernelDefaults: s.ProtectKernelDefaults,
+				NodeAllocatableConfig: cm.NodeAllocatableConfig{
+					KubeReservedCgroupName:   s.KubeReservedCgroup,
+					SystemReservedCgroupName: s.SystemReservedCgroup,
+					EnforceNodeAllocatable:   sets.New(s.EnforceNodeAllocatable...),
+					KubeReserved:             kubeReserved,
+					SystemReserved:           systemReserved,
+					ReservedSystemCPUs:       reservedSystemCPUs,
+					HardEvictionThresholds:   hardEvictionThresholds,
 				},
-				QOSReserved:                  *experimentalQOSReserved,             // QoS 预留资源
-				CPUManagerPolicy:             s.CPUManagerPolicy,                   // CPU 管理器策略
-				CPUManagerPolicyOptions:      s.CPUManagerPolicyOptions,            // CPU 管理器策略选项
-				CPUManagerReconcilePeriod:    s.CPUManagerReconcilePeriod.Duration, // CPU 管理器重新同步周期
-				MemoryManagerPolicy:          s.MemoryManagerPolicy,                // 内存管理器策略
-				MemoryManagerReservedMemory:  s.ReservedMemory,                     // 内存管理器预留内存
-				PodPidsLimit:                 s.PodPidsLimit,                       // Pod PID 限制
-				EnforceCPULimits:             s.CPUCFSQuota,                        // CPU CFS 配额
-				CPUCFSQuotaPeriod:            s.CPUCFSQuotaPeriod.Duration,         // CPU CFS 配额周期
-				TopologyManagerPolicy:        s.TopologyManagerPolicy,              // 拓扑管理器策略
-				TopologyManagerScope:         s.TopologyManagerScope,               // 拓扑管理器范围
-				TopologyManagerPolicyOptions: topologyManagerPolicyOptions,         // 拓扑管理器策略选项
+				QOSReserved:                  *experimentalQOSReserved,
+				CPUManagerPolicy:             s.CPUManagerPolicy,
+				CPUManagerPolicyOptions:      s.CPUManagerPolicyOptions,
+				CPUManagerReconcilePeriod:    s.CPUManagerReconcilePeriod.Duration,
+				MemoryManagerPolicy:          s.MemoryManagerPolicy,
+				MemoryManagerReservedMemory:  s.ReservedMemory,
+				PodPidsLimit:                 s.PodPidsLimit,
+				EnforceCPULimits:             s.CPUCFSQuota,
+				CPUCFSQuotaPeriod:            s.CPUCFSQuotaPeriod.Duration,
+				TopologyManagerPolicy:        s.TopologyManagerPolicy,
+				TopologyManagerScope:         s.TopologyManagerScope,
+				TopologyManagerPolicyOptions: topologyManagerPolicyOptions,
 			},
-			s.FailSwapOn,        // 是否失败
-			kubeDeps.Recorder,   // 事件记录器
-			kubeDeps.KubeClient, // kube client
+			s.FailSwapOn,
+			kubeDeps.Recorder,
+			kubeDeps.KubeClient,
 		)
 
 		if err != nil {
@@ -1027,9 +1024,6 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 	}
 
 	// If systemd is used, notify it that we have started
-	// 通过 sd_notify 系统调用通知 systemd
-	// 将服务状态更新为 "active (running)"
-	// 触发依赖于此服务的其他服务启动
 	go daemon.SdNotify(false, "READY=1")
 
 	select {
@@ -1530,7 +1524,9 @@ func getCgroupDriverFromCRI(ctx context.Context, s *options.KubeletServer, kubeD
 				continue
 			}
 			// CRI implementation doesn't support RuntimeConfig, fallback
-			logger.Info("CRI implementation should be updated to support RuntimeConfig when KubeletCgroupDriverFromCRI feature gate has been enabled. Falling back to using cgroupDriver from kubelet config.")
+			legacyregistry.MustRegister(kubeletmetrics.CRILosingSupport)
+			kubeletmetrics.CRILosingSupport.WithLabelValues("1.36.0").Inc()
+			logger.Info("CRI implementation should be updated to support RuntimeConfig. Falling back to using cgroupDriver from kubelet config.")
 			return nil
 		}
 	}

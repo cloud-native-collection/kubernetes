@@ -1078,6 +1078,10 @@ func (m *kubeGenericRuntimeManager) computeInitContainerActions(ctx context.Cont
 	// isPreviouslyInitialized indicates if the current init container is
 	// previously initialized.
 	isPreviouslyInitialized := podHasInitialized
+	// Feature gate ContainerRestartRules makes it possible for individual init
+	// containers to restart even if pod-level restart policy is Never, which is
+	// checked at container-level. This `restartOnFailure` is overridden if feature
+	// gate ContainerRestartRules is enabled.
 	restartOnFailure := shouldRestartOnFailure(pod)
 
 	// Note that we iterate through the init containers in reverse order to find
@@ -1203,6 +1207,10 @@ func (m *kubeGenericRuntimeManager) computeInitContainerActions(ctx context.Cont
 				changes.InitContainersToStart = append(changes.InitContainersToStart, i)
 			} else { // init container
 				if isInitContainerFailed(status) {
+					restartOnFailure := restartOnFailure
+					if utilfeature.DefaultFeatureGate.Enabled(features.ContainerRestartRules) {
+						restartOnFailure = kubecontainer.ShouldContainerBeRestarted(container, pod, podStatus)
+					}
 					if !restartOnFailure {
 						changes.KillPod = true
 						changes.InitContainersToStart = nil
@@ -1237,6 +1245,15 @@ func (m *kubeGenericRuntimeManager) computeInitContainerActions(ctx context.Cont
 					logger.V(4).Info("This should not happen, init container is in unknown state but not failed", "pod", klog.KObj(pod), "containerStatus", status)
 				}
 
+				restartOnFailure := restartOnFailure
+				if utilfeature.DefaultFeatureGate.Enabled(features.ContainerRestartRules) {
+					// Only container-level restart policy is used. The container-level restart
+					// rules are not evaluated because the container might not have exited, so
+					// there is no exit code on which the rules can be used.
+					if container.RestartPolicy != nil {
+						restartOnFailure = *container.RestartPolicy != v1.ContainerRestartPolicyNever
+					}
+				}
 				if !restartOnFailure {
 					changes.KillPod = true
 					changes.InitContainersToStart = nil

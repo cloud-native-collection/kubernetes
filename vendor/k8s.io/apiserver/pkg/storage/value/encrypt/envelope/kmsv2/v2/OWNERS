@@ -1,9 +1,9 @@
 # See the OWNERS docs at https://go.k8s.io/owners
 
-# Disable inheritance as this is an api owners file
 options:
+  # make root approval non-recursive
   no_parent_owners: true
 approvers:
-  - api-approvers
+  - dep-approvers
 reviewers:
-  - sig-auth-api-reviewers
+  - dep-reviewers

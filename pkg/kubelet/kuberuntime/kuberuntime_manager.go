@@ -206,6 +206,7 @@ func NewKubeGenericRuntimeManager(
 	podLogsDirectory string,
 	machineInfo *cadvisorapi.MachineInfo,
 	podStateProvider podStateProvider,
+	maxPods int32,
 	osInterface kubecontainer.OSInterface,
 	runtimeHelper kubecontainer.RuntimeHelper,
 	insecureContainerLifecycleHTTPClient types.HTTPDoer,
@@ -315,7 +316,15 @@ func NewKubeGenericRuntimeManager(
 			return nil, nil, fmt.Errorf("failed to setup the FSPullRecordsAccessor: %w", err)
 		}
 
-		imagePullManager, err = imagepullmanager.NewImagePullManager(ctx, fsRecordAccessor, imagePullCredentialsVerificationPolicy, kubeRuntimeManager, ptr.Deref(maxParallelImagePulls, 0))
+		var ( // variables used to determine cache/lock set sizes
+			maxParallelPulls     = ptr.Deref(maxParallelImagePulls, 0)
+			intentCacheSize      = max(2*maxPods, 2*maxParallelPulls)
+			pullRecordsCacheSize = 5 * maxPods
+		)
+
+		memCacheRecordsAccessor := imagepullmanager.NewCachedPullRecordsAccessor(fsRecordAccessor, intentCacheSize, pullRecordsCacheSize, maxParallelPulls)
+
+		imagePullManager, err = imagepullmanager.NewImagePullManager(ctx, memCacheRecordsAccessor, imagePullCredentialsVerificationPolicy, kubeRuntimeManager, maxParallelPulls)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create image pull manager: %w", err)
 		}
@@ -1018,8 +1027,19 @@ func (m *kubeGenericRuntimeManager) computePodActions(ctx context.Context, pod *
 		// Get the containers to start, excluding the ones that succeeded if RestartPolicy is OnFailure.
 		var containersToStart []int
 		for idx, c := range pod.Spec.Containers {
-			if pod.Spec.RestartPolicy == v1.RestartPolicyOnFailure && containerSucceeded(&c, podStatus) {
+			runOnce := pod.Spec.RestartPolicy == v1.RestartPolicyOnFailure
+			if utilfeature.DefaultFeatureGate.Enabled(features.ContainerRestartRules) {
+				if c.RestartPolicy != nil {
+					runOnce = *c.RestartPolicy == v1.ContainerRestartPolicyOnFailure
+				}
+			}
+			if runOnce && containerSucceeded(&c, podStatus) {
 				continue
+			}
+			if utilfeature.DefaultFeatureGate.Enabled(features.ContainerRestartRules) {
+				if c.RestartPolicy != nil && *c.RestartPolicy == v1.ContainerRestartPolicyOnFailure && containerSucceeded(&c, podStatus) {
+					continue
+				}
 			}
 			containersToStart = append(containersToStart, idx)
 		}
@@ -1066,6 +1086,8 @@ func (m *kubeGenericRuntimeManager) computePodActions(ctx context.Context, pod *
 	}
 
 	// Check initialization progress.
+	// TODO: Remove this code path as logically it is the subset of the next
+	// code path.
 	hasInitialized := m.computeInitContainerActions(ctx, pod, podStatus, &changes)
 	if changes.KillPod || !hasInitialized {
 		// Initialization failed or still in progress. Skip inspecting non-init
@@ -1114,6 +1136,13 @@ func (m *kubeGenericRuntimeManager) computePodActions(ctx context.Context, pod *
 		var message string
 		var reason containerKillReason
 		restart := shouldRestartOnFailure(pod)
+		if utilfeature.DefaultFeatureGate.Enabled(features.ContainerRestartRules) {
+			// For probe failures, use container-level restart policy only. Container-level restart
+			// rules are not evaluated because the container is still running.
+			if container.RestartPolicy != nil {
+				restart = *container.RestartPolicy != v1.ContainerRestartPolicyNever
+			}
+		}
 		if _, _, changed := containerChanged(&container, containerStatus); changed {
 			message = fmt.Sprintf("Container %s definition changed", container.Name)
 			// Restart regardless of the restart policy because the container
@@ -1258,6 +1287,25 @@ func (m *kubeGenericRuntimeManager) SyncPod(ctx context.Context, pod *v1.Pod, po
 
 		logger.V(4).Info("Creating PodSandbox for pod", "pod", klog.KObj(pod))
 		metrics.StartedPodsTotal.Inc()
+		if utilfeature.DefaultFeatureGate.Enabled(features.UserNamespacesSupport) && pod.Spec.HostUsers != nil && !*pod.Spec.HostUsers {
+			metrics.StartedUserNamespacedPodsTotal.Inc()
+			// Failures in user namespace creation could happen at any point in the pod lifecycle,
+			// but usually will be caught in container creation.
+			// To avoid specifically handling each error case, loop through the result after the sync finishes
+			defer func() {
+				// catch unhandled errors
+				for _, res := range result.SyncResults {
+					if res.Error != nil {
+						metrics.StartedUserNamespacedPodsErrorsTotal.Inc()
+						return
+					}
+				}
+				// catch handled error
+				if result.SyncError != nil {
+					metrics.StartedUserNamespacedPodsErrorsTotal.Inc()
+				}
+			}()
+		}
 		createSandboxResult := kubecontainer.NewSyncResult(kubecontainer.CreatePodSandbox, format.Pod(pod))
 		result.AddSyncResult(createSandboxResult)
 

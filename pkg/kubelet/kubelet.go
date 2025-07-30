@@ -269,11 +269,13 @@ var (
 		lifecycle.OutOfMemory,
 		lifecycle.OutOfEphemeralStorage,
 		lifecycle.OutOfPods,
+		lifecycle.PodLevelResourcesNotAdmittedReason,
 		tainttoleration.ErrReasonNotMatch,
 		eviction.Reason,
 		sysctl.ForbiddenReason,
 		topologymanager.ErrorTopologyAffinity,
 		nodeshutdown.NodeShutdownNotAdmittedReason,
+		volumemanager.VolumeAttachmentLimitExceededReason,
 	)
 
 	// This is exposed for unit tests.
@@ -858,6 +860,7 @@ func NewMainKubelet(ctx context.Context,
 		podLogsDirectory,
 		machineInfo,
 		klet.podWorkers,
+		kubeCfg.MaxPods,
 		kubeDeps.OSInterface,
 		klet,
 		insecureContainerLifecycleHTTPClient,
@@ -903,7 +906,6 @@ func NewMainKubelet(ctx context.Context,
 	klet.runtimeCache = runtimeCache
 
 	// common provider to get host file system usage associated with a pod managed by kubelet
-	// 初始化 hostStatsProvider
 	hostStatsProvider := stats.NewHostStatsProvider(kubecontainer.RealOS{}, func(podUID types.UID) string {
 		return getEtcHostsPath(klet.getPodDir(podUID))
 	}, podLogsDirectory)
@@ -934,7 +936,6 @@ func NewMainKubelet(ctx context.Context,
 
 	eventChannel := make(chan *pleg.PodLifecycleEvent, plegChannelCapacity)
 
-	// 初始化 pleg
 	if utilfeature.DefaultFeatureGate.Enabled(features.EventedPLEG) {
 		// adjust Generic PLEG relisting period and threshold to higher value when Evented PLEG is turned on
 		genericRelistDuration := &pleg.RelistDuration{
@@ -1067,6 +1068,7 @@ func NewMainKubelet(ctx context.Context,
 		klog.InfoS("Not starting PodCertificateRequest manager because we are in static kubelet mode or the PodCertificateProjection feature gate is disabled")
 	}
 
+	// NewInitializedVolumePluginMgr initializes some storageErrors on the Kubelet runtimeState (in csi_plugin.go init)
 	// which affects node ready status. This function must be called before Kubelet is initialized so that the Node
 	// ReadyState is accurate with the storage state.
 	// 初始化 volumePluginMgr
@@ -1153,6 +1155,8 @@ func NewMainKubelet(ctx context.Context,
 		handlers = append(handlers, lifecycle.NewAppArmorAdmitHandler(klet.appArmorValidator))
 	}
 
+	handlers = append(handlers, lifecycle.NewPodFeaturesAdmitHandler())
+
 	leaseDuration := time.Duration(kubeCfg.NodeLeaseDurationSeconds) * time.Second
 	renewInterval := time.Duration(float64(leaseDuration) * nodeLeaseRenewIntervalFraction)
 	// nodeLeaseController 是 node lease 的控制器
@@ -1215,16 +1219,12 @@ type Kubelet struct {
 	// hostname 是 kubelet 检测到的主机名或通过 flag/config 给出
 	hostname string
 
-	// nodeName is the node name the kubelet is registered as
 	// nodeName 是 kubelet 注册的节点名称
 	nodeName types.NodeName
-	// runtimeCache is a cache of container runtime state
 	// runtimeCache 是容器运行时状态的缓存
 	runtimeCache kubecontainer.RuntimeCache
-	// kubeClient is the client to use for Kubernetes API calls
 	// kubeClient 是用于 Kubernetes API 调用的客户端
 	kubeClient clientset.Interface
-	// heartbeatClient is the client to use for Kubernetes API calls to heartbeat the node
 	// heartbeatClient 是用于 Kubernetes API 调用的心跳节点的客户端
 	heartbeatClient clientset.Interface
 	// mirrorPodClient is used to create and delete mirror pods in the API for static
@@ -1232,7 +1232,6 @@ type Kubelet struct {
 	// mirrorPodClient 用于创建和删除 API 中的镜像 Pod
 	mirrorPodClient kubepod.MirrorClient
 
-	// rootDirectory is the root directory for kubelet's runtime
 	// rootDirectory 是 kubelet 运行时的根目录
 	rootDirectory string
 	// podLogsDirectory is the root directory for kubelet's pod logs
@@ -1599,6 +1598,7 @@ type Kubelet struct {
 
 	// eventedPleg supplements the pleg to deliver edge-driven container changes with low-latency.
 	// eventedPleg 补充 pleg，以低延迟交付边缘驱动的容器变化。
+	eventedPleg pleg.PodLifecycleEventGenerator
 
 	// Store kubecontainer.PodStatus for all pods.
 	// Store 所有 pod 的 kubecontainer.PodStatus。
@@ -1688,6 +1688,7 @@ type Kubelet struct {
 	lastNodeUnschedulableLock sync.Mutex
 	// maintains Node.Spec.Unschedulable value from previous run of tryUpdateNodeStatus()
 	// 维护 tryUpdateNodeStatus() 上一次运行时 Node.Spec.Unschedulable 的值
+	lastNodeUnschedulable bool
 
 	// the list of handlers to call during pod sync loop.
 	// pod 同步循环中调用的 handlers
@@ -2389,7 +2390,16 @@ func (kl *Kubelet) SyncPod(ctx context.Context, updateType kubetypes.SyncPodType
 		// expected to run only once and if the kubelet is restarted then
 		// they are not expected to run again.
 		// We don't create and apply updates to cgroup if its a run once pod and was killed above
-		if !(podKilled && pod.Spec.RestartPolicy == v1.RestartPolicyNever) {
+		runOnce := pod.Spec.RestartPolicy == v1.RestartPolicyNever
+		// With ContainerRestartRules, if any container is restartable, the pod should be restarted.
+		if utilfeature.DefaultFeatureGate.Enabled(features.ContainerRestartRules) {
+			for _, c := range pod.Spec.Containers {
+				if podutil.IsContainerRestartable(pod.Spec, c) {
+					runOnce = false
+				}
+			}
+		}
+		if !podKilled || !runOnce {
 			if !pcm.Exists(pod) {
 				if err := kl.containerManager.UpdateQOSCgroups(); err != nil {
 					klog.V(2).InfoS("Failed to update QoS cgroups while syncing pod", "pod", klog.KObj(pod), "err", err)
@@ -2417,6 +2427,12 @@ func (kl *Kubelet) SyncPod(ctx context.Context, updateType kubetypes.SyncPodType
 	// Wait for volumes to attach/mount
 	// 11. 等待卷挂载
 	if err := kl.volumeManager.WaitForAttachAndMount(ctx, pod); err != nil {
+		var volumeAttachLimitErr *volumemanager.VolumeAttachLimitExceededError
+		if errors.As(err, &volumeAttachLimitErr) {
+			kl.rejectPod(pod, volumemanager.VolumeAttachmentLimitExceededReason, volumeAttachLimitErr.Error())
+			recordAdmissionRejection(volumemanager.VolumeAttachmentLimitExceededReason)
+			return true, nil
+		}
 		if !wait.Interrupted(err) {
 			kl.recorder.Eventf(pod, v1.EventTypeWarning, events.FailedMountVolume, "Unable to attach or mount volumes: %v", err)
 			klog.ErrorS(err, "Unable to attach or mount volumes for pod; skipping pod", "pod", klog.KObj(pod))

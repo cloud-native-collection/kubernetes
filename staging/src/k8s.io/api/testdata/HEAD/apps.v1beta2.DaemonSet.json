@@ -562,6 +562,12 @@
                     "name": "nameValue",
                     "key": "keyValue",
                     "optional": true
+                  },
+                  "fileKeyRef": {
+                    "volumeName": "volumeNameValue",
+                    "path": "pathValue",
+                    "key": "keyValue",
+                    "optional": true
                   }
                 }
               }
@@ -587,6 +593,17 @@
               }
             ],
             "restartPolicy": "restartPolicyValue",
+            "restartPolicyRules": [
+              {
+                "action": "actionValue",
+                "exitCodes": {
+                  "operator": "operatorValue",
+                  "values": [
+                    2
+                  ]
+                }
+              }
+            ],
             "volumeMounts": [
               {
                 "name": "nameValue",
@@ -859,6 +876,12 @@
                     "name": "nameValue",
                     "key": "keyValue",
                     "optional": true
+                  },
+                  "fileKeyRef": {
+                    "volumeName": "volumeNameValue",
+                    "path": "pathValue",
+                    "key": "keyValue",
+                    "optional": true
                   }
                 }
               }
@@ -884,6 +907,17 @@
               }
             ],
             "restartPolicy": "restartPolicyValue",
+            "restartPolicyRules": [
+              {
+                "action": "actionValue",
+                "exitCodes": {
+                  "operator": "operatorValue",
+                  "values": [
+                    2
+                  ]
+                }
+              }
+            ],
             "volumeMounts": [
               {
                 "name": "nameValue",
@@ -1156,6 +1190,12 @@
                     "name": "nameValue",
                     "key": "keyValue",
                     "optional": true
+                  },
+                  "fileKeyRef": {
+                    "volumeName": "volumeNameValue",
+                    "path": "pathValue",
+                    "key": "keyValue",
+                    "optional": true
                   }
                 }
               }
@@ -1181,6 +1221,17 @@
               }
             ],
             "restartPolicy": "restartPolicyValue",
+            "restartPolicyRules": [
+              {
+                "action": "actionValue",
+                "exitCodes": {
+                  "operator": "operatorValue",
+                  "values": [
+                    2
+                  ]
+                }
+              }
+            ],
             "volumeMounts": [
               {
                 "name": "nameValue",
@@ -1791,7 +1842,8 @@
               "request": "requestValue"
             }
           ]
-        }
+        },
+        "hostnameOverride": "hostnameOverrideValue"
       }
     },
     "updateStrategy": {

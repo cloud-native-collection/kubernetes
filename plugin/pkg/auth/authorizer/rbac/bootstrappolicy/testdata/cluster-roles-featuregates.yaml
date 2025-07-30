@@ -934,11 +934,7 @@ items:
     resources:
     - pods/finalizers
     verbs:
-    - get
-    - list
-    - patch
     - update
-    - watch
   - apiGroups:
     - resource.k8s.io
     resources:
@@ -947,6 +943,13 @@ items:
     - get
     - list
     - watch
+  - apiGroups:
+    - resource.k8s.io
+    resources:
+    - resourceclaims
+    verbs:
+    - create
+    - delete
   - apiGroups:
     - resource.k8s.io
     resources:

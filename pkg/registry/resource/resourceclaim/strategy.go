@@ -30,7 +30,7 @@ import (
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/client-go/kubernetes/typed/core/v1"
+	v1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/dynamic-resource-allocation/structured"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
@@ -72,6 +72,9 @@ func (*resourceclaimStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpa
 			fieldpath.MakePathOrDie("status"),
 		),
 		"resource.k8s.io/v1beta2": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("status"),
+		),
+		"resource.k8s.io/v1": fieldpath.NewSet(
 			fieldpath.MakePathOrDie("status"),
 		),
 	}
@@ -151,6 +154,9 @@ func (*resourceclaimStatusStrategy) GetResetFields() map[fieldpath.APIVersion]*f
 		"resource.k8s.io/v1beta2": fieldpath.NewSet(
 			fieldpath.MakePathOrDie("spec"),
 		),
+		"resource.k8s.io/v1": fieldpath.NewSet(
+			fieldpath.MakePathOrDie("spec"),
+		),
 	}
 
 	return fields
@@ -214,6 +220,7 @@ func dropDisabledFields(newClaim, oldClaim *resource.ResourceClaim) {
 	dropDisabledDRAPrioritizedListFields(newClaim, oldClaim)
 	dropDisabledDRAAdminAccessFields(newClaim, oldClaim)
 	dropDisabledDRAResourceClaimDeviceStatusFields(newClaim, oldClaim)
+	dropDisabledDRADeviceBindingConditionsFields(newClaim, oldClaim)
 }
 
 func dropDisabledDRAPrioritizedListFields(newClaim, oldClaim *resource.ResourceClaim) {
@@ -345,3 +352,39 @@ func dropDeallocatedStatusDevices(newClaim, oldClaim *resource.ResourceClaim) {
 }
 
 // TODO: add tests after partitionable devices is merged (code conflict!)
+
+// dropDisabledDRADeviceBindingConditionsFields removes fields which are covered by a feature gate.
+func dropDisabledDRADeviceBindingConditionsFields(newClaim, oldClaim *resource.ResourceClaim) {
+	if utilfeature.DefaultFeatureGate.Enabled(features.DRADeviceBindingConditions) && utilfeature.DefaultFeatureGate.Enabled(features.DRAResourceClaimDeviceStatus) ||
+		draBindingConditionsFeatureInUse(oldClaim) {
+		return
+	}
+
+	if newClaim.Status.Allocation == nil {
+		return
+	}
+	newClaim.Status.Allocation.AllocationTimestamp = nil
+
+	for i := range newClaim.Status.Allocation.Devices.Results {
+		newClaim.Status.Allocation.Devices.Results[i].BindingConditions = nil
+		newClaim.Status.Allocation.Devices.Results[i].BindingFailureConditions = nil
+	}
+}
+
+func draBindingConditionsFeatureInUse(claim *resource.ResourceClaim) bool {
+	if claim == nil || claim.Status.Allocation == nil {
+		return false
+	}
+
+	if claim.Status.Allocation.AllocationTimestamp != nil {
+		return true
+	}
+
+	for _, result := range claim.Status.Allocation.Devices.Results {
+		if len(result.BindingConditions) != 0 || len(result.BindingFailureConditions) != 0 {
+			return true
+		}
+	}
+
+	return false
+}

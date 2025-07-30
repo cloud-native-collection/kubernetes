@@ -504,6 +504,12 @@
                 "name": "nameValue",
                 "key": "keyValue",
                 "optional": true
+              },
+              "fileKeyRef": {
+                "volumeName": "volumeNameValue",
+                "path": "pathValue",
+                "key": "keyValue",
+                "optional": true
               }
             }
           }
@@ -529,6 +535,17 @@
           }
         ],
         "restartPolicy": "restartPolicyValue",
+        "restartPolicyRules": [
+          {
+            "action": "actionValue",
+            "exitCodes": {
+              "operator": "operatorValue",
+              "values": [
+                2
+              ]
+            }
+          }
+        ],
         "volumeMounts": [
           {
             "name": "nameValue",
@@ -801,6 +818,12 @@
                 "name": "nameValue",
                 "key": "keyValue",
                 "optional": true
+              },
+              "fileKeyRef": {
+                "volumeName": "volumeNameValue",
+                "path": "pathValue",
+                "key": "keyValue",
+                "optional": true
               }
             }
           }
@@ -826,6 +849,17 @@
           }
         ],
         "restartPolicy": "restartPolicyValue",
+        "restartPolicyRules": [
+          {
+            "action": "actionValue",
+            "exitCodes": {
+              "operator": "operatorValue",
+              "values": [
+                2
+              ]
+            }
+          }
+        ],
         "volumeMounts": [
           {
             "name": "nameValue",
@@ -1098,6 +1132,12 @@
                 "name": "nameValue",
                 "key": "keyValue",
                 "optional": true
+              },
+              "fileKeyRef": {
+                "volumeName": "volumeNameValue",
+                "path": "pathValue",
+                "key": "keyValue",
+                "optional": true
               }
             }
           }
@@ -1123,6 +1163,17 @@
           }
         ],
         "restartPolicy": "restartPolicyValue",
+        "restartPolicyRules": [
+          {
+            "action": "actionValue",
+            "exitCodes": {
+              "operator": "operatorValue",
+              "values": [
+                2
+              ]
+            }
+          }
+        ],
         "volumeMounts": [
           {
             "name": "nameValue",
@@ -1733,7 +1784,8 @@
           "request": "requestValue"
         }
       ]
-    }
+    },
+    "hostnameOverride": "hostnameOverrideValue"
   },
   "status": {
     "observedGeneration": 17,
@@ -2051,6 +2103,16 @@
         "name": "nameValue",
         "resourceClaimName": "resourceClaimNameValue"
       }
-    ]
+    ],
+    "extendedResourceClaimStatus": {
+      "requestMappings": [
+        {
+          "containerName": "containerNameValue",
+          "resourceName": "resourceNameValue",
+          "requestName": "requestNameValue"
+        }
+      ],
+      "resourceClaimName": "resourceClaimNameValue"
+    }
   }
 }
