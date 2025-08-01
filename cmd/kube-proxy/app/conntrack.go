@@ -32,6 +32,7 @@ import (
 // sysctl fields can be found here:
 //
 // https://www.kernel.org/doc/Documentation/networking/nf_conntrack-sysctl.txt
+// kube-proxy组件管理系统连接跟踪（connection tracking）功能
 type Conntracker interface {
 	// SetMax adjusts nf_conntrack_max.
 	SetMax(ctx context.Context, max int) error
@@ -52,6 +53,7 @@ type realConntracker struct {
 
 var errReadOnlySysFS = errors.New("readOnlySysFS")
 
+// 设置连接跟踪表的最大大小
 func (rct realConntracker) SetMax(ctx context.Context, max int) error {
 	logger := klog.FromContext(ctx)
 	if err := rct.setIntSysCtl(ctx, "nf_conntrack_max", max); err != nil {

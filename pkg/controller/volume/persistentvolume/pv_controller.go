@@ -140,7 +140,14 @@ type CSIMigratedPluginManager interface {
 // PersistentVolumeClaims and PersistentVolumes. It starts two
 // cache.Controllers that watch PersistentVolume and PersistentVolumeClaim
 // changes.
+// 管理持久卷(PV)和持久卷声明(PVC)生命周期的核心控制器
+// 核心功能
+// 	监听PV和PVC的变化
+// 	处理PV和PVC的绑定/解绑
+// 	管理存储卷的动态供给
+// 	处理存储卷的回收策略
 type PersistentVolumeController struct {
+	// Lister和Informer
 	volumeLister       corelisters.PersistentVolumeLister
 	volumeListerSynced cache.InformerSynced
 	claimLister        corelisters.PersistentVolumeClaimLister
@@ -153,11 +160,18 @@ type PersistentVolumeController struct {
 	NodeLister         corelisters.NodeLister
 	NodeListerSynced   cache.InformerSynced
 
+	//核心组件
+	// Kubernetes客户端
 	kubeClient                clientset.Interface
+	// 事件广播器
 	eventBroadcaster          record.EventBroadcaster
+	// 事件记录器
 	eventRecorder             record.EventRecorder
+	// 卷插件管理器
 	volumePluginMgr           vol.VolumePluginMgr
+	// 是否启用动态供给
 	enableDynamicProvisioning bool
+	// 重新同步周期
 	resyncPeriod              time.Duration
 
 	// Cache of the last known version of volumes and claims. This cache is
@@ -179,6 +193,7 @@ type PersistentVolumeController struct {
 	// yet) and it would try to fix these objects to be bound together.
 	// Any write to API server would fail with version conflict - these objects
 	// have been already written.
+	// 本地缓存
 	volumes persistentVolumeOrderedIndex
 	claims  cache.Store
 
@@ -189,14 +204,19 @@ type PersistentVolumeController struct {
 	// version errors in API server and other checks in this controller),
 	// however overall speed of multi-worker controller would be lower than if
 	// it runs single thread only.
+	// 工作队列
+	// 处理PVC绑定
 	claimQueue  *workqueue.Typed[string]
+	// 处理PV绑定
 	volumeQueue *workqueue.Typed[string]
 
 	// Map of scheduled/running operations.
+	// 跟踪正在运行的操作,记录操作时间戳，用于监控
 	runningOperations goroutinemap.GoRoutineMap
 
 	// For testing only: hook to call before an asynchronous operation starts.
 	// Not used when set to nil.
+	// 用于测试的钩子，调用异步操作之前
 	preOperationHook func(operationName string)
 
 	createProvisionedPVRetryCount int
@@ -224,7 +244,9 @@ type PersistentVolumeController struct {
 	//     abort:      N.A.
 	operationTimestamps metrics.OperationStartTimeCache
 
+	// 在树内（in-tree）插件名称和对应的CSI驱动名称之间进行转换
 	translator               CSINameTranslator
+	// CSI迁移插件管理器:管理CSI迁移插件的状态
 	csiMigratedPluginManager CSIMigratedPluginManager
 }
 

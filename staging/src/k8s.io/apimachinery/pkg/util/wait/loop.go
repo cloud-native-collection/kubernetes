@@ -34,19 +34,25 @@ import (
 // context error if the context was terminated.
 //
 // This is the common loop construct for all polling in the wait package.
+// 轮询模式的基础实现
 func loopConditionUntilContext(ctx context.Context, t Timer, immediate, sliding bool, condition ConditionWithContextFunc) error {
+	// 停止定时器
 	defer t.Stop()
 
+	// 定时器通道
 	var timeCh <-chan time.Time
+	// 上下文通道
 	doneCh := ctx.Done()
 
 	if !sliding {
+		// 如果不是滑动模式，设置时间通道
 		timeCh = t.C()
 	}
 
 	// if immediate is true the condition is
 	// guaranteed to be executed at least once,
 	// if we haven't requested immediate execution, delay once
+	// 立即执行
 	if immediate {
 		if ok, err := func() (bool, error) {
 			defer runtime.HandleCrashWithContext(ctx)
@@ -56,13 +62,16 @@ func loopConditionUntilContext(ctx context.Context, t Timer, immediate, sliding 
 		}
 	}
 
+	// 如果是滑动模式，设置时间通道
 	if sliding {
 		timeCh = t.C()
 	}
 
+	// 循环
 	for {
 
 		// Wait for either the context to be cancelled or the next invocation be called
+		// 等待上下文取消或下一次调用
 		select {
 		case <-doneCh:
 			return ctx.Err()
@@ -75,13 +84,16 @@ func loopConditionUntilContext(ctx context.Context, t Timer, immediate, sliding 
 		// explicitly check for context cancellation on every loop and exit if true to
 		// guarantee that we don't invoke condition more than once after context has
 		// been cancelled.
+		// 检查上下文取消
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
+		// 如果不是滑动模式，更新定时器
 		if !sliding {
 			t.Next()
 		}
+		// 执行条件
 		if ok, err := func() (bool, error) {
 			defer runtime.HandleCrashWithContext(ctx)
 			return condition(ctx)

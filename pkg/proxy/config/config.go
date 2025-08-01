@@ -281,6 +281,7 @@ type NodeConfig struct {
 
 // NewNodeConfig creates a new NodeConfig.
 func NewNodeConfig(ctx context.Context, nodeInformer v1informers.NodeInformer, resyncPeriod time.Duration) *NodeConfig {
+	// 创建 NodeConfig 实例
 	result := &NodeConfig{
 		logger: klog.FromContext(ctx),
 	}
@@ -318,12 +319,15 @@ func (c *NodeConfig) Run(stopCh <-chan struct{}) {
 	}
 }
 
+// handleChangeNode 处理节点变更事件
 func (c *NodeConfig) handleChangeNode(obj interface{}) {
+	// 类型断言，确保对象是 *v1.Node 类型
 	node, ok := obj.(*v1.Node)
 	if !ok {
 		utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
 		return
 	}
+	// 调用所有注册的 NodeHandler 的 OnNodeChange 方法
 	for i := range c.eventHandlers {
 		c.logger.V(4).Info("Calling handler.OnNodeChange")
 		c.eventHandlers[i].OnNodeChange(node)

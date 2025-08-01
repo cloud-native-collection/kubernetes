@@ -29,6 +29,12 @@ import (
 // times before a context cancellation is detected. If immediate is true, condition will be
 // invoked before waiting and guarantees that condition is invoked at least once, regardless of
 // whether the context has been cancelled.
+// PollUntilContextCancel 尝试执行条件函数，直到它返回 true、发生错误、上下文被取消或达到截止时间。
+// 如果上下文未被首先取消，condition 将在第一个间隔后被调用。
+// 返回的错误可能来自 ctx.Err()、condition 返回的错误，或者为 nil。
+// 如果调用 condition 的时间超过间隔时间，下一次 condition 调用将立即执行。
+// 当使用很短的间隔时间时，在检测到上下文取消前，condition 可能会被多次调用。
+// 如果 immediate 为 true，condition 将在等待前被调用，确保无论上下文是否被取消，condition 至少会被调用一次。
 func PollUntilContextCancel(ctx context.Context, interval time.Duration, immediate bool, condition ConditionWithContextFunc) error {
 	return loopConditionUntilContext(ctx, Backoff{Duration: interval}.Timer(), immediate, false, condition)
 }

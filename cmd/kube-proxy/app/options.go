@@ -48,22 +48,32 @@ import (
 )
 
 // Options contains everything necessary to create and run a proxy server.
+// 包含了创建和运行 kube-proxy 服务器所需的所有配置选项
 type Options struct {
+	// 配置文件相关
 	// ConfigFile is the location of the proxy server's configuration file.
 	ConfigFile string
 	// WriteConfigTo is the path where the default configuration will be written.
+	// 默认配置的写入路径
 	WriteConfigTo string
 	// CleanupAndExit, when true, makes the proxy server clean up iptables and ipvs rules, then exit.
+	// 当为 true 时，使代理服务器清理 iptables 和 ipvs 规则，然后退出。
 	CleanupAndExit bool
 	// InitAndExit, when true, makes the proxy server makes configurations that need privileged access, then exit.
+	// 当为 true 时，使代理服务器进行特权访问的配置，然后退出。
 	InitAndExit bool
+	/**** 内部状态 ***/
 	// config is the proxy server's configuration object.
+	// 代理服务器的配置对象
 	config *kubeproxyconfig.KubeProxyConfiguration
 	// watcher is used to watch on the update change of ConfigFile
+	// 用于监视 ConfigFile 的更新变化
 	watcher filesystem.FSWatcher
 	// proxyServer is the interface to run the proxy server
+	// 代理服务器的接口
 	proxyServer proxyRun
 	// errCh is the channel that errors will be sent
+	// 用于发送错误的通道
 	errCh chan error
 	// flagz is the Reader interface to get flags for the flagz page.
 	flagz flagz.Reader
@@ -73,11 +83,14 @@ type Options struct {
 	//
 	// TODO remove these fields once the deprecated flags are removed.
 
+	/******覆盖配置******/
 	// master is used to override the kubeconfig's URL to the apiserver.
 	master string
 	// healthzPort is the port to be used by the healthz server.
+	// 健康检查端口
 	healthzPort int32
 	// metricsPort is the port to be used by the metrics server.
+	// 指标端口
 	metricsPort int32
 
 	// hostnameOverride, if set from the command line flag, takes precedence over the `HostnameOverride` value from the config file
@@ -85,12 +98,14 @@ type Options struct {
 
 	logger klog.Logger
 
+	/*** 同步周期配置**/
 	// The fields below here are placeholders for flags that can't be directly mapped into
 	// config.KubeProxyConfiguration.
 	iptablesSyncPeriod    time.Duration
 	iptablesMinSyncPeriod time.Duration
 	ipvsSyncPeriod        time.Duration
 	ipvsMinSyncPeriod     time.Duration
+	//  集群 CIDR 范围
 	clusterCIDRs          string
 }
 
@@ -358,12 +373,14 @@ func (o *Options) Validate() error {
 }
 
 // Run runs the specified ProxyServer.
+// Run 运行指定的 ProxyServer
 func (o *Options) Run(ctx context.Context) error {
 	defer close(o.errCh)
 	if len(o.WriteConfigTo) > 0 {
 		return o.writeConfigFile()
 	}
 
+	// 执行平台特定的清理工作
 	err := platformCleanup(ctx, o.config.Mode, o.CleanupAndExit)
 	if o.CleanupAndExit {
 		return err
@@ -371,6 +388,7 @@ func (o *Options) Run(ctx context.Context) error {
 	// We ignore err otherwise; the cleanup is best-effort, and the backends will have
 	// logged messages if they failed in interesting ways.
 
+	// ⭐️ 创建 ProxyServer
 	proxyServer, err := newProxyServer(ctx, o.config, o.master, o.InitAndExit, o.flagz)
 	if err != nil {
 		return err
@@ -379,23 +397,28 @@ func (o *Options) Run(ctx context.Context) error {
 		return nil
 	}
 
+	// 保存 proxyServer 实例并进入运行循环
 	o.proxyServer = proxyServer
 	return o.runLoop(ctx)
 }
 
 // runLoop will watch on the update change of the proxy server's configuration file.
 // Return an error when updated
+// runLoop 主循环，监视代理服务器配置文件的更新变化
 func (o *Options) runLoop(ctx context.Context) error {
+	// 如果配置了文件监视器，则启动它
 	if o.watcher != nil {
 		o.watcher.Run()
 	}
 
 	// run the proxy in goroutine
+	// 运行代理服务器
 	go func() {
 		err := o.proxyServer.Run(ctx)
 		o.errCh <- err
 	}()
 
+	// 等待错误发生
 	for {
 		err := <-o.errCh
 		if err != nil {

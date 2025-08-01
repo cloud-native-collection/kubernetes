@@ -164,6 +164,7 @@ func (util *portworxVolumeUtil) DetachVolume(u *portworxVolumeUnmounter) error {
 		return err
 	}
 
+	// 执行分离操作
 	err = driver.Detach(u.volName, false /*doNotForceDetach*/)
 	if err != nil {
 		klog.Errorf("Error detaching Portworx Volume (%v): %v", u.volName, err)

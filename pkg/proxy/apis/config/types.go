@@ -156,8 +156,10 @@ type DetectLocalConfiguration struct {
 // KubeProxyConfiguration contains everything necessary to configure the
 // Kubernetes proxy server.
 type KubeProxyConfiguration struct {
+	// 类型元数据
 	metav1.TypeMeta
 
+	/****   平台特定配置	****/
 	// linux contains Linux-related configuration options.
 	Linux KubeProxyLinuxConfiguration
 
@@ -165,10 +167,12 @@ type KubeProxyConfiguration struct {
 	Windows KubeProxyWindowsConfiguration
 
 	// featureGates is a map of feature names to bools that enable or disable alpha/experimental features.
+	// 功能开关
 	FeatureGates map[string]bool
 
 	// clientConnection specifies the kubeconfig file and client connection settings for the proxy
 	// server to use when communicating with the apiserver.
+	// 客户端连接配置
 	ClientConnection componentbaseconfig.ClientConnectionConfiguration
 	// logging specifies the options of logging.
 	// Refer to [Logs Options](https://github.com/kubernetes/component-base/blob/master/logs/options.go)
@@ -182,6 +186,7 @@ type KubeProxyConfiguration struct {
 	// bindAddress can be used to override kube-proxy's idea of what its node's
 	// primary IP is. Note that the name is a historical artifact, and kube-proxy does
 	// not actually bind any sockets to this IP.
+	// 绑定地址
 	BindAddress string
 	// healthzBindAddress is the IP address and port for the health check server to
 	// serve on, defaulting to "0.0.0.0:10256" (if bindAddress is unset or IPv4), or
@@ -201,17 +206,22 @@ type KubeProxyConfiguration struct {
 	// showHiddenMetricsForVersion is the version for which you want to show hidden metrics.
 	ShowHiddenMetricsForVersion string
 
+	/*****	代理模式配置	*****/
 	// mode specifies which proxy mode to use.
 	Mode ProxyMode
 	// iptables contains iptables-related configuration options.
+	// iptables 配置
 	IPTables KubeProxyIPTablesConfiguration
 	// ipvs contains ipvs-related configuration options.
+	// ipvs 配置
 	IPVS KubeProxyIPVSConfiguration
 	// winkernel contains winkernel-related configuration options.
+	// winkernel 配置
 	Winkernel KubeProxyWinkernelConfiguration
 	// nftables contains nftables-related configuration options.
 	NFTables KubeProxyNFTablesConfiguration
 
+	/*****	检测本地流量配置	*****/
 	// detectLocalMode determines mode to use for detecting local traffic, defaults to LocalModeClusterCIDR
 	DetectLocalMode LocalMode
 	// detectLocal contains optional configuration settings related to DetectLocalMode.
@@ -223,18 +233,23 @@ type KubeProxyConfiguration struct {
 	// the indicated ranges. If set to 'primary', NodePort services will only be
 	// accepted on the node's primary IPv4 and/or IPv6 address according to the Node
 	// object. If unset, NodePort connections will be accepted on all local IPs.
+	// nodePortAddresses 节点端口地址
 	NodePortAddresses []string
 
+	/*****	同步周期配置	*****/
 	// syncPeriod is an interval (e.g. '5s', '1m', '2h22m') indicating how frequently
 	// various re-synchronizing and cleanup operations are performed. Must be greater
 	// than 0.
+	// 同步周期
 	SyncPeriod metav1.Duration
 	// minSyncPeriod is the minimum period between proxier rule resyncs (e.g. '5s',
 	// '1m', '2h22m'). A value of 0 means every Service or EndpointSlice change will
 	// result in an immediate proxier resync.
+	// 代理规则重新同步的最小间隔
 	MinSyncPeriod metav1.Duration
 	// configSyncPeriod is how often configuration from the apiserver is refreshed. Must be greater
 	// than 0.
+	// 从 API 服务器刷新配置的频率
 	ConfigSyncPeriod metav1.Duration
 }
 
@@ -247,6 +262,14 @@ type KubeProxyConfiguration struct {
 // is `iptables` on Linux and `kernelspace` on Windows). If the selected proxy mode cannot be
 // used (due to lack of kernel support, missing userspace components, etc) then kube-proxy
 // will exit with an error.
+// ProxyMode 表示 Kubernetes 代理服务器使用的模式。
+//
+// 在 Linux 平台上有三种可用的代理模式：`iptables`、`ipvs` 和 `nftables`。
+// 在 Windows 平台上只有一种代理模式：`kernelspace`。
+//
+// 如果未指定代理模式，将使用默认模式（当前在 Linux 上默认为 `iptables`，
+// 在 Windows 上默认为 `kernelspace`）。如果选定的代理模式无法使用
+// （由于内核不支持、缺少用户空间组件等原因），kube-proxy 将退出并报错。
 type ProxyMode string
 
 const (
@@ -273,13 +296,18 @@ func (m *ProxyMode) Type() string {
 }
 
 // LocalMode represents modes to detect local traffic from the node
+// LocalMode 表示用于检测来自节点的本地流量的模式。
 type LocalMode string
 
 // Currently supported modes for LocalMode
 const (
-	LocalModeClusterCIDR         LocalMode = "ClusterCIDR"
-	LocalModeNodeCIDR            LocalMode = "NodeCIDR"
-	LocalModeBridgeInterface     LocalMode = "BridgeInterface"
+	// LocalModeClusterCIDR 表示使用集群 CIDR 范围来检测来自节点的本地流量。
+	LocalModeClusterCIDR LocalMode = "ClusterCIDR"
+	// LocalModeNodeCIDR 表示使用节点 CIDR 范围来检测来自节点的本地流量。
+	LocalModeNodeCIDR LocalMode = "NodeCIDR"
+	// LocalModeBridgeInterface 表示使用桥接接口来检测来自节点的本地流量。
+	LocalModeBridgeInterface LocalMode = "BridgeInterface"
+	// LocalModeInterfaceNamePrefix 表示使用接口名称前缀来检测来自节点的本地流量。
 	LocalModeInterfaceNamePrefix LocalMode = "InterfaceNamePrefix"
 )
 
