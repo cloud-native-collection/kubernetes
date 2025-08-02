@@ -133,12 +133,15 @@ func NewTokensController(logger klog.Logger, serviceAccounts informers.ServiceAc
 }
 
 // TokensController manages ServiceAccountToken secrets for ServiceAccount objects
+// TokensController 管理 ServiceAccount 的 Token Secret
 type TokensController struct {
+	// 1. 基础客户端和组件
 	client clientset.Interface
 	token  serviceaccount.TokenGenerator
 
 	rootCA []byte
 
+	// 2. 缓存和监听器
 	serviceAccounts listersv1.ServiceAccountLister
 	// updatedSecrets is a wrapper around the shared cache which allows us to record
 	// and return our local mutations (since we're very likely to act on an updated
@@ -146,12 +149,17 @@ type TokensController struct {
 	updatedSecrets cache.MutationCache
 
 	// Since we join two objects, we'll watch both of them with controllers.
+	// 3. 同步状态
+	// ServiceAccount 同步状态
 	serviceAccountSynced cache.InformerSynced
-	secretSynced         cache.InformerSynced
+	// Secret 同步状态
+	secretSynced cache.InformerSynced
 
 	// syncServiceAccountQueue handles service account events:
 	//   * ensures tokens are removed for service accounts which no longer exist
 	// key is "<namespace>/<name>/<uid>"
+	// 4. 工作队列
+	// ServiceAccount 事件队列
 	syncServiceAccountQueue workqueue.TypedRateLimitingInterface[serviceAccountQueueKey]
 
 	// syncSecretQueue handles secret events:
@@ -159,8 +167,10 @@ type TokensController struct {
 	//   * updates tokens with missing token or namespace data, or mismatched ca data
 	//   * ensures service account secret references are removed for tokens which are deleted
 	// key is a secretQueueKey{}
+	// Secret 事件队列
 	syncSecretQueue workqueue.TypedRateLimitingInterface[secretQueueKey]
 
+	// 5. 配置
 	maxRetries int
 }
 
