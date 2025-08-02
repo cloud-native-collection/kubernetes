@@ -85,6 +85,10 @@ func isIPTablesBased(mode proxyconfigapi.ProxyMode) bool {
 
 // platformCheckSupported is called immediately before creating the Proxier, to check
 // what IP families are supported (and whether the configuration is usable at all).
+// 验证系统是否支持配置的代理模式:
+// 	检查内核模块是否加载
+// 	确定可用的 IP 协议族
+// 	提供有意义的错误信息
 func (s *ProxyServer) platformCheckSupported(ctx context.Context) (ipv4Supported, ipv6Supported, dualStackSupported bool, err error) {
 	logger := klog.FromContext(ctx)
 
