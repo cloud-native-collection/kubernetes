@@ -217,14 +217,18 @@ func NewOptions() *Options {
 }
 
 // Complete completes all the required options.
+// 完成所有必需的选项
 func (o *Options) Complete(fs *pflag.FlagSet) error {
+	// 1. 处理弃用参数的兼容性：如果没有配置文件和写入配置文件，则使用默认的健康检查和指标端口
 	if len(o.ConfigFile) == 0 && len(o.WriteConfigTo) == 0 {
 		o.config.HealthzBindAddress = addressFromDeprecatedFlags(o.config.HealthzBindAddress, o.healthzPort)
 		o.config.MetricsBindAddress = addressFromDeprecatedFlags(o.config.MetricsBindAddress, o.metricsPort)
 	}
 
 	// Load the config file here in Complete, so that Validate validates the fully-resolved config.
+	// 2. 加载配置文件
 	if len(o.ConfigFile) > 0 {
+		// 2.1. 加载配置文件
 		c, err := o.loadConfigFromFile(o.ConfigFile)
 		if err != nil {
 			return err
@@ -236,26 +240,33 @@ func (o *Options) Complete(fs *pflag.FlagSet) error {
 		// command line flags have priority). Otherwise `--config
 		// ... -v=5` doesn't work (config resets verbosity even
 		// when it contains no logging settings).
+		// 2.2. 复制日志设置
 		_ = copyLogsFromFlags(fs, &c.Logging)
 		o.config = c
 
+		// 2.3. 初始化文件监视器
 		if err := o.initWatcher(); err != nil {
 			return err
 		}
 	} else {
+		// 2.4. 处理 v1alpha1 标准配置
 		o.processV1Alpha1Flags(fs)
 	}
 
+	// 3. 应用平台默认值
 	o.platformApplyDefaults(o.config)
 
+	// 4. 处理主机名覆盖
 	if err := o.processHostnameOverrideFlag(); err != nil {
 		return err
 	}
 
+	// 5. 设置特征门
 	if err := utilfeature.DefaultMutableFeatureGate.SetFromMap(o.config.FeatureGates); err != nil {
 		return err
 	}
 
+	// 6. 初始化调试功能
 	if utilfeature.DefaultFeatureGate.Enabled(zpagesfeatures.ComponentFlagz) {
 		nfs := cliflag.NamedFlagSets{
 			FlagSets: make(map[string]*pflag.FlagSet),

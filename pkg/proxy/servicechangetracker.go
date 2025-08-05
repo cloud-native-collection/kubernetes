@@ -30,20 +30,26 @@ import (
 
 // ServiceChangeTracker carries state about uncommitted changes to an arbitrary number of
 // Services, keyed by their namespace and name.
+// ServiceChangeTracker 跟踪任意数量服务的未提交变更，按命名空间和名称索引
 type ServiceChangeTracker struct {
 	// lock protects items.
 	lock sync.Mutex
 	// items maps a service to its serviceChange.
+	// items 映射服务到 serviceChange,键是 namespacedName
 	items map[types.NamespacedName]*serviceChange
 
 	// makeServiceInfo allows the proxier to inject customized information when
 	// processing services.
+	// makeServiceInfo 处理服务端口信息的回调函数, 允许 proxier 在处理服务时注入自定义信息
 	makeServiceInfo makeServicePortFunc
 	// processServiceMapChange is invoked by the apply function on every change. This
 	// function should not modify the ServicePortMaps, but just use the changes for
 	// any Proxier-specific cleanup.
+	// processServiceMapChange  服务映射变更时的处理函数,在每次变更时被 apply 函数调用。此函数不应修改 ServicePortMaps，
+	// 仅使用变更用于任何 Proxier 特定的清理。
 	processServiceMapChange processServiceMapChangeFunc
 
+	// IP 地址族 (IPv4/IPv6)
 	ipFamily v1.IPFamily
 }
 
@@ -133,26 +139,46 @@ func (sm ServicePortMap) HealthCheckNodePorts() map[types.NamespacedName]uint16 
 // serviceToServiceMap translates a single Service object to a ServicePortMap.
 //
 // NOTE: service object should NOT be modified.
+// serviceToServiceMap 将单个 Service 对象转换为 ServicePortMap
+// 注意：service 对象不应被修改
+// 使用场景
+// 
+// 服务发现:
+// 	当服务创建或更新时
+// 	当服务的端口配置变更时
+// 代理规则更新:
+// 	在同步代理规则前准备服务映射
+// 	批量处理多个服务变更
+// 网络策略:
+// 	收集服务端点信息
+// 	更新网络规则
 func (sct *ServiceChangeTracker) serviceToServiceMap(service *v1.Service) ServicePortMap {
 	if service == nil {
 		return nil
 	}
 
+	// 如果服务应该被跳过，返回 nil
 	if proxyutil.ShouldSkipService(service) {
 		return nil
 	}
 
+	// 获取服务的 ClusterIP，根据 IP 家族选择
 	clusterIP := proxyutil.GetClusterIPByFamily(sct.ipFamily, service)
 	if clusterIP == "" {
 		return nil
 	}
 
+	// 创建服务端口映射 ServicePortMap
 	svcPortMap := make(ServicePortMap)
 	svcName := types.NamespacedName{Namespace: service.Namespace, Name: service.Name}
+	// 处理每个服务端口
 	for i := range service.Spec.Ports {
 		servicePort := &service.Spec.Ports[i]
+		// 创建服务端口名称
 		svcPortName := ServicePortName{NamespacedName: svcName, Port: servicePort.Name, Protocol: servicePort.Protocol}
+		// 创建基础服务信息
 		baseSvcInfo := newBaseServiceInfo(service, sct.ipFamily, servicePort)
+		// 使用自定义处理函数或直接使用基础信息,如果 makeServiceInfo 不为空，使用自定义的 makeServiceInfo 函数创建 ServicePort
 		if sct.makeServiceInfo != nil {
 			svcPortMap[svcPortName] = sct.makeServiceInfo(servicePort, service, baseSvcInfo)
 		} else {
@@ -165,6 +191,8 @@ func (sct *ServiceChangeTracker) serviceToServiceMap(service *v1.Service) Servic
 // Update updates ServicePortMap base on the given changes, returns information about the
 // diff since the last Update, triggers processServiceMapChange on every change, and
 // clears the changes map.
+// Update 根据给定的变更更新 ServicePortMap，返回自上次更新以来的差异信息，
+// 对每个变更触发 processServiceMapChange 回调，并清空变更映射
 func (sm ServicePortMap) Update(sct *ServiceChangeTracker) UpdateServiceMapResult {
 	sct.lock.Lock()
 	defer sct.lock.Unlock()

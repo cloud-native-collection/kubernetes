@@ -59,42 +59,43 @@ import (
 // 定义了kube-proxy在IPVS模式下使用的各种iptables链
 const (
 	// kubeServicesChain is the services portal chain
-	kubeServicesChain utiliptables.Chain = "KUBE-SERVICES" // 服务入口链 NAT (PREROUTING, OUTPUT)，作为服务流量的入口点，将流量分发到对应的服务链
-
+	// 服务入口链 NAT (PREROUTING, OUTPUT)，作为服务流量的入口点，将流量分发到对应的服务链
+	kubeServicesChain utiliptables.Chain = "KUBE-SERVICES"
 	// kubeProxyFirewallChain is the kube-proxy firewall chain.
-	kubeProxyFirewallChain utiliptables.Chain = "KUBE-PROXY-FIREWALL" //FILTER (FORWARD) 防火墙链，实现kube-proxy的防火墙功能
-
+	//FILTER (FORWARD) 防火墙链，实现kube-proxy的防火墙功能
+	kubeProxyFirewallChain utiliptables.Chain = "KUBE-PROXY-FIREWALL"
 	// kubeSourceRangesFirewallChain is the firewall subchain for LoadBalancerSourceRanges.
-	kubeSourceRangesFirewallChain utiliptables.Chain = "KUBE-SOURCE-RANGES-FIREWALL" //FILTER (FORWARD) 防火墙链，实现LoadBalancerSourceRanges的源IP过滤
-
+	//FILTER (FORWARD) 防火墙链，实现LoadBalancerSourceRanges的源IP过滤
+	kubeSourceRangesFirewallChain utiliptables.Chain = "KUBE-SOURCE-RANGES-FIREWALL"
 	// kubePostroutingChain is the kubernetes postrouting chain
-	kubePostroutingChain utiliptables.Chain = "KUBE-POSTROUTING" //NAT (POSTROUTING) 后置路由链，用于SNAT，在数据包离开节点前进行SNAT/MASQUERADE操作
-
+	//NAT (POSTROUTING) 后置路由链，用于SNAT，在数据包离开节点前进行SNAT/MASQUERADE操作
+	kubePostroutingChain utiliptables.Chain = "KUBE-POSTROUTING"
 	// kubeMarkMasqChain is the mark-for-masquerade chain
-	kubeMarkMasqChain utiliptables.Chain = "KUBE-MARK-MASQ" //NAT (POSTROUTING) 标记需要做源地址转换(SNAT)的流量
-
+	//NAT (POSTROUTING) 标记需要做源地址转换(SNAT)的流量
+	kubeMarkMasqChain utiliptables.Chain = "KUBE-MARK-MASQ"
 	// kubeNodePortChain is the kubernetes node port chain
-	kubeNodePortChain utiliptables.Chain = "KUBE-NODE-PORT" //NAT (PREROUTING) 节点端口链，用于将NodePort流量转发到对应的服务
-
+	//NAT (PREROUTING) 节点端口链，用于将NodePort流量转发到对应的服务
+	kubeNodePortChain utiliptables.Chain = "KUBE-NODE-PORT"
 	// kubeForwardChain is the kubernetes forward chain
-	kubeForwardChain utiliptables.Chain = "KUBE-FORWARD" //FILTER (FORWARD) 转发链，处理转发到其他pod的流量
-
+	//FILTER (FORWARD) 转发链，处理转发到其他pod的流量
+	kubeForwardChain utiliptables.Chain = "KUBE-FORWARD"
 	// kubeLoadBalancerChain is the kubernetes chain for loadbalancer type service
-	kubeLoadBalancerChain utiliptables.Chain = "KUBE-LOAD-BALANCER" //NAT (PREROUTING) 负载均衡链，用于将LoadBalancer流量转发到对应的服务
-
+	//NAT (PREROUTING) 负载均衡链，用于将LoadBalancer流量转发到对应的服务
+	kubeLoadBalancerChain utiliptables.Chain = "KUBE-LOAD-BALANCER"
 	// kubeIPVSFilterChain filters external access to main netns
 	// https://github.com/kubernetes/kubernetes/issues/72236
-	kubeIPVSFilterChain utiliptables.Chain = "KUBE-IPVS-FILTER" //FILTER (FORWARD，OUTPUT) 过滤对主网络命名空间的访问，解决特定网络问题
-
+	//FILTER (FORWARD，OUTPUT) 过滤对主网络命名空间的访问，解决特定网络问题
+	kubeIPVSFilterChain utiliptables.Chain = "KUBE-IPVS-FILTER"
 	// kubeIPVSOutFilterChain filters access to load balancer services from node.
 	// https://github.com/kubernetes/kubernetes/issues/119656
-	kubeIPVSOutFilterChain utiliptables.Chain = "KUBE-IPVS-OUT-FILTER" //FILTER (OUTPUT) 过滤对负载均衡器服务的访问，过滤从节点发往负载均衡器服务的流量，解决特定网络问题
-
+	//FILTER (OUTPUT) 过滤对负载均衡器服务的访问，过滤从节点发往负载均衡器服务的流量，解决特定网络问题
+	kubeIPVSOutFilterChain utiliptables.Chain = "KUBE-IPVS-OUT-FILTER"
 	// defaultScheduler is the default ipvs scheduler algorithm - round robin.
-	defaultScheduler = "rr" //IPVS默认调度算法
-
+	//IPVS默认调度算法
+	defaultScheduler = "rr"
 	// defaultDummyDevice is the default dummy interface which ipvs service address will bind to it.
-	defaultDummyDevice = "kube-ipvs0" //IPVS默认虚拟设备
+	//IPVS默认虚拟设备
+	defaultDummyDevice = "kube-ipvs0"
 )
 
 // In IPVS proxy mode, the following flags need to be set

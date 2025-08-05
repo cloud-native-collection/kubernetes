@@ -23,16 +23,21 @@ import (
 	"k8s.io/kubernetes/pkg/proxy"
 )
 
+// metaProxier 是一个双栈的"元代理"，负责将 API 调用根据地址族（IPv4/IPv6）分发给底层的代理提供者
 type metaProxier struct {
 	// actual, wrapped
+	// 实际封装的 IPv4 代理提供者
 	ipv4Proxier proxy.Provider
 	// actual, wrapped
+	// 实际封装的 IPv6 代理提供者
 	ipv6Proxier proxy.Provider
 }
 
 // NewMetaProxier returns a dual-stack "meta-proxier". Proxier API
 // calls will be dispatched to the ProxyProvider instances depending
 // on address family.
+//
+//	NewMetaProxier 创建一个双栈元代理
 func NewMetaProxier(ipv4Proxier, ipv6Proxier proxy.Provider) proxy.Provider {
 	return proxy.Provider(&metaProxier{
 		ipv4Proxier: ipv4Proxier,
@@ -42,6 +47,7 @@ func NewMetaProxier(ipv4Proxier, ipv6Proxier proxy.Provider) proxy.Provider {
 
 // Sync immediately synchronizes the ProxyProvider's current state to
 // proxy rules.
+// Sync 立即同步代理规则到内核
 func (proxier *metaProxier) Sync() {
 	proxier.ipv4Proxier.Sync()
 	proxier.ipv6Proxier.Sync()
@@ -49,12 +55,14 @@ func (proxier *metaProxier) Sync() {
 
 // SyncLoop runs periodic work.  This is expected to run as a
 // goroutine or as the main loop of the app.  It does not return.
+// SyncLoop 运行周期性工作，作为 goroutine 或应用程序的主循环运行
 func (proxier *metaProxier) SyncLoop() {
 	go proxier.ipv6Proxier.SyncLoop() // Use go-routine here!
 	proxier.ipv4Proxier.SyncLoop()    // never returns
 }
 
 // OnServiceAdd is called whenever creation of new service object is observed.
+// OnServiceAdd 服务增删改查事件,当观察到新的服务对象创建时调用
 func (proxier *metaProxier) OnServiceAdd(service *v1.Service) {
 	proxier.ipv4Proxier.OnServiceAdd(service)
 	proxier.ipv6Proxier.OnServiceAdd(service)
@@ -84,6 +92,7 @@ func (proxier *metaProxier) OnServiceSynced() {
 
 // OnEndpointSliceAdd is called whenever creation of a new endpoint slice object
 // is observed.
+// 端点切片事件（根据地址类型分发）
 func (proxier *metaProxier) OnEndpointSliceAdd(endpointSlice *discovery.EndpointSlice) {
 	switch endpointSlice.AddressType {
 	case discovery.AddressTypeIPv4:

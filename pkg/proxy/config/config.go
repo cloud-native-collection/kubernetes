@@ -116,6 +116,7 @@ func (c *EndpointSliceConfig) Run(stopCh <-chan struct{}) {
 }
 
 func (c *EndpointSliceConfig) handleAddEndpointSlice(obj interface{}) {
+	// 1. 类型断言，将 obj 转换为 *discoveryv1.EndpointSlice 类型
 	endpointSlice, ok := obj.(*discoveryv1.EndpointSlice)
 	if !ok {
 		utilruntime.HandleError(fmt.Errorf("unexpected object type: %T", obj))
