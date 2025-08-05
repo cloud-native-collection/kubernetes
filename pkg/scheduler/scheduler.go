@@ -289,6 +289,7 @@ var defaultSchedulerOptions = schedulerOptions{
 }
 
 // New returns a Scheduler
+// 创建和初始化调度器实例
 func New(ctx context.Context,
 	client clientset.Interface,
 	informerFactory informers.SharedInformerFactory,
@@ -314,6 +315,7 @@ func New(ctx context.Context,
 		options.profiles = cfg.Profiles
 	}
 
+	// 创建内建插件注册表
 	registry := frameworkplugins.NewInTreeRegistry()
 	if err := registry.Merge(options.frameworkOutOfTreeRegistry); err != nil {
 		return nil, err
@@ -321,14 +323,17 @@ func New(ctx context.Context,
 
 	metrics.Register()
 
+	// 构建扩展器：调度器扩展，自定义调度逻辑
 	extenders, err := buildExtenders(logger, options.extenders, options.profiles)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't build extenders: %w", err)
 	}
 
+	// 获取 Pod 和 Node 的 Listers
 	podLister := informerFactory.Core().V1().Pods().Lister()
 	nodeLister := informerFactory.Core().V1().Nodes().Lister()
 
+	// 创建调度器空节点快照
 	snapshot := internalcache.NewEmptySnapshot()
 	metricsRecorder := metrics.NewMetricsAsyncRecorder(1000, time.Second, stopEverything)
 	// waitingPods holds all the pods that are in the scheduler and waiting in the permit stage
@@ -337,7 +342,9 @@ func New(ctx context.Context,
 	var resourceClaimCache *assumecache.AssumeCache
 	var resourceSliceTracker *resourceslicetracker.Tracker
 	var draManager framework.SharedDRAManager
+	// 资源管理
 	if feature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
+		// 初始化动态资源分配相关组件
 		resourceClaimInformer := informerFactory.Resource().V1().ResourceClaims().Informer()
 		resourceClaimCache = assumecache.NewAssumeCache(logger, resourceClaimInformer, "ResourceClaim", "", nil)
 		resourceSliceTrackerOpts := resourceslicetracker.Options{
@@ -363,6 +370,7 @@ func New(ctx context.Context,
 		apiDispatcher = apidispatcher.New(client, int(options.parallelism), apicalls.Relevances)
 	}
 
+	// 调度配置(Profiles)初始化
 	profiles, err := profile.NewMap(ctx, options.profiles, registry, recorderFactory,
 		frameworkruntime.WithComponentConfigVersion(options.componentConfigVersion),
 		frameworkruntime.WithClientSet(client),
@@ -405,6 +413,7 @@ func New(ctx context.Context,
 		return nil, returnErr
 	}
 
+	// 创建调度(优先)队列
 	podQueue := internalqueue.NewSchedulingQueue(
 		profiles[options.profiles[0].SchedulerName].QueueSortFunc(),
 		informerFactory,
@@ -420,6 +429,7 @@ func New(ctx context.Context,
 		internalqueue.WithAPIDispatcher(apiDispatcher),
 	)
 
+	// 创建调度器缓存
 	schedulerCache := internalcache.New(ctx, durationToExpireAssumedPod, apiDispatcher)
 
 	var apiCache framework.APICacher
@@ -437,6 +447,7 @@ func New(ctx context.Context,
 	debugger := cachedebugger.New(nodeLister, podLister, schedulerCache, podQueue)
 	debugger.ListenForSignal(ctx)
 
+	// 调度器实例创建
 	sched := &Scheduler{
 		Cache:                                  schedulerCache,
 		client:                                 client,
@@ -451,6 +462,7 @@ func New(ctx context.Context,
 		nominatedNodeNameForExpectationEnabled: feature.DefaultFeatureGate.Enabled(features.NominatedNodeNameForExpectation),
 	}
 	sched.NextPod = podQueue.Pop
+	// 设置默认的事件处理程序
 	sched.applyDefaultHandlers()
 
 	if err = addAllEventHandlers(sched, informerFactory, dynInformerFactory, resourceClaimCache, resourceSliceTracker, unionedGVKs(queueingHintsPerProfile)); err != nil {
