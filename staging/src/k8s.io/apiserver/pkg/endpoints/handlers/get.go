@@ -167,13 +167,18 @@ func getRequestOptions(req *http.Request, scope *RequestScope, into runtime.Obje
 	return scope.ParameterCodec.DecodeParameters(query, scope.Kind.GroupVersion(), into)
 }
 
+// HTTP 处理器工厂函数，用于创建处理 Kubernetes 资源列表和 watch 请求的处理器。它支持两种主要操作模式：
+// List：一次性获取资源列表
+// Watch：持续监听资源变更
 func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatch bool, minRequestTimeout time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		ctx := req.Context()
 		// For performance tracking purposes.
+		// 开始跟踪请求
 		ctx, span := tracing.Start(ctx, "List", traceFields(req)...)
 		req = req.WithContext(ctx)
 
+		// 从请求中提取命名空间，获取命名空间
 		namespace, err := scope.Namer.Namespace(req)
 		if err != nil {
 			scope.err(err, w, req)
@@ -182,6 +187,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 
 		// Watches for single objects are routed to this function.
 		// Treat a name parameter the same as a field selector entry.
+		// 判断请求是否包含名称参数
 		hasName := true
 		_, name, err := scope.Namer.Name(req)
 		if err != nil {
@@ -190,12 +196,14 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 		ctx = request.WithNamespace(ctx, namespace)
 
 		opts := metainternalversion.ListOptions{}
+		// 解析请求参数
 		if err := metainternalversionscheme.ParameterCodec.DecodeParameters(req.URL.Query(), scope.MetaGroupVersion, &opts); err != nil {
 			err = errors.NewBadRequest(err.Error())
 			scope.err(err, w, req)
 			return
 		}
 
+		// 设置默认选项
 		metainternalversion.SetListOptionsDefaults(&opts, utilfeature.DefaultFeatureGate.Enabled(features.WatchList))
 		if errs := metainternalversionvalidation.ValidateListOptions(&opts, utilfeature.DefaultFeatureGate.Enabled(features.WatchList)); len(errs) > 0 {
 			err := errors.NewInvalid(schema.GroupKind{Group: metav1.GroupName, Kind: "ListOptions"}, "", errs)
@@ -203,6 +211,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			return
 		}
 
+		// 获取输出媒体类型
 		outputMediaType, _, err := negotiation.NegotiateOutputMediaType(req, scope.Serializer, scope)
 		if err != nil {
 			scope.err(err, w, req)
@@ -211,6 +220,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 
 		// transform fields
 		// TODO: DecodeParametersInto should do this.
+		// 转换字段选择器
 		if opts.FieldSelector != nil {
 			fn := func(label, value string) (newLabel, newValue string, err error) {
 				return scope.Convertor.ConvertFieldLabel(scope.Kind, label, value)
@@ -246,6 +256,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			}
 		}
 
+		// watch 模式
 		if opts.Watch || forceWatch {
 			if rw == nil {
 				scope.err(errors.NewMethodNotSupported(scope.Resource.GroupResource(), "watch"), w, req)
@@ -263,11 +274,13 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			klog.V(3).InfoS("Starting watch", "path", req.URL.Path, "resourceVersion", opts.ResourceVersion, "labels", opts.LabelSelector, "fields", opts.FieldSelector, "timeout", timeout)
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer func() { cancel() }()
+			// 创建 watch
 			watcher, err := rw.Watch(ctx, &opts)
 			if err != nil {
 				scope.err(err, w, req)
 				return
 			}
+			// 创建 watch 处理器
 			handler, err := serveWatchHandler(watcher, scope, outputMediaType, req, w, timeout, metrics.CleanListScope(ctx, &opts))
 			if err != nil {
 				scope.err(err, w, req)
@@ -280,8 +293,11 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			serve := func() {
 				defer deferredCancel()
 				requestInfo, _ := request.RequestInfoFrom(ctx)
+				// 记录 watch 请求
 				metrics.RecordLongRunning(req, requestInfo, metrics.APIServerComponent, func() {
+					// 停止 watch
 					defer watcher.Stop()
+					// 服务 watch 请求
 					handler.ServeHTTP(w, req)
 				})
 			}
@@ -297,6 +313,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 		}
 
 		// Log only long List requests (ignore Watch).
+		// 记录 list 请求
 		defer span.End(500 * time.Millisecond)
 		span.AddEvent("About to List from storage")
 		result, err := r.List(ctx, &opts)

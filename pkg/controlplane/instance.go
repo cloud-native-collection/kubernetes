@@ -337,6 +337,8 @@ func (c CompletedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil, err
 	}
 
+	// 将 Kubernetes 的核心 API 资源（如 Pods、Services、Endpoints 等）注册到 API Server
+	// 完成 API Server 的初始化
 	if err := s.ControlPlane.InstallAPIs(restStorageProviders...); err != nil {
 		return nil, err
 	}

@@ -67,7 +67,9 @@ var (
 
 // Event represents a single event to a watched resource.
 // +k8s:deepcopy-gen=true
+// watch 事件
 type Event struct {
+	// 事件类型
 	Type EventType
 
 	// Object is:
@@ -79,6 +81,10 @@ type Event struct {
 	//    nor miss any events.
 	//  * If Type is Error: *api.Status is recommended; other types may make sense
 	//    depending on context.
+	// 根据事件类型不同，Object 字段包含不同的内容：
+	// Added/Modified 类型：对象的新状态
+	// Deleted 类型：对象删除前的状态
+	// Bookmark 类型：只包含 ResourceVersion 字段的对象
 	Object runtime.Object
 }
 

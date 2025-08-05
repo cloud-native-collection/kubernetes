@@ -63,8 +63,10 @@ const (
 )
 
 // ScheduleOne does the entire scheduling workflow for a single pod. It is serialized on the scheduling algorithm's host fitting.
+// ⭐️ 处理单个Pod的完整调度工作流，包括调度周期和绑定周期
 func (sched *Scheduler) ScheduleOne(ctx context.Context) {
 	logger := klog.FromContext(ctx)
+	// 从调度队列中获取下一个待调度的Pod
 	podInfo, err := sched.NextPod(logger)
 	if err != nil {
 		utilruntime.HandleErrorWithContext(ctx, err, "Error while retrieving next pod from scheduling queue")
@@ -83,6 +85,7 @@ func (sched *Scheduler) ScheduleOne(ctx context.Context) {
 	ctx = klog.NewContext(ctx, logger)
 	logger.V(4).Info("About to try and schedule pod", "pod", klog.KObj(pod))
 
+	// 获取Pod所属的调度框架
 	fwk, err := sched.frameworkForPod(pod)
 	if err != nil {
 		// This shouldn't happen, because we only accept for scheduling the pods
@@ -91,6 +94,7 @@ func (sched *Scheduler) ScheduleOne(ctx context.Context) {
 		sched.SchedulingQueue.Done(pod.UID)
 		return
 	}
+	// 跳过Pod调度
 	if sched.skipPodSchedule(ctx, fwk, pod) {
 		// We don't put this Pod back to the queue, but we have to cleanup the in-flight pods/events.
 		sched.SchedulingQueue.Done(pod.UID)
@@ -99,6 +103,7 @@ func (sched *Scheduler) ScheduleOne(ctx context.Context) {
 
 	logger.V(3).Info("Attempting to schedule pod", "pod", klog.KObj(pod))
 
+	/****初始化调度状态和指标***/
 	// Synchronously attempt to find a fit for the pod.
 	start := time.Now()
 	state := framework.NewCycleState()
@@ -114,6 +119,7 @@ func (sched *Scheduler) ScheduleOne(ctx context.Context) {
 	schedulingCycleCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// 执行调度周期：选择节点
 	scheduleResult, assumedPodInfo, status := sched.schedulingCycle(schedulingCycleCtx, state, fwk, podInfo, start, podsToActivate)
 	if !status.IsSuccess() {
 		sched.FailureHandler(schedulingCycleCtx, fwk, assumedPodInfo, status, scheduleResult.nominatingInfo, start)
@@ -121,6 +127,7 @@ func (sched *Scheduler) ScheduleOne(ctx context.Context) {
 	}
 
 	// bind the pod to its host asynchronously (we can do this b/c of the assumption step above).
+	// 绑定周期（Binding Cycle）：异步绑定Pod到节点
 	go func() {
 		bindingCycleCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -147,6 +154,7 @@ func (sched *Scheduler) newFailureNominatingInfo() *framework.NominatingInfo {
 }
 
 // schedulingCycle tries to schedule a single Pod.
+// ⭐️ 调度周期：选择节点，包括节点选择和资源预留
 func (sched *Scheduler) schedulingCycle(
 	ctx context.Context,
 	state fwk.CycleState,
@@ -157,6 +165,7 @@ func (sched *Scheduler) schedulingCycle(
 ) (ScheduleResult, *framework.QueuedPodInfo, *fwk.Status) {
 	logger := klog.FromContext(ctx)
 	pod := podInfo.Pod
+	// 节点选择：SchedulePod 方法选择最优节点
 	scheduleResult, err := sched.SchedulePod(ctx, schedFramework, state, pod)
 	if err != nil {
 		defer func() {
@@ -206,6 +215,7 @@ func (sched *Scheduler) schedulingCycle(
 	assumedPodInfo := podInfo.DeepCopy()
 	assumedPod := assumedPodInfo.Pod
 	// assume modifies `assumedPod` by setting NodeName=scheduleResult.SuggestedHost
+	// 资源预留（Assume）：调度器内部状态管理,在缓存中假设Pod已经被调度到选定节点,允许继续调度而不需要等待实际绑定完成
 	err = sched.assume(logger, assumedPod, scheduleResult.SuggestedHost)
 	if err != nil {
 		// This is most probably result of a BUG in retrying logic.
@@ -217,6 +227,7 @@ func (sched *Scheduler) schedulingCycle(
 	}
 
 	// Run the Reserve method of reserve plugins.
+	// 预留资源（Reserve）：资源预留和状态管理
 	if sts := schedFramework.RunReservePluginsReserve(ctx, state, assumedPod, scheduleResult.SuggestedHost); !sts.IsSuccess() {
 		// trigger un-reserve to clean up state associated with the reserved Pod
 		schedFramework.RunReservePluginsUnreserve(ctx, state, assumedPod, scheduleResult.SuggestedHost)
@@ -240,6 +251,7 @@ func (sched *Scheduler) schedulingCycle(
 	}
 
 	// Run "permit" plugins.
+	// 许可（Permit): 调度决策和流程控制
 	runPermitStatus := schedFramework.RunPermitPlugins(ctx, state, assumedPod, scheduleResult.SuggestedHost)
 	if !runPermitStatus.IsWait() && !runPermitStatus.IsSuccess() {
 		// trigger un-reserve to clean up state associated with the reserved Pod
@@ -265,6 +277,7 @@ func (sched *Scheduler) schedulingCycle(
 	}
 
 	// At the end of a successful scheduling cycle, pop and move up Pods if needed.
+	// 激活（Activate）：激活Pod
 	if len(podsToActivate.Map) != 0 {
 		sched.SchedulingQueue.Activate(logger, podsToActivate.Map)
 		// Clear the entries after activation.
@@ -275,6 +288,7 @@ func (sched *Scheduler) schedulingCycle(
 }
 
 // bindingCycle tries to bind an assumed Pod.
+// ⭐️ 执行 Pod 绑定周期
 func (sched *Scheduler) bindingCycle(
 	ctx context.Context,
 	state fwk.CycleState,
@@ -287,6 +301,7 @@ func (sched *Scheduler) bindingCycle(
 
 	assumedPod := assumedPodInfo.Pod
 
+	// 1. 前置检查
 	if sched.nominatedNodeNameForExpectationEnabled {
 		preFlightStatus := schedFramework.RunPreBindPreFlights(ctx, state, assumedPod, scheduleResult.SuggestedHost)
 		if preFlightStatus.Code() == fwk.Error ||
@@ -308,6 +323,7 @@ func (sched *Scheduler) bindingCycle(
 	}
 
 	// Run "permit" plugins.
+	// 2. 等待 Permit 插件
 	if status := schedFramework.WaitOnPermit(ctx, assumedPod); !status.IsSuccess() {
 		if status.IsRejected() {
 			fitErr := &framework.FitError{
@@ -333,11 +349,13 @@ func (sched *Scheduler) bindingCycle(
 	sched.SchedulingQueue.Done(assumedPod.UID)
 
 	// Run "prebind" plugins.
+	// 3. 运行 PreBind 插件
 	if status := schedFramework.RunPreBindPlugins(ctx, state, assumedPod, scheduleResult.SuggestedHost); !status.IsSuccess() {
 		return status
 	}
 
 	// Run "bind" plugins.
+	// 4. 运行 Bind 插件
 	if status := sched.bind(ctx, schedFramework, assumedPod, scheduleResult.SuggestedHost, state); !status.IsSuccess() {
 		return status
 	}
@@ -350,6 +368,7 @@ func (sched *Scheduler) bindingCycle(
 		metrics.PodSchedulingSLIDuration.WithLabelValues(getAttemptsLabel(assumedPodInfo)).Observe(metrics.SinceInSeconds(*assumedPodInfo.InitialAttemptTimestamp))
 	}
 	// Run "postbind" plugins.
+	// 5. 运行 PostBind 插件
 	schedFramework.RunPostBindPlugins(ctx, state, assumedPod, scheduleResult.SuggestedHost)
 
 	// At the end of a successful binding cycle, move up Pods if needed.

@@ -72,45 +72,58 @@ var ErrNoNodesAvailable = fmt.Errorf("no nodes available to schedule pods")
 type Scheduler struct {
 	// It is expected that changes made via Cache will be observed
 	// by NodeLister and Algorithm.
+	// 维护集群状态的缓存，包括节点和Pod信息
 	Cache internalcache.Cache
 
+	// 外部扩展调度功能:扩展调度逻辑
 	Extenders []framework.Extender
 
 	// NextPod should be a function that blocks until the next pod
 	// is available. We don't use a channel for this, because scheduling
 	// a pod may take some amount of time and we don't want pods to get
 	// stale while they sit in a channel.
+	// 阻塞式获取下一个待调度的Pod
 	NextPod func(logger klog.Logger) (*framework.QueuedPodInfo, error)
 
 	// FailureHandler is called upon a scheduling failure.
+	// 处理调度失败的回调函数
 	FailureHandler FailureHandlerFn
 
 	// SchedulePod tries to schedule the given pod to one of the nodes in the node list.
 	// Return a struct of ScheduleResult with the name of suggested host on success,
 	// otherwise will return a FitError with reasons.
+	// 核心调度函数，尝试将Pod调度到节点
 	SchedulePod func(ctx context.Context, fwk framework.Framework, state fwk.CycleState, pod *v1.Pod) (ScheduleResult, error)
 
 	// Close this to shut down the scheduler.
+	// 关闭调度器
 	StopEverything <-chan struct{}
 
 	// SchedulingQueue holds pods to be scheduled
+	// 调度队列，存储待调度的Pod
 	SchedulingQueue internalqueue.SchedulingQueue
 
 	// If possible, indirect operation on APIDispatcher, e.g. through SchedulingQueue, is preferred.
 	// Is nil iff SchedulerAsyncAPICalls feature gate is disabled.
 	// Adding a call to APIDispatcher should not be done directly by in-tree usages.
 	// framework.APICache should be used instead.
+	// API操作分发器
 	APIDispatcher *apidispatcher.APIDispatcher
 
 	// Profiles are the scheduling profiles.
+	// 调度配置文件
 	Profiles profile.Map
 
+	// Kubernetes客户端接口
 	client clientset.Interface
 
+	// 节点信息快照
 	nodeInfoSnapshot *internalcache.Snapshot
 
+	// 调度配置文件中设置的百分比
 	percentageOfNodesToScore int32
 
+	// 下一个开始调度的节点索引
 	nextStartNodeIndex int
 
 	// logger *must* be initialized when creating a Scheduler,
@@ -119,8 +132,10 @@ type Scheduler struct {
 	logger klog.Logger
 
 	// registeredHandlers contains the registrations of all handlers. It's used to check if all handlers have finished syncing before the scheduling cycles start.
+	// 注册的处理程序
 	registeredHandlers []cache.ResourceEventHandlerRegistration
 
+	// 是否启用提名节点名称
 	nominatedNodeNameForExpectationEnabled bool
 }
 
@@ -521,11 +536,14 @@ func buildQueueingHintMap(ctx context.Context, es []framework.EnqueueExtensions)
 }
 
 // Run begins watching and scheduling. It starts scheduling and blocked until the context is done.
+// 启动所有必要的组件并开始调度循环
 func (sched *Scheduler) Run(ctx context.Context) {
 	logger := klog.FromContext(ctx)
+	// 启动调度队列，负责管理待调度的Pod队列
 	sched.SchedulingQueue.Run(logger)
 
 	if sched.APIDispatcher != nil {
+		// 启动API调度器，负责处理API请求
 		go sched.APIDispatcher.Run(logger)
 	}
 
@@ -535,8 +553,14 @@ func (sched *Scheduler) Run(ctx context.Context) {
 	// If there are no new pods to schedule, it will be hanging there
 	// and if done in this goroutine it will be blocking closing
 	// SchedulingQueue, in effect causing a deadlock on shutdown.
+	// 启动调度循环，负责处理调度逻辑
+	// 在单独的goroutine中启动调度循环
+	// 使用wait.UntilWithContext确保在context取消时优雅退出
+	// sched.ScheduleOne是实际的调度函数
+	// 参数0表示立即执行第一次调度，不等待
 	go wait.UntilWithContext(ctx, sched.ScheduleOne, 0)
 
+	// 阻塞直到收到取消信号
 	<-ctx.Done()
 	if sched.APIDispatcher != nil {
 		sched.APIDispatcher.Close()

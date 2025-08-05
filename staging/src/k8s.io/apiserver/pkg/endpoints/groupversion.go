@@ -103,6 +103,7 @@ type APIGroupVersion struct {
 // InstallREST registers the REST handlers (storage, watch, proxy and redirect) into a restful Container.
 // It is expected that the provided path root prefix will serve all operations. Root MUST NOT end
 // in a slash.
+// 注册 REST 处理器
 func (g *APIGroupVersion) InstallREST(container *restful.Container) ([]apidiscoveryv2.APIResourceDiscovery, []*storageversion.ResourceInfo, error) {
 	prefix := path.Join(g.Root, g.GroupVersion.Group, g.GroupVersion.Version)
 	installer := &APIInstaller{
@@ -111,6 +112,7 @@ func (g *APIGroupVersion) InstallREST(container *restful.Container) ([]apidiscov
 		minRequestTimeout: g.MinRequestTimeout,
 	}
 
+	// 安装 REST 处理器，注册所有资源的 REST 处理器，返回 API 资源列表、存储版本信息和 Web 服务
 	apiResources, resourceInfos, ws, registrationErrors := installer.Install()
 	versionDiscoveryHandler := discovery.NewAPIVersionHandler(g.Serializer, g.GroupVersion, staticLister{apiResources})
 	versionDiscoveryHandler.AddToWebService(ws)

@@ -80,12 +80,18 @@ const (
 // Server is a struct that contains a generic control plane apiserver instance
 // that can be run to start serving the APIs.
 type Server struct {
+	// GenericAPIServer 是一个通用的 API 服务器，用于处理 API 请求
+	// 处理 HTTP 请求、认证、授权、审计等核心功能
 	GenericAPIServer *genericapiserver.GenericAPIServer
 
-	APIResourceConfigSource   serverstorage.APIResourceConfigSource
-	RESTOptionsGetter         genericregistry.RESTOptionsGetter
+	// APIResourceConfigSource 是 API 资源配置的来源，控制 API 版本的启用/禁用状态
+	APIResourceConfigSource serverstorage.APIResourceConfigSource
+	// RESTOptionsGetter 提供 REST 选项，用于配置 API 资源的存储选项
+	RESTOptionsGetter genericregistry.RESTOptionsGetter
+	// ClusterAuthenticationInfo 包含集群认证信息，用于处理认证和授权
 	ClusterAuthenticationInfo clusterauthenticationtrust.ClusterAuthenticationInfo
-	VersionedInformers        clientgoinformers.SharedInformerFactory
+	// VersionedInformers 提供版本化的 Informer，用于获取 API 资源的 Informer
+	VersionedInformers clientgoinformers.SharedInformerFactory
 }
 
 // New returns a new instance of Master from the given config.

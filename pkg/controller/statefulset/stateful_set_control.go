@@ -37,18 +37,28 @@ const MaxBatchSize = 500
 
 // StatefulSetControl implements the control logic for updating StatefulSets and their children Pods. It is implemented
 // as an interface to allow for extensions that provide different semantics. Currently, there is only one implementation.
+// StatefulSetControl 实现了更新 StatefulSet 及其子 Pod 的控制逻辑。
+// 它被设计为接口，以允许提供不同语义的扩展。目前只有一个实现。
 type StatefulSetControlInterface interface {
 	// UpdateStatefulSet implements the control logic for Pod creation, update, and deletion, and
 	// persistent volume creation, update, and deletion.
 	// If an implementation returns a non-nil error, the invocation will be retried using a rate-limited strategy.
 	// Implementors should sink any errors that they do not wish to trigger a retry, and they may feel free to
 	// exit exceptionally at any point provided they wish the update to be re-run at a later point in time.
+	// UpdateStatefulSet 实现了 Pod 的创建、更新和删除，
+	// 以及持久卷的创建、更新和删除的控制逻辑。
+	// 如果实现返回非 nil 错误，将使用速率限制策略重试调用。
+	// 实现者应该处理他们不希望触发重试的任何错误，并且可以随时退出，
+	// 只要他们希望稍后重新运行更新。
 	UpdateStatefulSet(ctx context.Context, set *apps.StatefulSet, pods []*v1.Pod) (*apps.StatefulSetStatus, error)
 	// ListRevisions returns a array of the ControllerRevisions that represent the revisions of set. If the returned
 	// error is nil, the returns slice of ControllerRevisions is valid.
+	// ListRevisions 返回表示 set 的修订版本的 ControllerRevision 数组。
+	// 如果返回的错误为 nil，则返回的 ControllerRevisions 切片是有效的。
 	ListRevisions(set *apps.StatefulSet) ([]*apps.ControllerRevision, error)
 	// AdoptOrphanRevisions adopts any orphaned ControllerRevisions that match set's Selector. If all adoptions are
 	// successful the returned error is nil.
+	// AdoptOrphanRevisions 采用任何匹配 set 选择器的孤立 ControllerRevisions。如果所有采用都成功，返回的错误为 nil。
 	AdoptOrphanRevisions(set *apps.StatefulSet, revisions []*apps.ControllerRevision) error
 }
 
@@ -64,9 +74,13 @@ func NewDefaultStatefulSetControl(
 	return &defaultStatefulSetControl{podControl, statusUpdater, controllerHistory}
 }
 
+// defaultStatefulSetControl 是 StatefulSet 控制逻辑的默认实现
 type defaultStatefulSetControl struct {
-	podControl        *StatefulPodControl
-	statusUpdater     StatefulSetStatusUpdaterInterface
+	// podControl 用于操作 Pod 的接口
+	podControl *StatefulPodControl
+	// statusUpdater 用于更新 StatefulSet 状态的接口
+	statusUpdater StatefulSetStatusUpdaterInterface
+	// controllerHistory 用于管理 ControllerRevision 的接口
 	controllerHistory history.Interface
 }
 

@@ -490,6 +490,7 @@ type BindPlugin interface {
 
 // Framework manages the set of plugins in use by the scheduling framework.
 // Configured plugins are called at specified points in a scheduling context.
+// 调度框架的核心功能，管理一组插件
 type Framework interface {
 	Handle
 

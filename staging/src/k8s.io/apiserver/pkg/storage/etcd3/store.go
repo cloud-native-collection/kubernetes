@@ -76,22 +76,37 @@ func (d authenticatedDataString) AuthenticatedData() []byte {
 
 var _ value.Context = authenticatedDataString("")
 
+// store 实现了 storage.Interface 接口，负责与 etcd 交互
 type store struct {
-	client             *kubernetes.Client
-	codec              runtime.Codec
-	versioner          storage.Versioner
-	transformer        value.Transformer
-	pathPrefix         string
-	groupResource      schema.GroupResource
-	watcher            *watcher
-	leaseManager       *leaseManager
-	decoder            Decoder
+	// client 是 etcd 客户端，用于与 etcd 进行交互
+	client *kubernetes.Client
+	// codec 是运行时编解码器，用于将对象编码为字节流，或将字节流解码为对象
+	codec runtime.Codec
+	// versioner 是版本器，用于处理对象的版本信息
+	versioner storage.Versioner
+	// transformer 是转换器，用于处理对象的转换操作
+	transformer value.Transformer
+	// pathPrefix 是路径前缀，用于指定存储路径的前缀
+	pathPrefix string
+	// groupResource 是 API 组资源，用于标识 API 组和资源
+	groupResource schema.GroupResource
+	// watcher 是观察者，用于观察 etcd 中的键值变化
+	watcher *watcher
+	// leaseManager 是租约管理器，用于管理 etcd 中的租约
+	leaseManager *leaseManager
+	// decoder 是解码器，用于将字节流解码为对象
+	decoder Decoder
+	// listErrAggrFactory 是列表错误聚合器工厂，用于聚合列表操作中的错误
 	listErrAggrFactory func() ListErrorAggregator
 
+	// resourcePrefix 是资源前缀，用于指定资源的前缀
 	resourcePrefix string
-	newListFunc    func() runtime.Object
-	stats          *statsCache
-	compactor      Compactor
+	// newListFunc 是新列表函数，用于创建新的列表对象
+	newListFunc func() runtime.Object
+	// stats 是统计信息，用于存储统计信息
+	stats *statsCache
+	// compactor 是压缩器，用于压缩 etcd 中的数据
+	compactor Compactor
 }
 
 var _ storage.Interface = (*store)(nil)
@@ -220,6 +235,7 @@ func (s *store) Close() {
 }
 
 // Get implements storage.Interface.Get.
+// 获取指定键的值
 func (s *store) Get(ctx context.Context, key string, opts storage.GetOptions, out runtime.Object) error {
 	preparedKey, err := s.prepareKey(key)
 	if err != nil {
@@ -256,11 +272,15 @@ func (s *store) Get(ctx context.Context, key string, opts storage.GetOptions, ou
 }
 
 // Create implements storage.Interface.Create.
+// Create 实现了 storage.Interface.Create 接口
+// 在 etcd 中创建一个新的键值对
 func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object, ttl uint64) error {
+	// 1. 准备键名
 	preparedKey, err := s.prepareKey(key)
 	if err != nil {
 		return err
 	}
+	// 2. 设置跟踪
 	ctx, span := tracing.Start(ctx, "Create etcd3",
 		attribute.String("audit-id", audit.GetAuditIDTruncated(ctx)),
 		attribute.String("key", key),
@@ -269,13 +289,16 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 		attribute.String("resource", s.groupResource.Resource),
 	)
 	defer span.End(500 * time.Millisecond)
+	// 3. 检查资源版本
 	if version, err := s.versioner.ObjectResourceVersion(obj); err == nil && version != 0 {
 		return storage.ErrResourceVersionSetOnCreate
 	}
+	// 4. 准备对象存储
 	if err := s.versioner.PrepareObjectForStorage(obj); err != nil {
 		return fmt.Errorf("PrepareObjectForStorage failed: %v", err)
 	}
 	span.AddEvent("About to Encode")
+	// 5. 编码对象，将对象序列化为字节流
 	data, err := runtime.Encode(s.codec, obj)
 	if err != nil {
 		span.AddEvent("Encode failed", attribute.Int("len", len(data)), attribute.String("err", err.Error()))
@@ -283,6 +306,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	}
 	span.AddEvent("Encode succeeded", attribute.Int("len", len(data)))
 
+	// 6. 处理 TTL 和租约，通过 etcd 的租约机制实现 TTL
 	var lease clientv3.LeaseID
 	if ttl != 0 {
 		lease, err = s.leaseManager.GetLease(ctx, int64(ttl))
@@ -291,6 +315,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 		}
 	}
 
+	// 7. 数据转换（如加密）
 	newData, err := s.transformer.TransformToStorage(ctx, data, authenticatedDataString(preparedKey))
 	if err != nil {
 		span.AddEvent("TransformToStorage failed", attribute.String("err", err.Error()))
@@ -299,6 +324,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	span.AddEvent("TransformToStorage succeeded")
 
 	startTime := time.Now()
+	// 8. 执行 etcd 事务
 	txnResp, err := s.client.Kubernetes.OptimisticPut(ctx, preparedKey, newData, 0, kubernetes.PutOptions{LeaseID: lease})
 	metrics.RecordEtcdRequest("create", s.groupResource, err, startTime)
 	if err != nil {
@@ -307,10 +333,12 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	}
 	span.AddEvent("Txn call succeeded")
 
+	// 9. 处理响应
 	if !txnResp.Succeeded {
 		return storage.NewKeyExistsError(preparedKey, 0)
 	}
 
+	// 10. 解码响应数据到输出对象
 	if out != nil {
 		err = s.decoder.Decode(data, out, txnResp.Revision)
 		if err != nil {
@@ -936,15 +964,18 @@ func growSlice(v reflect.Value, maxCapacity int, sizes ...int) {
 }
 
 // Watch implements storage.Interface.Watch.
+// 监控指定键的值变化
 func (s *store) Watch(ctx context.Context, key string, opts storage.ListOptions) (watch.Interface, error) {
 	preparedKey, err := s.prepareKey(key)
 	if err != nil {
 		return nil, err
 	}
+	// 解析资源版本
 	rev, err := s.versioner.ParseResourceVersion(opts.ResourceVersion)
 	if err != nil {
 		return nil, err
 	}
+	// 监控指定键的值变化
 	return s.watcher.Watch(s.watchContext(ctx), preparedKey, int64(rev), opts)
 }
 

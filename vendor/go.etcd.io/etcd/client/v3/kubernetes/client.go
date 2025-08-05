@@ -37,8 +37,11 @@ func New(cfg clientv3.Config) (*Client, error) {
 	return kc, nil
 }
 
+// Kubernetes 与 etcd 交互的客户端封装
 type Client struct {
+	// 内嵌的 etcd 原生客户端
 	*clientv3.Client
+	// Kubernetes 封装的接
 	Kubernetes Interface
 }
 
@@ -80,23 +83,31 @@ func (k Client) Count(ctx context.Context, prefix string, _ CountOptions) (int64
 	return resp.Count, nil
 }
 
+// OptimisticPut 实现了乐观并发的键值存储操作
+// 当且仅当键的当前修改版本等于 expectedRevision 时才会执行写入
 func (k Client) OptimisticPut(ctx context.Context, key string, value []byte, expectedRevision int64, opts PutOptions) (resp PutResponse, err error) {
+	// 1. 构建乐观事务， 条件：键的当前修改版本必须等于 expectedRevision
 	txn := k.KV.Txn(ctx).If(
 		clientv3.Compare(clientv3.ModRevision(key), "=", expectedRevision),
 	).Then(
+		// 2. 如果条件满足，执行写入操作
 		clientv3.OpPut(key, string(value), clientv3.WithLease(opts.LeaseID)),
 	)
 
+	// 3. 如果 opts.GetOnFailure 为 true，添加 Else 操作
 	if opts.GetOnFailure {
 		txn = txn.Else(clientv3.OpGet(key))
 	}
 
+	// 4. 执行事务
 	txnResp, err := txn.Commit()
 	if err != nil {
 		return resp, err
 	}
+	// 5. 返回结果，处理响应
 	resp.Succeeded = txnResp.Succeeded
 	resp.Revision = txnResp.Header.Revision
+	// 5. 如果启用了 GetOnFailure 且条件不满足，返回当前值
 	if opts.GetOnFailure && !txnResp.Succeeded {
 		if len(txnResp.Responses) == 0 {
 			return resp, fmt.Errorf("invalid OptimisticPut response: %v", txnResp.Responses)
@@ -106,21 +117,29 @@ func (k Client) OptimisticPut(ctx context.Context, key string, value []byte, exp
 	return resp, nil
 }
 
+// 基于乐观并发控制的 etcd 删除操作
+// 当且仅当键的当前修改版本等于 expectedRevision 时才会执行删除
 func (k Client) OptimisticDelete(ctx context.Context, key string, expectedRevision int64, opts DeleteOptions) (resp DeleteResponse, err error) {
+	// 1. 构建乐观事务， 条件：键的当前修改版本必须等于 expectedRevision
 	txn := k.KV.Txn(ctx).If(
 		clientv3.Compare(clientv3.ModRevision(key), "=", expectedRevision),
 	).Then(
+		// 2. 满足条件时执行删除操作
 		clientv3.OpDelete(key),
 	)
+	// 3. 如果 opts.GetOnFailure 为 true，添加 Else 操作
 	if opts.GetOnFailure {
 		txn = txn.Else(clientv3.OpGet(key))
 	}
+	// 4. 执行事务
 	txnResp, err := txn.Commit()
 	if err != nil {
 		return resp, err
 	}
+	// 5. 返回结果，处理响应
 	resp.Succeeded = txnResp.Succeeded
 	resp.Revision = txnResp.Header.Revision
+	// 6. 如果启用了 GetOnFailure 且条件不满足，返回当前值
 	if opts.GetOnFailure && !txnResp.Succeeded {
 		resp.KV = kvFromTxnResponse(txnResp.Responses[0])
 	}

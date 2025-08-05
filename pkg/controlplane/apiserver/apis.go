@@ -137,15 +137,18 @@ func (s *Server) InstallAPIs(restStorageProviders ...RESTStorageProvider) error 
 
 		if len(groupName) == 0 {
 			// the legacy group for core APIs is special that it is installed into /api via this special install method.
+			// 安装核心 API 组到 /api 路径
 			if err := s.GenericAPIServer.InstallLegacyAPIGroup(genericapiserver.DefaultLegacyAPIPrefix, &apiGroupInfo); err != nil {
 				return fmt.Errorf("error in registering legacy API: %w", err)
 			}
 		} else {
 			// everything else goes to /apis
+			// 将 API 组安装到 /apis 路径
 			nonLegacy = append(nonLegacy, &apiGroupInfo)
 		}
 	}
 
+	// 安装 API 组到 /apis 路径
 	if err := s.GenericAPIServer.InstallAPIGroups(nonLegacy...); err != nil {
 		return fmt.Errorf("error in registering group versions: %w", err)
 	}
