@@ -53,31 +53,44 @@ var controllerKind = apps.SchemeGroupVersion.WithKind("StatefulSet")
 var podKind = v1.SchemeGroupVersion.WithKind("Pod")
 
 // StatefulSetController controls statefulsets.
+// statefulSet 控制器的核心结构
 type StatefulSetController struct {
 	// client interface
+	// kubeClient 是 Kubernetes API 的客户端接口，用于与 Kubernetes API 交互
 	kubeClient clientset.Interface
 	// control returns an interface capable of syncing a stateful set.
 	// Abstracted out for testing.
+	// 控制接口，抽象了 StatefulSet 的同步逻辑,主要用于测试时注入模拟实现
 	control StatefulSetControlInterface
 	// podControl is used for patching pods.
+	// podControl 用于操作 Pod 的接口
 	podControl controller.PodControlInterface
 	// podIndexer allows looking up pods by ControllerRef UID
+	// Pod 索引器，支持通过 ControllerRef UID 查找 Pod
 	podIndexer cache.Indexer
 	// podLister is able to list/get pods from a shared informer's store
+	// Pod 列表器，用于从共享 informer 的存储中列出/获取 Pod
 	podLister corelisters.PodLister
 	// podListerSynced returns true if the pod shared informer has synced at least once
+	// podListerSynced 返回 true 如果 pod 共享 informer 已至少同步一次
 	podListerSynced cache.InformerSynced
 	// setLister is able to list/get stateful sets from a shared informer's store
+	// setLister 是能够从共享 informer 的存储中列出/获取 stateful sets 的接口
 	setLister appslisters.StatefulSetLister
 	// setListerSynced returns true if the stateful set shared informer has synced at least once
+	// setListerSynced 返回 true 如果 stateful set 共享 informer 已至少同步一次
 	setListerSynced cache.InformerSynced
 	// pvcListerSynced returns true if the pvc shared informer has synced at least once
+	// pvcListerSynced 返回 true 如果 pvc 共享 informer 已至少同步一次
 	pvcListerSynced cache.InformerSynced
 	// revListerSynced returns true if the rev shared informer has synced at least once
+	// revListerSynced 返回 true 如果 rev 共享 informer 已至少同步一次
 	revListerSynced cache.InformerSynced
 	// StatefulSets that need to be synced.
+	// 需要同步的 StatefulSets
 	queue workqueue.TypedRateLimitingInterface[string]
 	// eventBroadcaster is the core of event processing pipeline.
+	// 事件广播器，用于处理事件
 	eventBroadcaster record.EventBroadcaster
 }
 
@@ -155,24 +168,34 @@ func NewStatefulSetController(
 }
 
 // Run runs the statefulset controller.
+// 控制器的入口，负责启动和运行控制器。
 func (ssc *StatefulSetController) Run(ctx context.Context, workers int) {
+	// 1. 确保在 panic 时能够恢复
 	defer utilruntime.HandleCrash()
 
 	// Start events processing pipeline.
+	// 2. 启动事件处理管道
+	// 2.1 启动结构化日志记录
 	ssc.eventBroadcaster.StartStructuredLogging(3)
+	// 2.2 启动事件记录到 API Server
 	ssc.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: ssc.kubeClient.CoreV1().Events("")})
+	// 2.3 确保在退出时关闭事件广播器
 	defer ssc.eventBroadcaster.Shutdown()
 
+	// 3. 停止事件处理管道
 	defer ssc.queue.ShutDown()
 
+	// 4. 设置日志记录器
 	logger := klog.FromContext(ctx)
 	logger.Info("Starting stateful set controller")
 	defer logger.Info("Shutting down statefulset controller")
 
+	// 5. 等待缓存同步完成
 	if !cache.WaitForNamedCacheSync("stateful set", ctx.Done(), ssc.podListerSynced, ssc.setListerSynced, ssc.pvcListerSynced, ssc.revListerSynced) {
 		return
 	}
 
+	// 6. 启动指定数量的工作协程
 	for i := 0; i < workers; i++ {
 		go wait.UntilWithContext(ctx, ssc.worker, time.Second)
 	}
@@ -429,28 +452,42 @@ func (ssc *StatefulSetController) enqueueSSAfter(ss *apps.StatefulSet, duration 
 
 // processNextWorkItem dequeues items, processes them, and marks them done. It enforces that the syncHandler is never
 // invoked concurrently with the same key.
+// processNextWorkItem 从工作队列中获取项目，处理它们，并标记为完成。
+// 它确保相同的 key 不会并发执行 syncHandler。
 func (ssc *StatefulSetController) processNextWorkItem(ctx context.Context) bool {
+	// 1. 从队列中获取下一个待处理的 key
+	// 如果队列已关闭，返回 false 表示应该停止工作
 	key, quit := ssc.queue.Get()
 	if quit {
 		return false
 	}
+	// 2. 确保在处理完成后标记任务为完成
+	// 使用 defer 确保即使发生 panic 也能正确标记
 	defer ssc.queue.Done(key)
+	// 3. 调用 sync 方法处理该 key 对应的 StatefulSet
 	if err := ssc.sync(ctx, key); err != nil {
+		// 3.1 如果处理失败，记录错误并重新入队
 		utilruntime.HandleError(fmt.Errorf("error syncing StatefulSet %v, requeuing: %w", key, err))
 		ssc.queue.AddRateLimited(key)
 	} else {
+		// 3.2 如果处理成功，标记任务为完成
 		ssc.queue.Forget(key)
 	}
 	return true
 }
 
 // worker runs a worker goroutine that invokes processNextWorkItem until the controller's queue is closed
+// worker 运行一个工作协程，持续调用 processNextWorkItem 直到控制器的队列关闭
 func (ssc *StatefulSetController) worker(ctx context.Context) {
+	// 持续调用 processNextWorkItem 处理队列中的任务
+	// 当 processNextWorkItem 返回 false 时循环结束
 	for ssc.processNextWorkItem(ctx) {
+		// 循环体为空，所有工作都在 processNextWorkItem 中完成
 	}
 }
 
 // sync syncs the given statefulset.
+// sync 同步给定的 StatefulSet
 func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 	startTime := time.Now()
 	logger := klog.FromContext(ctx)
@@ -458,10 +495,12 @@ func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 		logger.V(4).Info("Finished syncing statefulset", "key", key, "time", time.Since(startTime))
 	}()
 
+	// 1. 解析 key 为 namespace 和 name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return err
 	}
+	// 2. 从缓存中获取 StatefulSet 对象
 	set, err := ssc.setLister.StatefulSets(namespace).Get(name)
 	if errors.IsNotFound(err) {
 		logger.Info("StatefulSet has been deleted", "key", key)
@@ -472,6 +511,7 @@ func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 		return err
 	}
 
+	// 3. 将 StatefulSet 的选择器转换为 LabelSelector
 	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("error converting StatefulSet %v selector: %v", key, err))
@@ -479,30 +519,39 @@ func (ssc *StatefulSetController) sync(ctx context.Context, key string) error {
 		return nil
 	}
 
+	// 4. 采用孤立的 ControllerRevision
 	if err := ssc.adoptOrphanRevisions(ctx, set); err != nil {
 		return err
 	}
 
+	// 5. 获取 StatefulSet 的 Pod 列表
 	pods, err := ssc.getPodsForStatefulSet(ctx, set, selector)
 	if err != nil {
 		return err
 	}
 
+	// 6. 同步 StatefulSet 及其关联的 Pod 状态
 	return ssc.syncStatefulSet(ctx, set, pods)
 }
 
 // syncStatefulSet syncs a tuple of (statefulset, []*v1.Pod).
+// syncStatefulSet 同步 StatefulSet 及其关联的 Pod 状态
 func (ssc *StatefulSetController) syncStatefulSet(ctx context.Context, set *apps.StatefulSet, pods []*v1.Pod) error {
 	logger := klog.FromContext(ctx)
 	logger.V(4).Info("Syncing StatefulSet with pods", "statefulSet", klog.KObj(set), "pods", len(pods))
+	// 2. 声明变量用于存储状态和错误
 	var status *apps.StatefulSetStatus
 	var err error
+	// 3. 调用控制接口更新 StatefulSet 状态
 	status, err = ssc.control.UpdateStatefulSet(ctx, set, pods)
 	if err != nil {
 		return err
 	}
 	logger.V(4).Info("Successfully synced StatefulSet", "statefulSet", klog.KObj(set))
 	// One more sync to handle the clock skew. This is also helping in requeuing right after status update
+	// 5. 处理 MinReadySeconds 逻辑
+	// 如果设置了 MinReadySeconds 并且可用副本数未达到期望值
+	// 则延迟重新入队以处理时钟偏差
 	if set.Spec.MinReadySeconds > 0 && status != nil && status.AvailableReplicas != *set.Spec.Replicas {
 		ssc.enqueueSSAfter(set, time.Duration(set.Spec.MinReadySeconds)*time.Second)
 	}
