@@ -57,6 +57,22 @@ const (
 	RouteMetaAction           = "x-kubernetes-action"
 )
 
+// APIInstaller 用于安装 API 资源处理程序的结构体。
+// API 端点注册
+//
+//	负责将 Kubernetes API 资源注册到 HTTP 路由中
+//	处理 RESTful 端点的创建和配置
+//
+// 资源路由管理
+//
+//	为每个资源类型（如 Pod、Service 等）创建标准化的 REST 路由
+//	处理命名空间作用域和集群作用域的资源
+//
+// 请求处理
+//
+//	设置请求超时
+//	配置请求作用域
+//	处理 API 版本协商
 type APIInstaller struct {
 	group             *APIGroupVersion
 	prefix            string // Path prefix where API resources are to be registered.
@@ -64,11 +80,17 @@ type APIInstaller struct {
 }
 
 // Struct capturing information about an action (MethodGet, MethodPost, MethodWatch, MethodProxy, etc).
+// 动作结构体：定义 Kubernetes API 中的操作行为，它描述了可以对 Kubernetes 资源执行的 RESTful 操作(路由结构体)
 type action struct {
-	Verb          string               // Verb identifying the action (MethodGet, MethodPost, MethodWatch, MethodProxy, etc).
-	Path          string               // The path of the action
-	Params        []*restful.Parameter // List of parameters associated with the action.
-	Namer         handlers.ScopeNamer
+	// 动作类型：GET、POST、WATCH、PROXY 等
+	Verb string // Verb identifying the action (MethodGet, MethodPost, MethodWatch, MethodProxy, etc).
+	// 动作路径：API 资源的路径，例如 "/api/v1/pods"
+	Path string // The path of the action
+	// 动作参数：与动作关联的参数列表
+	Params []*restful.Parameter // List of parameters associated with the action.
+	// 范围命名器：用于处理命名空间范围的命名器
+	Namer handlers.ScopeNamer
+	// 是否处理所有命名空间：true 表示动作是命名空间的，但处理所有命名空间的聚合结果
 	AllNamespaces bool // true iff the action is namespaced but works on aggregate result for all namespaces
 }
 
@@ -190,19 +212,26 @@ var toDiscoveryKubeVerb = map[string]string{
 }
 
 // Install handlers for API resources.
+// 为 API 组版本中的所有资源安装 HTTP 处理器。它在 API 服务器启动时被调用，用于设置 REST 端点
 func (a *APIInstaller) Install() ([]metav1.APIResource, []*storageversion.ResourceInfo, *restful.WebService, []error) {
+	//  已注册的 API 资源列表
 	var apiResources []metav1.APIResource
+	// 已注册的资源版本信息列表
 	var resourceInfos []*storageversion.ResourceInfo
+	// 安装过程中发生的错误列表
 	var errors []error
+	// 创建一个新的 Web 服务实例
 	ws := a.newWebService()
 
 	// Register the paths in a deterministic (sorted) order to get a deterministic swagger spec.
+	// 确保 API 资源的注册顺序是确定性的，以获得确定性的 Swagger 规范
 	paths := make([]string, len(a.group.Storage))
 	var i int = 0
 	for path := range a.group.Storage {
 		paths[i] = path
 		i++
 	}
+	// 确保 API 资源的注册顺序是确定性的，以获得确定性的 Swagger 规范
 	sort.Strings(paths)
 	for _, path := range paths {
 		apiResource, resourceInfo, err := a.registerResourceHandlers(path, a.group.Storage[path], ws)
@@ -220,17 +249,24 @@ func (a *APIInstaller) Install() ([]metav1.APIResource, []*storageversion.Resour
 }
 
 // newWebService creates a new restful webservice with the api installer's prefix and version.
+// 创建并配置一个新的 RESTful Web 服务实例，用于处理 API 请求
 func (a *APIInstaller) newWebService() *restful.WebService {
 	ws := new(restful.WebService)
+	// 设置 Web 服务的路径，例如 "/api/v1"
 	ws.Path(a.prefix)
 	// a.prefix contains "prefix/group/version"
+	// 设置 Web 服务的文档，例如 "API at /api/v1"
 	ws.Doc("API at " + a.prefix)
 	// Backwards compatibility, we accepted objects with empty content-type at V1.
 	// If we stop using go-restful, we can default empty content-type to application/json on an
 	// endpoint by endpoint basis
+	// 为了向后兼容，接受任意内容类型的请求
 	ws.Consumes("*/*")
+	// 获取支持的媒体类型和流媒体类型
 	mediaTypes, streamMediaTypes := negotiation.MediaTypesForSerializer(a.group.Serializer)
+	// 设置 Web 服务支持的媒体类型
 	ws.Produces(append(mediaTypes, streamMediaTypes...)...)
+	// 设置 Web 服务的 API 版本
 	ws.ApiVersion(a.group.GroupVersion.String())
 
 	return ws
@@ -282,37 +318,47 @@ func GetResourceKind(groupVersion schema.GroupVersion, storage rest.Storage, typ
 	return fqKindToRegister, nil
 }
 
+// ⭐️ 为 API 资源注册 HTTP 处理器。
 func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storage, ws *restful.WebService) (*metav1.APIResource, *storageversion.ResourceInfo, error) {
+	// 获取准入控制，用于检查请求是否被允许
 	admit := a.group.Admit
 
+	// 获取选项外部版本，用于处理选项对象，指定了外部版本选项，则使用指定的版本
 	optionsExternalVersion := a.group.GroupVersion
 	if a.group.OptionsExternalVersion != nil {
 		optionsExternalVersion = *a.group.OptionsExternalVersion
 	}
 
+	// 分割资源路径，获取资源名称和子资源名称
 	resource, subresource, err := splitSubresource(path)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// 获取 API 组和版本
 	group, version := a.group.GroupVersion.Group, a.group.GroupVersion.Version
 
+	// 获取资源的 fully qualified kind
 	fqKindToRegister, err := GetResourceKind(a.group.GroupVersion, storage, a.group.Typer)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// 创建版本化的对象
 	versionedPtr, err := a.group.Creater.New(fqKindToRegister)
 	if err != nil {
 		return nil, nil, err
 	}
 	defaultVersionedObject := indirectArbitraryPointer(versionedPtr)
 	kind := fqKindToRegister.Kind
+	// 判断是否为子资源
 	isSubresource := len(subresource) > 0
 
 	// If there is a subresource, namespace scoping is defined by the parent resource
+	// 资源作用域处理
 	var namespaceScoped bool
 	if isSubresource {
+		// 子资源的作用域与父资源相同
 		parentStorage, ok := a.group.Storage[resource]
 		if !ok {
 			return nil, nil, fmt.Errorf("missing parent storage: %q", resource)
@@ -331,21 +377,38 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		namespaceScoped = scoper.NamespaceScoped()
 	}
 
+	/****检测存储对象实现了哪些标准接口的关键部分****/
 	// what verbs are supported by the storage, used to know what verbs we support per path
+	/****资源创建接口****/
+	// 判断存储支持的动词
 	creater, isCreater := storage.(rest.Creater)
+	// 判断存储是否支持命名创建
 	namedCreater, isNamedCreater := storage.(rest.NamedCreater)
+	/****资源查询接口****/
+	// 判断存储是否支持列表
 	lister, isLister := storage.(rest.Lister)
+	// 判断存储是否支持获取
 	getter, isGetter := storage.(rest.Getter)
+	// 判断存储是否支持获取选项
 	getterWithOptions, isGetterWithOptions := storage.(rest.GetterWithOptions)
+	/****资源删除接口****/
+	// 判断存储是否支持优雅删除
 	gracefulDeleter, isGracefulDeleter := storage.(rest.GracefulDeleter)
+	// 判断存储是否支持集合删除
 	collectionDeleter, isCollectionDeleter := storage.(rest.CollectionDeleter)
+	/****资源更新接口****/
 	updater, isUpdater := storage.(rest.Updater)
 	patcher, isPatcher := storage.(rest.Patcher)
+	/****资源监视接口****/
 	watcher, isWatcher := storage.(rest.Watcher)
 	connecter, isConnecter := storage.(rest.Connecter)
+	/****资源元数据接口****/
 	storageMeta, isMetadata := storage.(rest.StorageMetadata)
 	storageVersionProvider, isStorageVersionProvider := storage.(rest.StorageVersionProvider)
 	gvAcceptor, _ := storage.(rest.GroupVersionAcceptor)
+
+	/****创建和初始化各种版本化的 API 对象****/
+	// 存储对象没有实现 StorageMetadata接口，创建默认的存储元数据
 	if !isMetadata {
 		storageMeta = defaultStorageMetadata{}
 	}
@@ -357,10 +420,12 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	var versionedList interface{}
 	if isLister {
 		list := lister.NewList()
+		// 获取列表类型的 GroupVersionKind
 		listGVKs, _, err := a.group.Typer.ObjectKinds(list)
 		if err != nil {
 			return nil, nil, err
 		}
+		// 创建版本化的列表对象
 		versionedListPtr, err := a.group.Creater.New(a.group.GroupVersion.WithKind(listGVKs[0].Kind))
 		if err != nil {
 			return nil, nil, err
@@ -368,18 +433,23 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		versionedList = indirectArbitraryPointer(versionedListPtr)
 	}
 
+	/****创建和初始化各种版本化的 API 对象****/
+	// 创建版本化的列表选项对象
 	versionedListOptions, err := a.group.Creater.New(optionsExternalVersion.WithKind("ListOptions"))
 	if err != nil {
 		return nil, nil, err
 	}
+	// 创建版本化的创建选项对象
 	versionedCreateOptions, err := a.group.Creater.New(optionsExternalVersion.WithKind("CreateOptions"))
 	if err != nil {
 		return nil, nil, err
 	}
+	// 创建版本化的补丁选项对象
 	versionedPatchOptions, err := a.group.Creater.New(optionsExternalVersion.WithKind("PatchOptions"))
 	if err != nil {
 		return nil, nil, err
 	}
+	// 创建版本化的更新选项对象
 	versionedUpdateOptions, err := a.group.Creater.New(optionsExternalVersion.WithKind("UpdateOptions"))
 	if err != nil {
 		return nil, nil, err
@@ -400,10 +470,13 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		}
 	}
 
+	/****创建和初始化各种版本化的 API 对象****/
+	// 创建版本化的状态对象
 	versionedStatusPtr, err := a.group.Creater.New(optionsExternalVersion.WithKind("Status"))
 	if err != nil {
 		return nil, nil, err
 	}
+	// 创建版本化的状态对象
 	versionedStatus := indirectArbitraryPointer(versionedStatusPtr)
 	var (
 		getOptions             runtime.Object
@@ -428,15 +501,21 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		isGetter = true
 	}
 
+	/****创建和初始化各种版本化的 API 对象****/
+	// 创建版本化的监视事件对象
 	var versionedWatchEvent interface{}
 	if isWatcher {
+		// 创建版本化的监视事件对象
 		versionedWatchEventPtr, err := a.group.Creater.New(a.group.GroupVersion.WithKind("WatchEvent"))
 		if err != nil {
 			return nil, nil, err
 		}
+		// 用于流式传输资源变更事件
 		versionedWatchEvent = indirectArbitraryPointer(versionedWatchEventPtr)
 	}
 
+	/****创建和初始化各种版本化的 API 对象****/
+	// 创建版本化的连接器相关的变量
 	var (
 		connectOptions             runtime.Object
 		versionedConnectOptions    runtime.Object
@@ -795,6 +874,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		}
 
 		switch action.Verb {
+		// GET 方法：获取单个资源
 		case request.MethodGet: // Get a resource.
 			var handler restful.RouteFunction
 			if isGetterWithOptions {
@@ -829,6 +909,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// LIST 方法：获取所有资源，支持 watch 实时监听
 		case request.MethodList: // List all resources of a kind.
 			doc := "list objects of kind " + kind
 			if isSubresource {
@@ -847,12 +928,14 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 				return nil, nil, err
 			}
 			switch {
+			// LIST OR WATCH 方法：获取所有资源，支持 watch 实时监听
 			case isLister && isWatcher:
 				doc := "list or watch objects of kind " + kind
 				if isSubresource {
 					doc = "list or watch " + subresource + " of objects of kind " + kind
 				}
 				route.Doc(doc)
+			// WATCH 方法：实时监听资源变化
 			case isWatcher:
 				doc := "watch objects of kind " + kind
 				if isSubresource {
@@ -862,6 +945,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// PUT 方法：替换现有资源
 		case request.MethodPut: // Update a resource.
 			doc := "replace the specified " + kind
 			if isSubresource {
@@ -885,6 +969,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// PATCH 方法：部分更新资源
 		case request.MethodPatch: // Partially update a resource
 			doc := "partially update the specified " + kind
 			if isSubresource {
@@ -917,6 +1002,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// POST 方法：创建新资源
 		case request.MethodPost: // Create a resource.
 			var handler restful.RouteFunction
 			if isNamedCreater {
@@ -948,6 +1034,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// DELETE 方法：删除资源
 		case request.MethodDelete: // Delete a resource.
 			article := GetArticleForNoun(kind, " ")
 			doc := "delete" + article + kind
@@ -977,6 +1064,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// DELETECOLLECTION 方法：删除资源集合
 		case request.MethodDeleteCollection:
 			doc := "delete collection of " + kind
 			if isSubresource {
@@ -1045,6 +1133,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 			addParams(route, action.Params)
 			routes = append(routes, route)
+		// CONNECT 方法：连接到资源
 		case request.MethodConnect:
 			for _, method := range connecter.ConnectMethods() {
 				connectProducedObject := storageMeta.ProducesObject(method)

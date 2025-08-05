@@ -159,11 +159,13 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 	if err != nil {
 		return err
 	}
+	// 创建 API 服务器链，将各种组件组装成一个功能完整的 API Server。
 	server, err := CreateServerChain(completed)
 	if err != nil {
 		return err
 	}
 
+	// 准备运行
 	prepared, err := server.PrepareRun()
 	if err != nil {
 		return err
@@ -175,18 +177,31 @@ func Run(ctx context.Context, opts options.CompletedOptions) error {
 // CreateServerChain creates the apiservers connected via delegation.
 func CreateServerChain(config CompletedConfig) (*aggregatorapiserver.APIAggregator, error) {
 	notFoundHandler := notfoundhandler.New(config.KubeAPIs.ControlPlane.Generic.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
+	// 处理 Custom Resource Definitions (CRDs) 相关的 API 请求
+	// CRD 管理：处理 CRD 的创建、更新、删除和查询
+	// API 扩展：处理 API 扩展的 API 请求
+	// API 服务发现：处理 API 服务发现的 API 请求
 	apiExtensionsServer, err := config.ApiExtensions.New(genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
 		return nil, err
 	}
+	// CRD API 是否启用
 	crdAPIEnabled := config.ApiExtensions.GenericConfig.MergedResourceConfig.ResourceEnabled(apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions"))
 
+	// 创建核心 API 服务器 kube-apiserver
+	// 处理 Kubernetes 内置的 API 资源（如 Pods、Services、Deployments 等）
+	// 实现核心的 Kubernetes 功能
+	// 提供基础的 RESTful API 端点
 	kubeAPIServer, err := config.KubeAPIs.New(apiExtensionsServer.GenericAPIServer)
 	if err != nil {
 		return nil, err
 	}
 
 	// aggregator comes last in the chain
+	// 创建聚合 API 服务器 aggregator，将请求转发到相应的 API 服务器
+	// 将多个 API 服务器聚合为单个 API 入口
+	// 允许扩展 Kubernetes API 而不修改核心代码
+	// 支持 API 扩展和自定义资源
 	aggregatorServer, err := controlplaneapiserver.CreateAggregatorServer(config.Aggregator, kubeAPIServer.ControlPlane.GenericAPIServer, apiExtensionsServer.Informers.Apiextensions().V1().CustomResourceDefinitions(), crdAPIEnabled, apiVersionPriorities)
 	if err != nil {
 		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines
