@@ -38,13 +38,23 @@ import (
 
 // StatefulPodControlObjectManager abstracts the manipulation of Pods and PVCs. The real controller implements this
 // with a clientset for writes and listers for reads; for tests we provide stubs.
+// StatefulPodControlObjectManager 抽象了对 Pod 和 PVC 的操作接口。
+// 实际控制器使用 clientset 进行写操作，使用 listers 进行读操作来实现此接口；
+// 在测试中，我们提供了存根实现。
 type StatefulPodControlObjectManager interface {
+	// 创建 Pod
 	CreatePod(ctx context.Context, pod *v1.Pod) error
+	// 获取 Pod
 	GetPod(namespace, podName string) (*v1.Pod, error)
+	// 更新 Pod
 	UpdatePod(pod *v1.Pod) error
+	// 删除 Pod
 	DeletePod(pod *v1.Pod) error
+	// 创建 PVC
 	CreateClaim(claim *v1.PersistentVolumeClaim) error
+	// 获取 PVC
 	GetClaim(namespace, claimName string) (*v1.PersistentVolumeClaim, error)
+	// 更新 PVC
 	UpdateClaim(claim *v1.PersistentVolumeClaim) error
 }
 
@@ -52,9 +62,15 @@ type StatefulPodControlObjectManager interface {
 // and to update the Status of a StatefulSet. It follows the design paradigms used for PodControl, but its
 // implementation provides for PVC creation, ordered Pod creation, ordered Pod termination, and Pod identity enforcement.
 // Manipulation of objects is provided through objectMgr, which allows the k8s API to be mocked out for testing.
+// StatefulPodControl 定义了 StatefulSetController 用于创建、更新和删除 Pod 的接口，
+// 以及更新 StatefulSet 状态的功能。它遵循了 PodControl 的设计模式，但其实现
+// 提供了 PVC 创建、有序的 Pod 创建、有序的 Pod 终止以及 Pod 身份强制等功能。
+// 通过 objectMgr 提供对象操作，这允许在测试中模拟 k8s API。
 type StatefulPodControl struct {
+	// 管理 Pod 和 PVC 的操作
 	objectMgr StatefulPodControlObjectManager
-	recorder  record.EventRecorder
+	// 事件记录器
+	recorder record.EventRecorder
 }
 
 // NewStatefulPodControl constructs a StatefulPodControl using a realStatefulPodControlObjectManager with the given
@@ -74,9 +90,12 @@ func NewStatefulPodControlFromManager(om StatefulPodControlObjectManager, record
 }
 
 // realStatefulPodControlObjectManager uses a clientset.Interface and listers.
+// 实现 StatefulPodControlObjectManager 接口，管理 Pod 和 PVC
 type realStatefulPodControlObjectManager struct {
-	client      clientset.Interface
-	podLister   corelisters.PodLister
+	client clientset.Interface
+	// PodLister 用于获取 Pod
+	podLister corelisters.PodLister
+	// ClaimLister 用于获取 PVC
 	claimLister corelisters.PersistentVolumeClaimLister
 }
 
@@ -112,18 +131,22 @@ func (om *realStatefulPodControlObjectManager) UpdateClaim(claim *v1.PersistentV
 	return err
 }
 
+// 创建 StatefulSet 的 Pod，并处理相关的 PVC 创建和策略设置
 func (spc *StatefulPodControl) CreateStatefulPod(ctx context.Context, set *apps.StatefulSet, pod *v1.Pod) error {
 	// Create the Pod's PVCs prior to creating the Pod
+	// 创建 Pod 的 PVC，确保 PVC 存在
 	if err := spc.createPersistentVolumeClaims(set, pod); err != nil {
 		spc.recordPodEvent("create", set, pod, err)
 		return err
 	}
 	// If we created the PVCs attempt to create the Pod
+	// 通过 objectMgr 创建 Pod
 	err := spc.objectMgr.CreatePod(ctx, pod)
 	// sink already exists errors
 	if apierrors.IsAlreadyExists(err) {
 		return err
 	}
+	// 如果启用了 StatefulSetAutoDeletePVC，设置 PVC 的回收策略
 	if utilfeature.DefaultFeatureGate.Enabled(features.StatefulSetAutoDeletePVC) {
 		// Set PVC policy as much as is possible at this point.
 		if err := spc.UpdatePodClaimForRetentionPolicy(ctx, set, pod); err != nil {
@@ -198,6 +221,7 @@ func (spc *StatefulPodControl) UpdateStatefulPod(ctx context.Context, set *apps.
 	return err
 }
 
+// DeleteStatefulPod 删除 StatefulSet 中的 Pod
 func (spc *StatefulPodControl) DeleteStatefulPod(set *apps.StatefulSet, pod *v1.Pod) error {
 	err := spc.objectMgr.DeletePod(pod)
 	spc.recordPodEvent("delete", set, pod, err)
@@ -338,11 +362,17 @@ func (spc *StatefulPodControl) createMissingPersistentVolumeClaims(ctx context.C
 // set. If all of the claims for Pod are successfully created, the returned error is nil. If creation fails, this method
 // may be called again until no error is returned, indicating the PersistentVolumeClaims for pod are consistent with
 // set's Spec.
+// createPersistentVolumeClaims 为 StatefulSet 的 Pod 创建所有必需的 PVC。
+// 如果 Pod 的所有 PVC 都成功创建，则返回 nil 错误。如果创建失败，可以重试此方法，
+// 直到返回 nil 错误，表示 Pod 的 PVC 已经与 StatefulSet 的 Spec 一致。
 func (spc *StatefulPodControl) createPersistentVolumeClaims(set *apps.StatefulSet, pod *v1.Pod) error {
 	var errs []error
+	// 遍历 Pod 的所有 PVC
 	for _, claim := range getPersistentVolumeClaims(set, pod) {
+		// 获取 PVC
 		pvc, err := spc.objectMgr.GetClaim(claim.Namespace, claim.Name)
 		switch {
+		// 情况1: PVC 不存在
 		case apierrors.IsNotFound(err):
 			err := spc.objectMgr.CreateClaim(&claim)
 			if err != nil {
@@ -351,9 +381,11 @@ func (spc *StatefulPodControl) createPersistentVolumeClaims(set *apps.StatefulSe
 			if err == nil || !apierrors.IsAlreadyExists(err) {
 				spc.recordClaimEvent("create", set, pod, &claim, err)
 			}
+		// 情况2: PVC 已存在
 		case err != nil:
 			errs = append(errs, fmt.Errorf("failed to retrieve PVC %s: %s", claim.Name, err))
 			spc.recordClaimEvent("create", set, pod, &claim, err)
+		// 情况3: PVC 已删除
 		default:
 			if pvc.DeletionTimestamp != nil {
 				errs = append(errs, fmt.Errorf("pvc %s is being deleted", claim.Name))
