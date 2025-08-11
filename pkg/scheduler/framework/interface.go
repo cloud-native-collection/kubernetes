@@ -495,12 +495,15 @@ type Framework interface {
 	Handle
 
 	// PreEnqueuePlugins returns the registered preEnqueue plugins.
+	// 预入队列插件：在 Pod 加入调度队列前运行的插件
 	PreEnqueuePlugins() []PreEnqueuePlugin
 
 	// EnqueueExtensions returns the registered Enqueue extensions.
+	// 入队列扩展：可能影响 Pod 入队的扩展
 	EnqueueExtensions() []EnqueueExtensions
 
 	// QueueSortFunc returns the function to sort pods in scheduling queue
+	// 调度队列排序函数：定义 Pod 在调度队列中的排序逻辑
 	QueueSortFunc() LessFunc
 
 	// RunPreFilterPlugins runs the set of configured PreFilter plugins. It returns

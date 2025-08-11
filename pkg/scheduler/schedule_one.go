@@ -323,7 +323,7 @@ func (sched *Scheduler) bindingCycle(
 	}
 
 	// Run "permit" plugins.
-	// 2. 等待 Permit 插件
+	// 2. 等待 Permit 插件：控制 Pod 的绑定时机。
 	if status := schedFramework.WaitOnPermit(ctx, assumedPod); !status.IsSuccess() {
 		if status.IsRejected() {
 			fitErr := &framework.FitError{
@@ -449,15 +449,18 @@ func (sched *Scheduler) skipPodSchedule(ctx context.Context, fwk framework.Frame
 func (sched *Scheduler) schedulePod(ctx context.Context, fwk framework.Framework, state fwk.CycleState, pod *v1.Pod) (result ScheduleResult, err error) {
 	trace := utiltrace.New("Scheduling", utiltrace.Field{Key: "namespace", Value: pod.Namespace}, utiltrace.Field{Key: "name", Value: pod.Name})
 	defer trace.LogIfLong(100 * time.Millisecond)
+	// 更新节点快照
 	if err := sched.Cache.UpdateSnapshot(klog.FromContext(ctx), sched.nodeInfoSnapshot); err != nil {
 		return result, err
 	}
 	trace.Step("Snapshotting scheduler cache and node infos done")
 
+	// 检查可用节点
 	if sched.nodeInfoSnapshot.NumNodes() == 0 {
 		return result, ErrNoNodesAvailable
 	}
 
+	// 预选阶段：找到所有符合条件的节点
 	feasibleNodes, diagnosis, err := sched.findNodesThatFitPod(ctx, fwk, state, pod)
 	if err != nil {
 		return result, err
@@ -481,11 +484,13 @@ func (sched *Scheduler) schedulePod(ctx context.Context, fwk framework.Framework
 		}, nil
 	}
 
+	// 优选阶段：选择最优节点，对预选出的节点进行评分
 	priorityList, err := prioritizeNodes(ctx, sched.Extenders, fwk, state, pod, feasibleNodes)
 	if err != nil {
 		return result, err
 	}
 
+	// 选择最终节点：从评分最高的节点中选择一个
 	host, _, err := selectHost(priorityList, numberOfHighestScoredNodesToReport)
 	trace.Step("Prioritizing done")
 
@@ -498,17 +503,21 @@ func (sched *Scheduler) schedulePod(ctx context.Context, fwk framework.Framework
 
 // Filters the nodes to find the ones that fit the pod based on the framework
 // filter plugins and filter extenders.
+// 找出所有满足 Pod 调度需求的节点
 func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework framework.Framework, state fwk.CycleState, pod *v1.Pod) ([]fwk.NodeInfo, framework.Diagnosis, error) {
 	logger := klog.FromContext(ctx)
+	// 创建诊断对象，用于记录调度过程中的状态信息。
 	diagnosis := framework.Diagnosis{
 		NodeToStatus: framework.NewDefaultNodeToStatus(),
 	}
 
+	// 获取所有节点信息：从节点快照中获取所有节点信息
 	allNodes, err := sched.nodeInfoSnapshot.NodeInfos().List()
 	if err != nil {
 		return nil, diagnosis, err
 	}
 	// Run "prefilter" plugins.
+	// 运行 PreFilter 插件
 	preRes, s, unscheduledPlugins := schedFramework.RunPreFilterPlugins(ctx, state, pod)
 	diagnosis.UnschedulablePlugins = unscheduledPlugins
 	if !s.IsSuccess() {
@@ -528,6 +537,7 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework 
 
 	// "NominatedNodeName" can potentially be set in a previous scheduling cycle as a result of preemption.
 	// This node is likely the only candidate that will fit the pod, and hence we try it first before iterating over all nodes.
+	// 检查提名节点
 	if len(pod.Status.NominatedNodeName) > 0 {
 		feasibleNodes, err := sched.evaluateNominatedNode(ctx, pod, schedFramework, state, diagnosis)
 		if err != nil {
@@ -540,6 +550,7 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework 
 	}
 
 	nodes := allNodes
+	// 筛选节点
 	if !preRes.AllNodes() {
 		nodes = make([]fwk.NodeInfo, 0, len(preRes.NodeNames))
 		for nodeName := range preRes.NodeNames {
@@ -551,15 +562,18 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, schedFramework 
 		}
 		diagnosis.NodeToStatus.SetAbsentNodesStatus(fwk.NewStatus(fwk.UnschedulableAndUnresolvable, fmt.Sprintf("node(s) didn't satisfy plugin(s) %v", sets.List(unscheduledPlugins))))
 	}
+	// 运行过滤器
 	feasibleNodes, err := sched.findNodesThatPassFilters(ctx, schedFramework, state, pod, &diagnosis, nodes)
 	// always try to update the sched.nextStartNodeIndex regardless of whether an error has occurred
 	// this is helpful to make sure that all the nodes have a chance to be searched
+	// 更新调度器状态
 	processedNodes := len(feasibleNodes) + diagnosis.NodeToStatus.Len()
 	sched.nextStartNodeIndex = (sched.nextStartNodeIndex + processedNodes) % len(allNodes)
 	if err != nil {
 		return nil, diagnosis, err
 	}
 
+	// 运行扩展器
 	feasibleNodesAfterExtender, err := findNodesThatPassExtenders(ctx, sched.Extenders, pod, feasibleNodes, diagnosis.NodeToStatus)
 	if err != nil {
 		return nil, diagnosis, err
@@ -792,6 +806,7 @@ func findNodesThatPassExtenders(ctx context.Context, extenders []framework.Exten
 // The scores from each plugin are added together to make the score for that node, then
 // any extenders are run as well.
 // All scores are finally combined (added) to get the total weighted scores of all nodes
+// 节点评分（优选阶段）
 func prioritizeNodes(
 	ctx context.Context,
 	extenders []framework.Extender,
@@ -815,18 +830,21 @@ func prioritizeNodes(
 	}
 
 	// Run PreScore plugins.
+	// 运行 PreScore 插件：预评分逻辑，准备评分所需的数据
 	preScoreStatus := schedFramework.RunPreScorePlugins(ctx, state, pod, nodes)
 	if !preScoreStatus.IsSuccess() {
 		return nil, preScoreStatus.AsError()
 	}
 
 	// Run the Score plugins.
+	// 运行 Score 插件：评分逻辑，计算每个节点的评分
 	nodesScores, scoreStatus := schedFramework.RunScorePlugins(ctx, state, pod, nodes)
 	if !scoreStatus.IsSuccess() {
 		return nil, scoreStatus.AsError()
 	}
 
 	// Additional details logged at level 10 if enabled.
+	// 打印评分结果
 	loggerVTen := logger.V(10)
 	if loggerVTen.Enabled() {
 		for _, nodeScore := range nodesScores {
@@ -836,6 +854,8 @@ func prioritizeNodes(
 		}
 	}
 
+	// Run the Extender Prioritize function.
+	// 运行 Extender Prioritize 函数：扩展器评分逻辑，计算每个节点的评分
 	if len(extenders) != 0 && nodes != nil {
 		// allNodeExtendersScores has all extenders scores for all nodes.
 		// It is keyed with node name.
@@ -847,6 +867,7 @@ func prioritizeNodes(
 				continue
 			}
 			wg.Add(1)
+			// 并行运行扩展器评分逻辑
 			go func(extIndex int) {
 				metrics.Goroutines.WithLabelValues(metrics.PrioritizingExtender).Inc()
 				defer func() {
@@ -888,6 +909,7 @@ func prioritizeNodes(
 		}
 		// wait for all go routines to finish
 		wg.Wait()
+		// 合并扩展器评分结果
 		for i := range nodesScores {
 			if score, ok := allNodeExtendersScores[nodes[i].Node().Name]; ok {
 				nodesScores[i].Scores = append(nodesScores[i].Scores, score.Scores...)
@@ -910,36 +932,45 @@ var errEmptyPriorityList = errors.New("empty priorityList")
 // in a reservoir sampling manner from the nodes that had the highest score.
 // It also returns the top {count} Nodes,
 // and the top of the list will be always the selected host.
+// 从评分最高的节点列表中随机选择一个节点，并返回选中的节点名和评分最高的前 N 个节点
 func selectHost(nodeScoreList []framework.NodePluginScores, count int) (string, []framework.NodePluginScores, error) {
 	if len(nodeScoreList) == 0 {
 		return "", nil, errEmptyPriorityList
 	}
 
+	// 构建一个最大堆
 	var h nodeScoreHeap = nodeScoreList
 	heap.Init(&h)
 	cntOfMaxScore := 1
 	selectedIndex := 0
 	// The top of the heap is the NodeScoreResult with the highest score.
+	// 从堆中取出评分最高的节点
 	sortedNodeScoreList := make([]framework.NodePluginScores, 0, count)
 	sortedNodeScoreList = append(sortedNodeScoreList, heap.Pop(&h).(framework.NodePluginScores))
 
 	// This for-loop will continue until all Nodes with the highest scores get checked for a reservoir sampling,
 	// and sortedNodeScoreList gets (count - 1) elements.
+	// 蓄水池采样
 	for ns := heap.Pop(&h).(framework.NodePluginScores); ; ns = heap.Pop(&h).(framework.NodePluginScores) {
+		// 如果当前节点的评分不等于评分最高的节点的评分，且评分最高的节点数量已经达到 count，则结束循环
 		if ns.TotalScore != sortedNodeScoreList[0].TotalScore && len(sortedNodeScoreList) == count {
 			break
 		}
 
+		// 处理相同分数的节点
 		if ns.TotalScore == sortedNodeScoreList[0].TotalScore {
 			cntOfMaxScore++
+			// 以 1/cntOfMaxScore 的概率选择当前节点
 			if rand.Intn(cntOfMaxScore) == 0 {
 				// Replace the candidate with probability of 1/cntOfMaxScore
 				selectedIndex = cntOfMaxScore - 1
 			}
 		}
 
+		// 将当前节点添加到评分最高的节点列表中
 		sortedNodeScoreList = append(sortedNodeScoreList, ns)
 
+		// 如果堆为空，结束循环
 		if h.Len() == 0 {
 			break
 		}
@@ -947,15 +978,18 @@ func selectHost(nodeScoreList []framework.NodePluginScores, count int) (string, 
 
 	if selectedIndex != 0 {
 		// replace the first one with selected one
+		// 交换选中的节点和评分最高的节点
 		previous := sortedNodeScoreList[0]
 		sortedNodeScoreList[0] = sortedNodeScoreList[selectedIndex]
 		sortedNodeScoreList[selectedIndex] = previous
 	}
 
+	// 截断结果集：如果评分最高的节点数量超过 count，则只保留前 count 个节点
 	if len(sortedNodeScoreList) > count {
 		sortedNodeScoreList = sortedNodeScoreList[:count]
 	}
 
+	// 返回选中的节点名和评分最高的前 N 个节点
 	return sortedNodeScoreList[0].Name, sortedNodeScoreList, nil
 }
 

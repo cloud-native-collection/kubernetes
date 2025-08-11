@@ -155,6 +155,7 @@ func runCommand(cmd *cobra.Command, opts *options.Options, registryOptions ...Op
 		cancel()
 	}()
 
+	// 初始化调度器
 	cc, sched, err := Setup(ctx, opts, registryOptions...)
 	if err != nil {
 		return err
@@ -164,6 +165,7 @@ func runCommand(cmd *cobra.Command, opts *options.Options, registryOptions ...Op
 	// add component version metrics
 	opts.ComponentGlobalsRegistry.AddMetrics()
 
+	// 运行调度器
 	return Run(ctx, cc, sched)
 }
 
@@ -442,6 +444,7 @@ func Setup(ctx context.Context, opts *options.Options, outOfTreeRegistryOptions 
 	recorderFactory := getRecorderFactory(&cc)
 	completedProfiles := make([]kubeschedulerconfig.KubeSchedulerProfile, 0)
 	// Create the scheduler.
+	// 创建调度器
 	sched, err := scheduler.New(ctx,
 		cc.Client,
 		cc.InformerFactory,

@@ -670,15 +670,20 @@ func unionedGVKs(queueingHintsPerProfile internalqueue.QueueingHintMapPerProfile
 
 // newPodInformer creates a shared index informer that returns only non-terminal pods.
 // The PodInformer allows indexers to be added, but note that only non-conflict indexers are allowed.
+// 创建一个共享索引 Informer，用于监听非终止状态（非 Succeeded 和 Failed）的 Pod 变化
 func newPodInformer(cs clientset.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	// 设置选择器：选择非终止状态的 Pod
 	selector := fmt.Sprintf("status.phase!=%v,status.phase!=%v", v1.PodSucceeded, v1.PodFailed)
+	// 配置列表选项:在列出 Pod 时应用字段选择器
 	tweakListOptions := func(options *metav1.ListOptions) {
 		options.FieldSelector = selector
 	}
+	// 创建 Pod Informer
 	informer := coreinformers.NewFilteredPodInformer(cs, metav1.NamespaceAll, resyncPeriod, cache.Indexers{}, tweakListOptions)
 
 	// Dropping `.metadata.managedFields` to improve memory usage.
 	// The Extract workflow (i.e. `ExtractPod`) should be unused.
+	// 设置转换函数：于在将对象存储到缓存前进行处理，删除 Pod 的 managedFields 字段
 	trim := func(obj interface{}) (interface{}, error) {
 		if accessor, err := meta.Accessor(obj); err == nil {
 			if accessor.GetManagedFields() != nil {
