@@ -486,6 +486,7 @@ func NewMainKubelet(ctx context.Context,
 		return nil, cloudprovider.ErrorForDisabledProvider(cloudProvider)
 	}
 
+	// 用于判断节点是否已经同步完成
 	var nodeHasSynced cache.InformerSynced
 	var nodeInformer coreinformersv1.NodeInformer
 	var nodeLister corelisters.NodeLister
@@ -2750,6 +2751,7 @@ func (kl *Kubelet) deletePod(pod *v1.Pod) error {
 		return fmt.Errorf("skipping delete because sources aren't ready yet")
 	}
 	klog.V(3).InfoS("Pod has been deleted and must be killed", "pod", klog.KObj(pod), "podUID", pod.UID)
+	// 调用UpdatePod方法，设置UpdateType为SyncPodKill，表示Pod需要被杀掉
 	kl.podWorkers.UpdatePod(UpdatePodOptions{
 		Pod:        pod,
 		UpdateType: kubetypes.SyncPodKill,
@@ -2790,7 +2792,7 @@ func recordAdmissionRejection(reason string) {
 // any new change seen, will run a sync against desired state and running state. If
 // no changes are seen to the configuration, will synchronize the last known desired
 // state every sync-frequency seconds. Never returns.
-// syncLoop 是处理变更的主循环。它监听来自三个通道（文件、apiserver 和 http）的变更，
+// ⭐️ syncLoop 是处理变更的主循环。它监听来自三个通道（文件、apiserver 和 http）的变更，
 // 并将它们合并。对于任何看到的新变更，将针对期望状态和运行状态运行同步。
 // 如果没有看到配置变更，将每隔 sync-frequency 秒同步一次最后已知的期望状态。
 // 此函数永远不会返回。
@@ -2907,6 +2909,7 @@ func (kl *Kubelet) syncLoop(ctx context.Context, updates <-chan kubetypes.PodUpd
 // - syncCh: 同步所有等待同步的 Pod
 // - housekeepingCh: 触发 Pod 清理
 // - health manager: 同步失败或其中一个或多个容器健康检查失败的 Pod
+// ⭐️ 
 func (kl *Kubelet) syncLoopIteration(ctx context.Context, configCh <-chan kubetypes.PodUpdate, handler SyncHandler,
 	syncCh <-chan time.Time, housekeepingCh <-chan time.Time, plegCh <-chan *pleg.PodLifecycleEvent) bool {
 	logger := klog.FromContext(ctx)
@@ -3264,6 +3267,7 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
 
 		// Deletion is allowed to fail because the periodic cleanup routine
 		// will trigger deletion again.
+		// 删除Pod，如果失败则记录错误
 		if err := kl.deletePod(pod); err != nil {
 			klog.V(2).InfoS("Failed to delete pod", "pod", klog.KObj(pod), "err", err)
 		}
